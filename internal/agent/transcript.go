@@ -24,7 +24,11 @@ func NewTranscriptAgent(cfg appconfig.Config) (*TranscriptAgent, error) {
 		return nil, fmt.Errorf("invalid asr.timeout: %w", err)
 	}
 
-	client, err := asr.NewClient(cfg.ASR.BaseURL, cfg.ASR.Language, timeout)
+	client, err := asr.NewClient(cfg.ASR.BaseURL, cfg.ASR.Language, timeout, asr.TranscribeOptions{
+		BeamSize:      cfg.ASR.Transcribe.BeamSize,
+		VADFilter:     cfg.ASR.Transcribe.VADFilter,
+		InitialPrompt: cfg.ASR.Transcribe.InitialPrompt,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +79,7 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 }
 
 func (a *TranscriptAgent) transcribeWithWhisperCLI(audioPath string, primaryErr error) (string, error) {
-	rawTextPath, out, err := transcript.Text(audioPath, a.cfg.Whisper.ModelPath, a.cfg.ASR.Language)
+	rawTextPath, out, err := transcript.Text(audioPath, a.cfg.Whisper.ModelPath, a.cfg.Whisper.Language, a.cfg.Whisper.Prompt)
 	if err != nil {
 		return "", fmt.Errorf(
 			"transcribe audio failed: python asr error: %w; whisper-cli fallback error: %w",

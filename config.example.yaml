@@ -5,10 +5,22 @@ asr:
   base_url: "http://localhost:8001"
   timeout: "10m"
   language: "zh"
+  model:
+    name: "small"
+    device: "auto"
+    compute_type: "default"
+    cpu_threads: 0
+    workers: 1
+  transcribe:
+    beam_size: 5
+    vad_filter: true
+    initial_prompt: "以下是普通话的句子，请使用简体中文输出。"
 
 whisper:
   # Used as a local fallback when the Python ASR service is unavailable.
   model_path: "./models/ggml-small.bin"
+  language: "zh"
+  prompt: "以下是普通话的句子，请使用简体中文输出。"
 
 llm:
   # provider supports: openai, ollama, deepseek
@@ -26,3 +38,21 @@ llm:
 
   # ollama only. Example: "5m". Leave empty to use Ollama's default.
   keep_alive: ""
+
+  # Split long transcripts into chunks before paragraph formatting.
+  chunk_runes: 8000
+
+  prompt:
+    system: |
+      你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。
+
+      要求：
+      1. 保留原文语义，不总结、不扩写、不改写事实。
+      2. 修正明显的断句和空白、错别字问题。
+      3. 按话题、语义停顿和上下文划分段落。
+      4. 段落之间使用一个空行分隔。
+      5. 不要添加标题、列表、Markdown 标记或解释。
+    user_template: |
+      请为下面的转写文本划分自然段，只返回处理后的正文：
+
+      {{text}}

@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 )
 
-func Text(audioPath, modelPath, language string) (string, []byte, error) {
+func Text(audioPath, modelPath, language, prompt string) (string, []byte, error) {
 	if language == "" {
 		language = "zh"
+	}
+	if prompt == "" {
+		prompt = "以下是普通话的句子，请使用简体中文输出。"
 	}
 
 	outputBase := filepath.Clean(audioPath)
@@ -17,7 +20,7 @@ func Text(audioPath, modelPath, language string) (string, []byte, error) {
 		"whisper-cli",
 		"-m", filepath.Clean(modelPath),
 		"-f", filepath.Clean(audioPath),
-		"--prompt", "以下是普通话的句子，请使用简体中文输出。",
+		"--prompt", prompt,
 		"-otxt",
 		"-l", language,
 	).CombinedOutput()

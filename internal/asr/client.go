@@ -16,9 +16,10 @@ import (
 )
 
 type Client struct {
-	baseURL  string
-	language string
-	http     *http.Client
+	baseURL    string
+	language   string
+	transcribe TranscribeOptions
+	http       *http.Client
 }
 
 type Segment struct {
@@ -35,7 +36,13 @@ type TranscribeResponse struct {
 	Segments            []Segment `json:"segments"`
 }
 
-func NewClient(baseURL, language string, timeout time.Duration) (*Client, error) {
+type TranscribeOptions struct {
+	BeamSize      int
+	VADFilter     *bool
+	InitialPrompt string
+}
+
+func NewClient(baseURL, language string, timeout time.Duration, options TranscribeOptions) (*Client, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return nil, fmt.Errorf("asr base_url is required")
@@ -49,10 +56,14 @@ func NewClient(baseURL, language string, timeout time.Duration) (*Client, error)
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
+	if options.BeamSize == 0 {
+		options.BeamSize = 5
+	}
 	return &Client{
-		baseURL:  baseURL,
-		language: language,
-		http:     &http.Client{Timeout: timeout},
+		baseURL:    baseURL,
+		language:   language,
+		transcribe: options,
+		http:       &http.Client{Timeout: timeout},
 	}, nil
 }
 
@@ -71,7 +82,7 @@ func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (Tr
 	bodyReader, bodyWriter := io.Pipe()
 	writer := multipart.NewWriter(bodyWriter)
 	go func() {
-		err := writeMultipartBody(writer, file, audioPath, language)
+		err := writeMultipartBody(writer, file, audioPath, language, c.transcribe)
 		if err != nil {
 			_ = bodyWriter.CloseWithError(err)
 			return
@@ -106,7 +117,7 @@ func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (Tr
 	return output, nil
 }
 
-func writeMultipartBody(writer *multipart.Writer, file *os.File, audioPath, language string) error {
+func writeMultipartBody(writer *multipart.Writer, file *os.File, audioPath, language string, options TranscribeOptions) error {
 	defer writer.Close()
 
 	if err := writeFilePart(writer, "file", filepath.Base(audioPath), file); err != nil {
@@ -114,6 +125,19 @@ func writeMultipartBody(writer *multipart.Writer, file *os.File, audioPath, lang
 	}
 	if err := writer.WriteField("language", language); err != nil {
 		return fmt.Errorf("write language field failed: %w", err)
+	}
+	if err := writer.WriteField("beam_size", fmt.Sprintf("%d", options.BeamSize)); err != nil {
+		return fmt.Errorf("write beam_size field failed: %w", err)
+	}
+	if options.VADFilter != nil {
+		if err := writer.WriteField("vad_filter", fmt.Sprintf("%t", *options.VADFilter)); err != nil {
+			return fmt.Errorf("write vad_filter field failed: %w", err)
+		}
+	}
+	if options.InitialPrompt != "" {
+		if err := writer.WriteField("initial_prompt", options.InitialPrompt); err != nil {
+			return fmt.Errorf("write initial_prompt field failed: %w", err)
+		}
 	}
 	return nil
 }

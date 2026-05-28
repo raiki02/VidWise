@@ -22,26 +22,51 @@ type ServerConfig struct {
 }
 
 type ASRConfig struct {
-	BaseURL  string `yaml:"base_url"`
-	Timeout  string `yaml:"timeout"`
-	Language string `yaml:"language"`
+	BaseURL    string              `yaml:"base_url"`
+	Timeout    string              `yaml:"timeout"`
+	Language   string              `yaml:"language"`
+	Model      ASRModelConfig      `yaml:"model"`
+	Transcribe ASRTranscribeConfig `yaml:"transcribe"`
 }
 
 type WhisperConfig struct {
 	ModelPath string `yaml:"model_path"`
+	Language  string `yaml:"language"`
+	Prompt    string `yaml:"prompt"`
+}
+
+type ASRModelConfig struct {
+	Name        string `yaml:"name"`
+	Device      string `yaml:"device"`
+	ComputeType string `yaml:"compute_type"`
+	CPUThreads  int    `yaml:"cpu_threads"`
+	Workers     int    `yaml:"workers"`
+}
+
+type ASRTranscribeConfig struct {
+	BeamSize      int    `yaml:"beam_size"`
+	VADFilter     *bool  `yaml:"vad_filter"`
+	InitialPrompt string `yaml:"initial_prompt"`
 }
 
 type LLMConfig struct {
-	Provider    string  `yaml:"provider"`
-	BaseURL     string  `yaml:"base_url"`
-	APIKey      string  `yaml:"api_key"`
-	APIKeyEnv   string  `yaml:"api_key_env"`
-	Path        string  `yaml:"path"`
-	Model       string  `yaml:"model"`
-	Timeout     string  `yaml:"timeout"`
-	Temperature float32 `yaml:"temperature"`
-	MaxTokens   int     `yaml:"max_tokens"`
-	KeepAlive   string  `yaml:"keep_alive"`
+	Provider    string       `yaml:"provider"`
+	BaseURL     string       `yaml:"base_url"`
+	APIKey      string       `yaml:"api_key"`
+	APIKeyEnv   string       `yaml:"api_key_env"`
+	Path        string       `yaml:"path"`
+	Model       string       `yaml:"model"`
+	Timeout     string       `yaml:"timeout"`
+	Temperature float32      `yaml:"temperature"`
+	MaxTokens   int          `yaml:"max_tokens"`
+	KeepAlive   string       `yaml:"keep_alive"`
+	Prompt      PromptConfig `yaml:"prompt"`
+	ChunkRunes  int          `yaml:"chunk_runes"`
+}
+
+type PromptConfig struct {
+	System       string `yaml:"system"`
+	UserTemplate string `yaml:"user_template"`
 }
 
 func Load(path string) (Config, error) {
@@ -75,8 +100,29 @@ func (c *Config) applyDefaults() {
 	if c.ASR.Language == "" {
 		c.ASR.Language = "zh"
 	}
+	if c.ASR.Model.Name == "" {
+		c.ASR.Model.Name = "small"
+	}
+	if c.ASR.Model.Device == "" {
+		c.ASR.Model.Device = "auto"
+	}
+	if c.ASR.Model.ComputeType == "" {
+		c.ASR.Model.ComputeType = "default"
+	}
+	if c.ASR.Model.Workers == 0 {
+		c.ASR.Model.Workers = 1
+	}
+	if c.ASR.Transcribe.BeamSize == 0 {
+		c.ASR.Transcribe.BeamSize = 5
+	}
 	if c.Whisper.ModelPath == "" {
 		c.Whisper.ModelPath = "./models/ggml-small.bin"
+	}
+	if c.Whisper.Language == "" {
+		c.Whisper.Language = c.ASR.Language
+	}
+	if c.Whisper.Prompt == "" {
+		c.Whisper.Prompt = c.ASR.Transcribe.InitialPrompt
 	}
 	c.LLM.Provider = strings.ToLower(strings.TrimSpace(c.LLM.Provider))
 	if c.LLM.Provider == "" {
@@ -93,6 +139,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LLM.MaxTokens == 0 {
 		c.LLM.MaxTokens = 4096
+	}
+	if c.LLM.ChunkRunes == 0 {
+		c.LLM.ChunkRunes = 8000
+	}
+	if c.LLM.Prompt.System == "" {
+		c.LLM.Prompt.System = defaultParagraphSystemPrompt
+	}
+	if c.LLM.Prompt.UserTemplate == "" {
+		c.LLM.Prompt.UserTemplate = defaultParagraphUserTemplate
 	}
 }
 
@@ -145,3 +200,14 @@ func (c LLMConfig) ResolvedAPIKey() string {
 	}
 	return strings.TrimSpace(os.Getenv(c.APIKeyEnv))
 }
+
+const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。
+
+要求：
+1. 保留原文语义，不总结、不扩写、不改写事实。
+2. 修正明显的断句和空白、错别字问题。
+3. 按话题、语义停顿和上下文划分段落。
+4. 段落之间使用一个空行分隔。
+5. 不要添加标题、列表、Markdown 标记或解释。`
+
+const defaultParagraphUserTemplate = "请为下面的转写文本划分自然段，只返回处理后的正文：\n\n{{text}}"
