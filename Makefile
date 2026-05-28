@@ -6,7 +6,7 @@ else
 PYTHON ?= python3
 endif
 
-.PHONY: help deps check-deps deps-python install-ffmpeg install-yt-dlp install-yd-dlp check-whisper-cli run run-asr test
+.PHONY: help deps check-deps deps-python install-ffmpeg install-yt-dlp check-whisper-cli run run-asr test
 
 help:
 	@echo "Usage:"
@@ -64,8 +64,6 @@ check-whisper-cli:
 		exit 1; \
 	fi
 endif
-
-install-yd-dlp: install-yt-dlp
 
 run: deps
 	$(GO) run .
