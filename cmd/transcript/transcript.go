@@ -6,19 +6,11 @@ import (
 	"path/filepath"
 )
 
-func Execute(audioName string) ([]byte, error) {
-	return exec.Command(
-		"whisper-cli",
-		"-m", "./models/ggml-small.bin",
-		"-f", fmt.Sprintf("%s.mp3", audioName),
-		"--prompt", "以下是普通话的句子，请使用简体中文输出。",
-		//"-otxt",
-		"-oj",
-		"-l", "zh",
-	).CombinedOutput()
-}
+func Text(audioPath, modelPath, language string) (string, []byte, error) {
+	if language == "" {
+		language = "zh"
+	}
 
-func Text(audioPath, modelPath string) (string, []byte, error) {
 	outputBase := filepath.Clean(audioPath)
 	outputPath := outputBase + ".txt"
 	out, err := exec.Command(
@@ -27,7 +19,15 @@ func Text(audioPath, modelPath string) (string, []byte, error) {
 		"-f", filepath.Clean(audioPath),
 		"--prompt", "以下是普通话的句子，请使用简体中文输出。",
 		"-otxt",
-		"-l", "zh",
+		"-l", language,
 	).CombinedOutput()
 	return outputPath, out, err
+}
+
+func CommandError(message string, out []byte, err error) error {
+	detail := string(out)
+	if detail == "" {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	return fmt.Errorf("%s: %s: %w", message, detail, err)
 }

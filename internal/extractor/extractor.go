@@ -8,10 +8,9 @@ import (
 
 	"github.com/raiki02/video-extractor/cmd/audio"
 	"github.com/raiki02/video-extractor/cmd/download"
-	"github.com/raiki02/video-extractor/cmd/transcript"
 	"github.com/raiki02/video-extractor/cmd/video"
+	"github.com/raiki02/video-extractor/internal/agent"
 	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/paragraph"
 )
 
 type Service struct {
@@ -92,23 +91,18 @@ func (s *Service) createTranscript(ctx context.Context, videoPath, workDir, name
 		return "", err
 	}
 
-	rawTextPath, out, err := transcript.Text(audioPath, s.cfg.Whisper.ModelPath)
+	transcriptAgent, err := agent.NewTranscriptAgent(s.cfg)
 	if err != nil {
-		return "", commandError("transcribe audio failed", out, err)
+		return "", err
 	}
 
-	rawText, err := os.ReadFile(rawTextPath)
+	transcriptText, err := transcriptAgent.Run(ctx, audioPath)
 	if err != nil {
-		return "", fmt.Errorf("read transcript failed: %w", err)
-	}
-
-	formattedText, err := paragraph.FormatText(ctx, string(rawText), s.cfg.LLM)
-	if err != nil {
-		return "", fmt.Errorf("format transcript paragraphs failed: %w", err)
+		return "", err
 	}
 
 	formattedTextPath := filepath.Join(workDir, fmt.Sprintf("%s_formatted.txt", name))
-	if err := os.WriteFile(formattedTextPath, []byte(formattedText), 0644); err != nil {
+	if err := os.WriteFile(formattedTextPath, []byte(transcriptText), 0644); err != nil {
 		return "", fmt.Errorf("write formatted transcript failed: %w", err)
 	}
 	return formattedTextPath, nil

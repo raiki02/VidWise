@@ -1,8 +1,14 @@
 server:
   addr: ":8080"
 
+asr:
+  base_url: "http://localhost:8001"
+  timeout: "10m"
+  language: "zh"
+
 whisper:
-  model_path: "./models/ggml-tiny.bin"
+  # Used as a local fallback when the Python ASR service is unavailable.
+  model_path: "./models/ggml-small.bin"
 
 llm:
   # provider supports: openai, ollama, deepseek

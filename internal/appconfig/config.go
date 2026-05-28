@@ -13,11 +13,18 @@ import (
 type Config struct {
 	Server  ServerConfig  `yaml:"server"`
 	Whisper WhisperConfig `yaml:"whisper"`
+	ASR     ASRConfig     `yaml:"asr"`
 	LLM     LLMConfig     `yaml:"llm"`
 }
 
 type ServerConfig struct {
 	Addr string `yaml:"addr"`
+}
+
+type ASRConfig struct {
+	BaseURL  string `yaml:"base_url"`
+	Timeout  string `yaml:"timeout"`
+	Language string `yaml:"language"`
 }
 
 type WhisperConfig struct {
@@ -59,6 +66,15 @@ func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
 	}
+	if c.ASR.BaseURL == "" {
+		c.ASR.BaseURL = "http://localhost:8001"
+	}
+	if c.ASR.Timeout == "" {
+		c.ASR.Timeout = "10m"
+	}
+	if c.ASR.Language == "" {
+		c.ASR.Language = "zh"
+	}
 	if c.Whisper.ModelPath == "" {
 		c.Whisper.ModelPath = "./models/ggml-small.bin"
 	}
@@ -95,7 +111,14 @@ func (c Config) validate() error {
 	if _, err := c.LLM.KeepAliveDuration(); err != nil {
 		return fmt.Errorf("invalid llm.keep_alive: %w", err)
 	}
+	if _, err := c.ASR.TimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid asr.timeout: %w", err)
+	}
 	return nil
+}
+
+func (c ASRConfig) TimeoutDuration() (time.Duration, error) {
+	return time.ParseDuration(c.Timeout)
 }
 
 func (c LLMConfig) TimeoutDuration() (time.Duration, error) {
