@@ -9,6 +9,7 @@ import (
 	"github.com/raiki02/video-extractor/cmd/audio"
 	"github.com/raiki02/video-extractor/cmd/download"
 	"github.com/raiki02/video-extractor/cmd/transcript"
+	"github.com/raiki02/video-extractor/cmd/video"
 	"github.com/raiki02/video-extractor/internal/appconfig"
 	"github.com/raiki02/video-extractor/internal/paragraph"
 )
@@ -43,7 +44,12 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 
 	switch extractType {
 	case "video":
-		return Result{Path: videoPath, Filename: name + ".mp4"}, cleanup, nil
+		compatiblePath, err := s.createCompatibleVideo(videoPath, workDir, name)
+		if err != nil {
+			cleanup()
+			return Result{}, nil, err
+		}
+		return Result{Path: compatiblePath, Filename: name + ".mp4"}, cleanup, nil
 	case "audio":
 		audioPath, err := s.createAudio(videoPath, workDir, name)
 		if err != nil {
@@ -62,6 +68,14 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 		cleanup()
 		return Result{}, nil, fmt.Errorf("type must be one of: video, audio, text")
 	}
+}
+
+func (s *Service) createCompatibleVideo(videoPath, workDir, name string) (string, error) {
+	compatiblePath := filepath.Join(workDir, fmt.Sprintf("%s_compatible.mp4", name))
+	if out, err := video.Compatible(videoPath, compatiblePath); err != nil {
+		return "", commandError("convert video for playback failed", out, err)
+	}
+	return compatiblePath, nil
 }
 
 func (s *Service) createAudio(videoPath, workDir, name string) (string, error) {
