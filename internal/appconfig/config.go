@@ -50,6 +50,7 @@ type ASRTranscribeConfig struct {
 }
 
 type LLMConfig struct {
+	Enabled     *bool        `yaml:"enabled"`
 	Provider    string       `yaml:"provider"`
 	BaseURL     string       `yaml:"base_url"`
 	APIKey      string       `yaml:"api_key"`
@@ -125,6 +126,10 @@ func (c *Config) applyDefaults() {
 		c.Whisper.Prompt = c.ASR.Transcribe.InitialPrompt
 	}
 	c.LLM.Provider = strings.ToLower(strings.TrimSpace(c.LLM.Provider))
+	if c.LLM.Enabled == nil {
+		enabled := true
+		c.LLM.Enabled = &enabled
+	}
 	if c.LLM.Provider == "" {
 		c.LLM.Provider = "openai"
 	}
@@ -152,13 +157,16 @@ func (c *Config) applyDefaults() {
 }
 
 func (c Config) validate() error {
-	if c.LLM.Model == "" {
-		return errors.New("llm.model is required")
-	}
-	switch c.LLM.Provider {
-	case "openai", "ollama", "deepseek":
-	default:
-		return fmt.Errorf("llm.provider must be one of: openai, ollama, deepseek")
+	llmEnabled := c.LLM.Enabled == nil || *c.LLM.Enabled
+	if llmEnabled {
+		if c.LLM.Model == "" {
+			return errors.New("llm.model is required")
+		}
+		switch c.LLM.Provider {
+		case "openai", "ollama", "deepseek":
+		default:
+			return fmt.Errorf("llm.provider must be one of: openai, ollama, deepseek")
+		}
 	}
 	if _, err := c.LLM.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid llm.timeout: %w", err)

@@ -15,6 +15,9 @@ func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (s
 	if rawText == "" {
 		return "", nil
 	}
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return rawText, nil
+	}
 
 	cm, err := NewChatModel(ctx, cfg)
 	if err != nil {

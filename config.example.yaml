@@ -23,6 +23,8 @@ whisper:
   prompt: "以下是普通话的句子，请使用简体中文输出。"
 
 llm:
+  # Set to false to skip the paragraph-formatting LLM call and return raw ASR text.
+  enabled: true
   # provider supports: openai, ollama, deepseek
   provider: "openai"
   model: ""
