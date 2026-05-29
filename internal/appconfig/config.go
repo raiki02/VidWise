@@ -50,19 +50,23 @@ type ASRTranscribeConfig struct {
 }
 
 type LLMConfig struct {
-	Enabled     *bool        `yaml:"enabled"`
-	Provider    string       `yaml:"provider"`
-	BaseURL     string       `yaml:"base_url"`
-	APIKey      string       `yaml:"api_key"`
-	APIKeyEnv   string       `yaml:"api_key_env"`
-	Path        string       `yaml:"path"`
-	Model       string       `yaml:"model"`
-	Timeout     string       `yaml:"timeout"`
-	Temperature float32      `yaml:"temperature"`
-	MaxTokens   int          `yaml:"max_tokens"`
-	KeepAlive   string       `yaml:"keep_alive"`
-	Prompt      PromptConfig `yaml:"prompt"`
-	ChunkRunes  int          `yaml:"chunk_runes"`
+	Enabled *bool `yaml:"enabled"`
+	// FallbackToRawOnError controls whether the service should return the raw ASR
+	// transcript when the LLM paragraph formatter is unavailable (misconfigured,
+	// network errors, provider downtime, etc.).
+	FallbackToRawOnError *bool        `yaml:"fallback_to_raw_on_error"`
+	Provider             string       `yaml:"provider"`
+	BaseURL              string       `yaml:"base_url"`
+	APIKey               string       `yaml:"api_key"`
+	APIKeyEnv            string       `yaml:"api_key_env"`
+	Path                 string       `yaml:"path"`
+	Model                string       `yaml:"model"`
+	Timeout              string       `yaml:"timeout"`
+	Temperature          float32      `yaml:"temperature"`
+	MaxTokens            int          `yaml:"max_tokens"`
+	KeepAlive            string       `yaml:"keep_alive"`
+	Prompt               PromptConfig `yaml:"prompt"`
+	ChunkRunes           int          `yaml:"chunk_runes"`
 }
 
 type PromptConfig struct {
@@ -130,6 +134,10 @@ func (c *Config) applyDefaults() {
 		enabled := true
 		c.LLM.Enabled = &enabled
 	}
+	if c.LLM.FallbackToRawOnError == nil {
+		v := true
+		c.LLM.FallbackToRawOnError = &v
+	}
 	if c.LLM.Provider == "" {
 		c.LLM.Provider = "openai"
 	}
@@ -158,14 +166,19 @@ func (c *Config) applyDefaults() {
 
 func (c Config) validate() error {
 	llmEnabled := c.LLM.Enabled == nil || *c.LLM.Enabled
+	llmFallback := c.LLM.FallbackToRawOnError == nil || *c.LLM.FallbackToRawOnError
 	if llmEnabled {
-		if c.LLM.Model == "" {
-			return errors.New("llm.model is required")
-		}
-		switch c.LLM.Provider {
-		case "openai", "ollama", "deepseek":
-		default:
-			return fmt.Errorf("llm.provider must be one of: openai, ollama, deepseek")
+		// If fallback is enabled, we allow the service to start even when the LLM
+		// config is incomplete, and fall back to raw ASR output at runtime.
+		if !llmFallback {
+			if c.LLM.Model == "" {
+				return errors.New("llm.model is required")
+			}
+			switch c.LLM.Provider {
+			case "openai", "ollama", "deepseek":
+			default:
+				return fmt.Errorf("llm.provider must be one of: openai, ollama, deepseek")
+			}
 		}
 	}
 	if _, err := c.LLM.TimeoutDuration(); err != nil {

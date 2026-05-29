@@ -2,6 +2,7 @@ package paragraph
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -18,9 +19,18 @@ func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (s
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return rawText, nil
 	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		// Treat missing model as "LLM unavailable" and return raw ASR output.
+		return rawText, nil
+	}
+	fallback := cfg.FallbackToRawOnError == nil || *cfg.FallbackToRawOnError
 
 	cm, err := NewChatModel(ctx, cfg)
 	if err != nil {
+		if fallback {
+			slog.Warn("llm.format.unavailable_fallback", "err", err)
+			return rawText, nil
+		}
 		return "", err
 	}
 
@@ -33,6 +43,10 @@ func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (s
 			schema.UserMessage(renderUserPrompt(cfg.Prompt.UserTemplate, chunk)),
 		}, einomodel.WithTemperature(cfg.Temperature), einomodel.WithMaxTokens(cfg.MaxTokens))
 		if err != nil {
+			if fallback {
+				slog.Warn("llm.format.generate_failed_fallback", "err", err)
+				return rawText, nil
+			}
 			return "", err
 		}
 

@@ -25,6 +25,9 @@ whisper:
 llm:
   # Set to false to skip the paragraph-formatting LLM call and return raw ASR text.
   enabled: true
+  # When enabled, if the LLM is misconfigured/unreachable, the service will fall back
+  # to returning raw ASR text instead of failing the whole extraction.
+  fallback_to_raw_on_error: true
   # provider supports: openai, ollama, deepseek
   provider: "openai"
   model: ""
