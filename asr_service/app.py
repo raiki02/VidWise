@@ -1,9 +1,13 @@
+import logging
 import os
 import tempfile
+import time
+import traceback
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from faster_whisper import WhisperModel
 import yaml
 
@@ -29,24 +33,107 @@ model: WhisperModel | None = None
 asr_config: dict[str, Any] = DEFAULT_ASR_CONFIG
 
 
+def _configure_logging() -> None:
+    # Uvicorn config may override log formatting; this ensures our app logger exists and emits.
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=os.getenv("LOG_LEVEL", "INFO"),
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+
+
+_configure_logging()
+logger = logging.getLogger("video_extractor.asr")
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = time.perf_counter()
+    status_code: int | None = None
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        # Ensure unexpected exceptions are visible in logs with a full traceback.
+        logger.exception("unhandled exception method=%s path=%s", request.method, request.url.path)
+        raise
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        # Use INFO to make sure it shows up even when uvicorn access logs are off.
+        if status_code is None:
+            logger.info(
+                "request completed method=%s path=%s status=%s elapsed_ms=%.2f",
+                request.method,
+                request.url.path,
+                "-",
+                elapsed_ms,
+            )
+        else:
+            logger.info(
+                "request completed method=%s path=%s status=%d elapsed_ms=%.2f",
+                request.method,
+                request.url.path,
+                status_code,
+                elapsed_ms,
+            )
+    return response
+
+
+@app.exception_handler(Exception)
+async def log_exception_handler(request, exc: Exception):
+    # This handler will log exceptions that are converted to 500 responses.
+    # Returning HTTPException in endpoints is handled by FastAPI separately.
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(
+        "500 internal error method=%s path=%s error=%r\n%s",
+        request.method,
+        request.url.path,
+        exc,
+        tb,
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+
+@app.exception_handler(HTTPException)
+async def log_http_exception_handler(request, exc: HTTPException):
+    # FastAPI/Starlette won't log HTTPException stack traces by default.
+    # For 5xx, log server-side details to aid debugging.
+    if exc.status_code >= 500:
+        logger.error(
+            "HTTPException %d method=%s path=%s detail=%r",
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.detail,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 @app.on_event("startup")
 def load_model() -> None:
     global asr_config, model
 
-    asr_config = load_asr_config()
-    model_config = asr_config["model"]
+    try:
+        asr_config = load_asr_config()
+        model_config = asr_config["model"]
 
-    kwargs: dict[str, Any] = {
-        "model_size_or_path": model_config["name"],
-        "device": model_config["device"],
-        "compute_type": model_config["compute_type"],
-    }
-    if model_config["cpu_threads"] > 0:
-        kwargs["cpu_threads"] = model_config["cpu_threads"]
-    if model_config["workers"] > 0:
-        kwargs["num_workers"] = model_config["workers"]
+        kwargs: dict[str, Any] = {
+            "model_size_or_path": model_config["name"],
+            "device": model_config["device"],
+            "compute_type": model_config["compute_type"],
+        }
+        if model_config["cpu_threads"] > 0:
+            kwargs["cpu_threads"] = model_config["cpu_threads"]
+        if model_config["workers"] > 0:
+            kwargs["num_workers"] = model_config["workers"]
 
-    model = WhisperModel(**kwargs)
+        logger.info("loading ASR model model=%s device=%s", model_config["name"], model_config["device"])
+        model = WhisperModel(**kwargs)
+        logger.info("ASR model loaded")
+    except Exception:
+        logger.exception("failed to load ASR model")
+        raise
 
 
 @app.get("/health")
@@ -96,6 +183,14 @@ async def transcribe(
             for segment in segments_iter
         ]
     except Exception as exc:
+        logger.exception(
+            "transcribe failed filename=%s suffix=%s language=%s beam_size=%s vad_filter=%s",
+            file.filename,
+            suffix,
+            language,
+            beam_size,
+            vad_filter,
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         try:
