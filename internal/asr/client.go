@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -68,12 +69,18 @@ func NewClient(baseURL, language string, timeout time.Duration, options Transcri
 }
 
 func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (TranscribeResponse, error) {
+	start := time.Now()
 	audioPath = filepath.Clean(audioPath)
 	file, err := os.Open(audioPath)
 	if err != nil {
 		return TranscribeResponse{}, fmt.Errorf("open audio file failed: %w", err)
 	}
 	defer file.Close()
+	if fi, statErr := file.Stat(); statErr == nil {
+		slog.Info("asr.request", "audio_path", audioPath, "size_bytes", fi.Size())
+	} else {
+		slog.Info("asr.request", "audio_path", audioPath)
+	}
 
 	if language == "" {
 		language = c.language
@@ -96,24 +103,39 @@ func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (Tr
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
+	doStart := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		slog.Info("asr.http_error", "elapsed", time.Since(doStart), "total_elapsed", time.Since(start), "err", err)
 		return TranscribeResponse{}, fmt.Errorf("call asr service failed: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Info("asr.http_done", "status", resp.StatusCode, "elapsed", time.Since(doStart))
 
+	readStart := time.Now()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		slog.Info("asr.read_error", "elapsed", time.Since(readStart), "total_elapsed", time.Since(start), "err", err)
 		return TranscribeResponse{}, fmt.Errorf("read asr response failed: %w", err)
 	}
+	slog.Info("asr.read_done", "bytes", len(respBody), "elapsed", time.Since(readStart))
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		slog.Info("asr.response_error", "status", resp.Status, "total_elapsed", time.Since(start))
 		return TranscribeResponse{}, fmt.Errorf("asr service returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
 	var output TranscribeResponse
+	decodeStart := time.Now()
 	if err := json.Unmarshal(respBody, &output); err != nil {
 		return TranscribeResponse{}, fmt.Errorf("decode asr response failed: %w", err)
 	}
+	slog.Info(
+		"asr.decode_done",
+		"elapsed", time.Since(decodeStart),
+		"total_elapsed", time.Since(start),
+		"duration_sec", output.Duration,
+		"segments", len(output.Segments),
+	)
 	return output, nil
 }
 

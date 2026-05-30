@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -12,6 +13,7 @@ import (
 )
 
 func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (string, error) {
+	start := time.Now()
 	rawText = strings.TrimSpace(rawText)
 	if rawText == "" {
 		return "", nil
@@ -35,9 +37,11 @@ func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (s
 	}
 
 	chunks := splitByRunes(rawText, cfg.ChunkRunes)
+	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes)
 	formatted := make([]string, 0, len(chunks))
 
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		stage := time.Now()
 		resp, err := cm.Generate(ctx, []*schema.Message{
 			schema.SystemMessage(cfg.Prompt.System),
 			schema.UserMessage(renderUserPrompt(cfg.Prompt.UserTemplate, chunk)),
@@ -49,13 +53,14 @@ func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (s
 			}
 			return "", err
 		}
+		slog.Info("llm.format.chunk_done", "index", i, "elapsed", time.Since(stage))
 
 		content := strings.TrimSpace(resp.Content)
 		if content != "" {
 			formatted = append(formatted, content)
 		}
 	}
-
+	slog.Info("llm.format.done", "elapsed", time.Since(start))
 	return strings.Join(formatted, "\n\n"), nil
 }
 

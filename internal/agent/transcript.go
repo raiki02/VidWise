@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/raiki02/video-extractor/cmd/transcript"
@@ -45,19 +47,26 @@ func NewTranscriptAgent(cfg appconfig.Config) (*TranscriptAgent, error) {
 }
 
 func (a *TranscriptAgent) Run(ctx context.Context, audioPath string) (string, error) {
+	start := time.Now()
+	stage := time.Now()
 	rawText, err := a.transcribe(ctx, audioPath)
 	if err != nil {
 		return "", err
 	}
+	slog.Info("transcript.stage", "stage", "asr", "elapsed", time.Since(stage))
 
+	stage = time.Now()
 	formattedText, err := paragraph.FormatText(ctx, rawText, a.cfg.LLM)
 	if err != nil {
 		return "", fmt.Errorf("format transcript paragraphs failed: %w", err)
 	}
+	slog.Info("transcript.stage", "stage", "paragraph_format", "elapsed", time.Since(stage))
+	slog.Info("transcript.done", "elapsed", time.Since(start))
 	return formattedText, nil
 }
 
 func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (string, error) {
+	stage := time.Now()
 	args, err := json.Marshal(asr.TranscribeInput{
 		AudioPath: audioPath,
 		Language:  a.cfg.ASR.Language,
@@ -68,8 +77,10 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 
 	outputJSON, err := a.asrTool.InvokableRun(ctx, string(args))
 	if err != nil {
+		slog.Warn("asr.primary_failed", "elapsed", time.Since(stage), "err", err)
 		return a.transcribeWithWhisperCLI(audioPath, err)
 	}
+	slog.Info("asr.primary_ok", "elapsed", time.Since(stage))
 
 	var output asr.TranscribeResponse
 	if err := json.Unmarshal([]byte(outputJSON), &output); err != nil {
