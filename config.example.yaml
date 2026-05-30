@@ -17,7 +17,11 @@ asr:
     initial_prompt: "以下是普通话的句子，请使用简体中文输出。"
 
 whisper:
-  # Used as a local fallback when the Python ASR service is unavailable.
+  # Used as a fallback when the Python ASR service is unavailable.
+  # The service will POST multipart/form-data to: <base_url>/inference
+  # Example (matching whisper.cpp server): "http://127.0.0.1:8080"
+  base_url: "http://127.0.0.1:8080"
+  # model_path is kept for backward compatibility but is no longer used by default.
   model_path: "./models/ggml-small.bin"
   language: "zh"
   prompt: "以下是普通话的句子，请使用简体中文输出。"

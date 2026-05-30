@@ -78,7 +78,7 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 	outputJSON, err := a.asrTool.InvokableRun(ctx, string(args))
 	if err != nil {
 		slog.Warn("asr.primary_failed", "elapsed", time.Since(stage), "err", err)
-		return a.transcribeWithWhisperCLI(audioPath, err)
+		return a.transcribeWithWhisperServer(audioPath, err)
 	}
 	slog.Info("asr.primary_ok", "elapsed", time.Since(stage))
 
@@ -89,13 +89,13 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 	return output.Text, nil
 }
 
-func (a *TranscriptAgent) transcribeWithWhisperCLI(audioPath string, primaryErr error) (string, error) {
-	rawTextPath, out, err := transcript.Text(audioPath, a.cfg.Whisper.ModelPath, a.cfg.Whisper.Language, a.cfg.Whisper.Prompt)
+func (a *TranscriptAgent) transcribeWithWhisperServer(audioPath string, primaryErr error) (string, error) {
+	rawTextPath, out, err := transcript.Text(audioPath, a.cfg.Whisper.BaseURL, a.cfg.Whisper.Language, a.cfg.Whisper.Prompt)
 	if err != nil {
 		return "", fmt.Errorf(
-			"transcribe audio failed: python asr error: %w; whisper-cli fallback error: %w",
+			"transcribe audio failed: python asr error: %w; whisper-server fallback error: %w",
 			primaryErr,
-			transcript.CommandError("whisper-cli transcribe failed", out, err),
+			transcript.CommandError("whisper-server transcribe failed", out, err),
 		)
 	}
 

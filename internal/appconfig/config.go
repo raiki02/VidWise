@@ -30,6 +30,9 @@ type ASRConfig struct {
 }
 
 type WhisperConfig struct {
+	// BaseURL is the whisper-server base address used for fallback transcription
+	// when the primary ASR service is unavailable. Example: "http://127.0.0.1:8080".
+	BaseURL   string `yaml:"base_url"`
 	ModelPath string `yaml:"model_path"`
 	Language  string `yaml:"language"`
 	Prompt    string `yaml:"prompt"`
