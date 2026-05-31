@@ -60,3 +60,7 @@ Supported `type` values:
 - `video`: returns a device-playable mp4
 - `audio`: returns an mp3
 - `text` or `transcript`: returns formatted transcript text
+
+## Web UI
+
+Start the server, then open `http://localhost:8080/` in a browser to use the built-in extraction form.

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"embed"
 	"errors"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"strings"
@@ -24,6 +26,9 @@ type extractRequest struct {
 
 var safeNamePattern = regexp.MustCompile(`[^\p{L}\p{N}._-]+`)
 
+//go:embed web/*
+var webFS embed.FS
+
 func New(cfg appconfig.Config) *gin.Engine {
 	s := &Server{
 		cfg:       cfg,
@@ -31,6 +36,11 @@ func New(cfg appconfig.Config) *gin.Engine {
 	}
 
 	e := gin.Default()
+	web, err := fs.Sub(webFS, "web")
+	if err != nil {
+		panic(err)
+	}
+	e.StaticFS("/static", http.FS(web))
 	e.GET("/health", s.health)
 	e.GET("/extract", s.extract)
 	e.POST("/extract", s.extract)
