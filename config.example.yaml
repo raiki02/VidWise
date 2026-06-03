@@ -15,6 +15,17 @@ asr:
     beam_size: 5
     vad_filter: true
     initial_prompt: "以下是普通话的句子，请使用简体中文输出。"
+  stream:
+    enabled: true
+    sample_rate: 16000
+    chunk_size: 1600
+    max_buffer_seconds: 30
+    vad:
+      threshold: 0.5
+      min_speech_duration_ms: 250
+      min_silence_duration_ms: 200
+      speech_pad_ms: 100
+      max_speech_duration_s: 30
 
 whisper:
   # Used as a fallback when the Python ASR service is unavailable.
