@@ -38,6 +38,9 @@ video_summary:
     # Use "./models/marlin" for the local NemoStation/Marlin-2B files in this repo,
     # or "NemoStation/Marlin-2B" to load from Hugging Face.
     name: "./models/marlin"
+    # provider: "huggingface" (PyTorch, default) or "mlx" (Apple Silicon via mlx-vlm).
+    # Example MLX model: junwatu/Marlin-2B-MLX-8bit
+    provider: "huggingface"
     device: "auto"
     dtype: "bfloat16"
     compile: false

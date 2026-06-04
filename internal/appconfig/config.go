@@ -62,10 +62,11 @@ type VideoSummaryConfig struct {
 }
 
 type VideoSummaryModelConfig struct {
-	Name    string `yaml:"name"`
-	Device  string `yaml:"device"`
-	DType   string `yaml:"dtype"`
-	Compile bool   `yaml:"compile"`
+	Name     string `yaml:"name"`
+	Provider string `yaml:"provider"`
+	Device   string `yaml:"device"`
+	DType    string `yaml:"dtype"`
+	Compile  bool   `yaml:"compile"`
 }
 
 type VideoSummarySummarizeConfig struct {
@@ -158,6 +159,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.VideoSummary.Model.Name == "" {
 		c.VideoSummary.Model.Name = "./models/marlin"
+	}
+	if c.VideoSummary.Model.Provider == "" {
+		c.VideoSummary.Model.Provider = "huggingface"
 	}
 	if c.VideoSummary.Model.Device == "" {
 		c.VideoSummary.Model.Device = "auto"

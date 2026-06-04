@@ -7,4 +7,8 @@ transformers>=5.7.0
 qwen-vl-utils>=0.0.14
 av
 pillow
+typing_extensions>=4.0
 uvicorn[standard]==0.34.0
+# Optional — for the MLX backend (Apple Silicon only):
+# mlx-vlm>=0.5.0
+# opencv-python>=4.8

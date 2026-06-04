@@ -7,17 +7,18 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-import torch
 import yaml
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from transformers import AutoModelForCausalLM
+
+from .backends import create_backend, VideoSummaryBackend
 
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 DEFAULT_VIDEO_SUMMARY_CONFIG: dict[str, Any] = {
     "model": {
         "name": "./models/marlin",
+        "provider": "huggingface",
         "device": "auto",
         "dtype": "bfloat16",
         "compile": False,
@@ -32,7 +33,7 @@ DEFAULT_VIDEO_SUMMARY_CONFIG: dict[str, Any] = {
 }
 
 app = FastAPI(title="video-extractor-video-summary")
-model: Any | None = None
+model: VideoSummaryBackend | None = None
 video_summary_config: dict[str, Any] = DEFAULT_VIDEO_SUMMARY_CONFIG
 model_lock = threading.Lock()
 
@@ -106,26 +107,15 @@ def load_model() -> None:
         video_summary_config = load_video_summary_config()
         model_config = video_summary_config["model"]
 
-        kwargs: dict[str, Any] = {
-            "trust_remote_code": True,
-            "dtype": _torch_dtype(model_config["dtype"]),
-        }
-        device = str(model_config["device"]).strip().lower()
-        if device == "cuda":
-            kwargs["device_map"] = {"": "cuda"}
-        elif device == "cpu":
-            kwargs["device_map"] = {"": "cpu"}
-        else:
-            kwargs["device_map"] = "auto"
-
-        logger.info("loading Marlin model model=%s device=%s", model_config["name"], model_config["device"])
-        model = AutoModelForCausalLM.from_pretrained(model_config["name"], **kwargs)
-        if model_config["compile"]:
-            logger.info("compiling Marlin model")
-            model.compile()
-        logger.info("Marlin model loaded")
+        logger.info(
+            "loading video summary model model=%s provider=%s",
+            model_config["name"],
+            model_config.get("provider", "huggingface"),
+        )
+        model = create_backend(model_config)
+        logger.info("video summary model loaded")
     except Exception:
-        logger.exception("failed to load Marlin model")
+        logger.exception("failed to load video summary model")
         raise
 
 
@@ -144,7 +134,7 @@ async def caption(
     top_p: float = Form(0),
 ) -> dict[str, Any]:
     if model is None:
-        raise HTTPException(status_code=503, detail="Marlin model is not loaded")
+        raise HTTPException(status_code=503, detail="video summary model is not loaded")
 
     summarize_config = video_summary_config["summarize"]
     if max_new_tokens <= 0:
@@ -192,7 +182,7 @@ async def find_event(
     top_p: float = Form(0),
 ) -> dict[str, Any]:
     if model is None:
-        raise HTTPException(status_code=503, detail="Marlin model is not loaded")
+        raise HTTPException(status_code=503, detail="video summary model is not loaded")
     event = event.strip()
     if not event:
         raise HTTPException(status_code=400, detail="event is required")
@@ -248,15 +238,6 @@ def _remove_file(path: str) -> None:
         pass
 
 
-def _torch_dtype(name: str) -> Any:
-    normalized = str(name).strip().lower()
-    if normalized in {"float16", "fp16"}:
-        return torch.float16
-    if normalized in {"float32", "fp32"}:
-        return torch.float32
-    return torch.bfloat16
-
-
 def load_video_summary_config() -> dict[str, Any]:
     config = merge_dict(DEFAULT_VIDEO_SUMMARY_CONFIG, {})
     if CONFIG_PATH.exists():
@@ -268,6 +249,7 @@ def load_video_summary_config() -> dict[str, Any]:
     summarize_config = config["summarize"]
 
     model_config["name"] = os.getenv("VIDEO_SUMMARY_MODEL", model_config["name"])
+    model_config["provider"] = os.getenv("VIDEO_SUMMARY_PROVIDER", model_config.get("provider", "huggingface"))
     model_config["device"] = os.getenv("VIDEO_SUMMARY_DEVICE", model_config["device"])
     model_config["dtype"] = os.getenv("VIDEO_SUMMARY_DTYPE", model_config["dtype"])
     model_config["compile"] = _parse_bool(os.getenv("VIDEO_SUMMARY_COMPILE", model_config["compile"]))
