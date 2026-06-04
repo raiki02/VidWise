@@ -1,6 +1,36 @@
 # ASR Service (Streaming)
 
-This service exposes a streaming WebSocket endpoint backed by Silero VAD + Faster Whisper.
+This service exposes ASR HTTP and streaming WebSocket endpoints backed by a pluggable ASR backend.
+
+## Backends
+
+Set the backend in `config.yaml`:
+
+```yaml
+asr:
+  model:
+    provider: "faster-whisper"
+    name: "small"
+```
+
+For SenseVoice:
+
+```yaml
+asr:
+  model:
+    provider: "sensevoice"
+    name: "FunAudioLLM/SenseVoiceSmall"
+```
+
+The service keeps the same JSON response shape for all backends:
+
+- `text`
+- `language`
+- `language_probability`
+- `duration`
+- `segments`
+
+SenseVoice does not currently return word or segment timestamps through this adapter, so the response contains one segment covering the whole input when duration can be determined.
 
 ## Streaming Endpoint
 
@@ -35,4 +65,3 @@ python stream_client.py --ws-url ws://127.0.0.1:8001/stream --wav ./samples/16k_
 
 - On first run, the Silero VAD weights are downloaded via `torch.hub`.
 - Adjust stream settings in `config.yaml` under `asr.stream`.
-

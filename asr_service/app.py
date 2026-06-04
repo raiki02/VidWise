@@ -14,13 +14,15 @@ import numpy as np
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from faster_whisper import WhisperModel
 import yaml
+
+from asr_service.backends import ASRBackend, TranscriptionResult, create_asr_backend
 
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "model": {
+        "provider": "faster-whisper",
         "name": "small",
         "device": "auto",
         "compute_type": "default",
@@ -48,7 +50,7 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
 }
 
 app = FastAPI(title="video-extractor-asr")
-model: WhisperModel | None = None
+model: ASRBackend | None = None
 asr_config: dict[str, Any] = DEFAULT_ASR_CONFIG
 vad_model: Any | None = None
 vad_iterator_cls: Any | None = None
@@ -139,18 +141,13 @@ def load_model() -> None:
         asr_config = load_asr_config()
         model_config = asr_config["model"]
 
-        kwargs: dict[str, Any] = {
-            "model_size_or_path": model_config["name"],
-            "device": model_config["device"],
-            "compute_type": model_config["compute_type"],
-        }
-        if model_config["cpu_threads"] > 0:
-            kwargs["cpu_threads"] = model_config["cpu_threads"]
-        if model_config["workers"] > 0:
-            kwargs["num_workers"] = model_config["workers"]
-
-        logger.info("loading ASR model model=%s device=%s", model_config["name"], model_config["device"])
-        model = WhisperModel(**kwargs)
+        logger.info(
+            "loading ASR model provider=%s model=%s device=%s",
+            model_config["provider"],
+            model_config["name"],
+            model_config["device"],
+        )
+        model = create_asr_backend(model_config)
         logger.info("ASR model loaded")
 
         stream_config = asr_config["stream"]
@@ -199,21 +196,13 @@ async def transcribe(
             tmp.write(chunk)
 
     try:
-        segments_iter, info = model.transcribe(
+        result = model.transcribe(
             tmp_path,
             language=language or None,
             beam_size=beam_size,
             vad_filter=vad_filter,
             initial_prompt=initial_prompt or None,
         )
-        segments = [
-            {
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip(),
-            }
-            for segment in segments_iter
-        ]
     except Exception as exc:
         logger.exception(
             "transcribe failed filename=%s suffix=%s language=%s beam_size=%s vad_filter=%s",
@@ -230,14 +219,7 @@ async def transcribe(
         except OSError:
             pass
 
-    text = "\n".join(segment["text"] for segment in segments if segment["text"])
-    return {
-        "text": text,
-        "language": info.language,
-        "language_probability": info.language_probability,
-        "duration": info.duration,
-        "segments": segments,
-    }
+    return _result_payload(result)
 
 
 @app.websocket("/stream")
@@ -478,19 +460,16 @@ def _run_transcribe(audio: np.ndarray, language: str, beam_size: int, initial_pr
     if model is None:
         raise RuntimeError("ASR model is not loaded")
 
-    segments_iter, info = model.transcribe(
+    sample_rate = int(asr_config["stream"]["sample_rate"])
+    result = model.transcribe(
         audio,
         language=language or None,
         beam_size=beam_size,
         vad_filter=False,
         initial_prompt=initial_prompt or None,
+        sample_rate=sample_rate,
     )
-    segments = [
-        {"start": segment.start, "end": segment.end, "text": segment.text.strip()}
-        for segment in segments_iter
-    ]
-    text = "\n".join(segment["text"] for segment in segments if segment["text"])
-    return segments, info, text
+    return _segments_payload(result), result, result.text
 
 
 async def _transcribe_audio(
@@ -511,6 +490,7 @@ def load_asr_config() -> dict[str, Any]:
     stream_config = config["stream"]
     vad_config = stream_config["vad"]
 
+    model_config["provider"] = os.getenv("ASR_PROVIDER", model_config.get("provider", "faster-whisper"))
     model_config["name"] = os.getenv("ASR_MODEL", model_config["name"])
     model_config["device"] = os.getenv("ASR_DEVICE", model_config["device"])
     model_config["compute_type"] = os.getenv("ASR_COMPUTE_TYPE", model_config["compute_type"])
@@ -532,6 +512,23 @@ def load_asr_config() -> dict[str, Any]:
     vad_config["max_speech_duration_s"] = float(vad_config["max_speech_duration_s"])
 
     return config
+
+
+def _result_payload(result: TranscriptionResult) -> dict[str, Any]:
+    return {
+        "text": result.text,
+        "language": result.language,
+        "language_probability": result.language_probability,
+        "duration": result.duration,
+        "segments": _segments_payload(result),
+    }
+
+
+def _segments_payload(result: TranscriptionResult) -> list[dict[str, Any]]:
+    return [
+        {"start": segment.start, "end": segment.end, "text": segment.text.strip()}
+        for segment in result.segments
+    ]
 
 
 def merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

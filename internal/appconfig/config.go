@@ -40,6 +40,7 @@ type WhisperConfig struct {
 }
 
 type ASRModelConfig struct {
+	Provider    string `yaml:"provider"`
 	Name        string `yaml:"name"`
 	Device      string `yaml:"device"`
 	ComputeType string `yaml:"compute_type"`
@@ -130,6 +131,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ASR.Language == "" {
 		c.ASR.Language = "zh"
+	}
+	if c.ASR.Model.Provider == "" {
+		c.ASR.Model.Provider = "faster-whisper"
 	}
 	if c.ASR.Model.Name == "" {
 		c.ASR.Model.Name = "small"

@@ -6,6 +6,10 @@ asr:
   timeout: "10m"
   language: "zh"
   model:
+    # provider supports: faster-whisper, sensevoice
+    provider: "faster-whisper"
+    # faster-whisper example: "small" or "./models/faster-whisper-small"
+    # sensevoice example: "FunAudioLLM/SenseVoiceSmall"
     name: "path/to/models"
     device: "auto"
     compute_type: "default"
