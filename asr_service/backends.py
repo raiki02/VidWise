@@ -40,7 +40,8 @@ class ASRBackend(Protocol):
 
 
 class FasterWhisperBackend:
-    def __init__(self, model_config: dict[str, Any]) -> None:
+    def __init__(self, model_config: dict[str, Any],
+                 transcribe_config: dict[str, Any] | None = None) -> None:
         from faster_whisper import WhisperModel
 
         kwargs: dict[str, Any] = {
@@ -54,6 +55,7 @@ class FasterWhisperBackend:
             kwargs["num_workers"] = model_config["workers"]
 
         self.model = WhisperModel(**kwargs)
+        self.vad_parameters = (transcribe_config or {}).get("vad") or None
 
     def transcribe(
         self,
@@ -65,13 +67,18 @@ class FasterWhisperBackend:
         initial_prompt: str,
         sample_rate: int = 16000,
     ) -> TranscriptionResult:
-        segments_iter, info = self.model.transcribe(
-            audio,
-            language=language or None,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-            initial_prompt=initial_prompt or None,
-        )
+        transcribe_kwargs: dict[str, Any] = {
+            "language": language or None,
+            "beam_size": beam_size,
+            "vad_filter": vad_filter,
+            "initial_prompt": initial_prompt or None,
+            "condition_on_previous_text": False,
+            "temperature": 0.0,
+        }
+        if vad_filter and self.vad_parameters:
+            transcribe_kwargs["vad_parameters"] = self.vad_parameters
+
+        segments_iter, info = self.model.transcribe(audio, **transcribe_kwargs)
         segments = [
             TranscriptionSegment(start=segment.start, end=segment.end, text=segment.text.strip())
             for segment in segments_iter
@@ -144,13 +151,75 @@ class SenseVoiceBackend:
         )
 
 
-def create_asr_backend(model_config: dict[str, Any]) -> ASRBackend:
+class UltravoxBackend:
+    def __init__(self, model_config: dict[str, Any]) -> None:
+        import transformers
+
+        self.model_name = model_config["name"]
+        device = _ultravox_device(model_config["device"])
+        self.pipe = transformers.pipeline(
+            model=self.model_name,
+            trust_remote_code=True,
+            device=device,
+        )
+
+    def transcribe(
+        self,
+        audio: str | np.ndarray,
+        *,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        initial_prompt: str,
+        sample_rate: int = 16000,
+    ) -> TranscriptionResult:
+        import librosa
+
+        if isinstance(audio, str):
+            audio_array, _sr = librosa.load(audio, sr=16000)
+        else:
+            audio_array = audio.astype(np.float32)
+            # Ensure 1D
+            if audio_array.ndim > 1:
+                audio_array = audio_array.mean(axis=0)
+
+        duration = _audio_duration(audio, sample_rate)
+
+        prompt = _build_ultravox_prompt(language, initial_prompt)
+        turns = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ]
+
+        generate_kwargs: dict[str, Any] = {"max_new_tokens": 256}
+        if beam_size > 1:
+            generate_kwargs["num_beams"] = beam_size
+
+        result = self.pipe(
+            {"audio": audio_array, "turns": turns, "sampling_rate": 16000},
+            **generate_kwargs,
+        )
+
+        text = _extract_ultravox_text(result)
+        return TranscriptionResult(
+            text=text,
+            language=language or "auto",
+            language_probability=0.0,
+            duration=duration,
+            segments=[TranscriptionSegment(start=0.0, end=duration, text=text)] if text else [],
+        )
+
+
+def create_asr_backend(model_config: dict[str, Any],
+                       transcribe_config: dict[str, Any] | None = None) -> ASRBackend:
     provider = str(model_config.get("provider") or "faster-whisper").strip().lower()
     if provider in {"faster-whisper", "faster_whisper", "whisper"}:
-        return FasterWhisperBackend(model_config)
+        return FasterWhisperBackend(model_config, transcribe_config)
     if provider in {"sensevoice", "sensevoice-small", "funasr"}:
         return SenseVoiceBackend(model_config)
-    raise ValueError("asr.model.provider must be one of: faster-whisper, sensevoice")
+    if provider in {"ultravox"}:
+        return UltravoxBackend(model_config)
+    raise ValueError("asr.model.provider must be one of: faster-whisper, sensevoice, ultravox")
 
 
 def _sensevoice_device(device: str) -> str:
@@ -221,3 +290,67 @@ def _audio_duration(audio: str | np.ndarray, sample_rate: int) -> float:
         except wave.Error:
             return 0.0
     return 0.0
+
+
+def _ultravox_device(device: str) -> int | str:
+    if device in {"", "auto"}:
+        try:
+            import torch
+
+            return 0 if torch.cuda.is_available() else -1
+        except Exception:
+            return -1
+    if device == "cuda":
+        return 0
+    if device == "cpu":
+        return -1
+    try:
+        return int(device)
+    except ValueError:
+        return -1
+
+
+def _build_ultravox_prompt(language: str, initial_prompt: str) -> str:
+    if initial_prompt:
+        return f"{initial_prompt}<|audio|>"
+    lang_name = _ultravox_language_name(language)
+    if lang_name:
+        return f"Transcribe the following audio in {lang_name}:<|audio|>"
+    return "Transcribe this audio:<|audio|>"
+
+
+def _ultravox_language_name(language: str) -> str | None:
+    mapping = {
+        "zh": "Chinese",
+        "en": "English",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "yue": "Cantonese",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "ru": "Russian",
+        "ar": "Arabic",
+        "hi": "Hindi",
+        "pt": "Portuguese",
+        "it": "Italian",
+        "vi": "Vietnamese",
+        "th": "Thai",
+        "tr": "Turkish",
+    }
+    normalized = (language or "").strip().lower()
+    if normalized in mapping:
+        return mapping[normalized]
+    for code, name in mapping.items():
+        if normalized.startswith(code):
+            return name
+    return None
+
+
+def _extract_ultravox_text(result: Any) -> str:
+    if isinstance(result, list):
+        parts = [_extract_ultravox_text(item) for item in result]
+        return "\n".join(part for part in parts if part)
+    if isinstance(result, dict):
+        return str(result.get("generated_text") or result.get("text") or "").strip()
+    return str(result or "").strip()

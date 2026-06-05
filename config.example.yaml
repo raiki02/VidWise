@@ -6,7 +6,7 @@ asr:
   timeout: "10m"
   language: "zh"
   model:
-    # provider supports: faster-whisper, sensevoice
+    # provider supports: faster-whisper, sensevoice, ultravox
     provider: "faster-whisper"
     # faster-whisper example: "small" or "./models/faster-whisper-small"
     # sensevoice example: "FunAudioLLM/SenseVoiceSmall"
@@ -18,12 +18,19 @@ asr:
   transcribe:
     beam_size: 5
     vad_filter: true
-    initial_prompt: "以下是普通话的句子，请使用简体中文输出。"
+    initial_prompt: ""
+    # VAD for HTTP /transcribe (faster-whisper built-in)
+    vad:
+      threshold: 0.3
+      min_speech_duration_ms: 100
+      min_silence_duration_ms: 500
+      speech_pad_ms: 600
   stream:
     enabled: true
     sample_rate: 16000
     chunk_size: 1600
     max_buffer_seconds: 30
+    # VAD for WebSocket /stream (app-level Silero VAD)
     vad:
       threshold: 0.5
       min_speech_duration_ms: 250

@@ -33,6 +33,12 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "beam_size": 5,
         "vad_filter": True,
         "initial_prompt": "",
+        "vad": {
+            "threshold": 0.3,
+            "min_speech_duration_ms": 100,
+            "min_silence_duration_ms": 500,
+            "speech_pad_ms": 600,
+        },
     },
     "stream": {
         "enabled": True,
@@ -147,7 +153,7 @@ def load_model() -> None:
             model_config["name"],
             model_config["device"],
         )
-        model = create_asr_backend(model_config)
+        model = create_asr_backend(model_config, transcribe_config=asr_config["transcribe"])
         logger.info("ASR model loaded")
 
         stream_config = asr_config["stream"]
