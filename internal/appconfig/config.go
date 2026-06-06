@@ -194,10 +194,10 @@ func (c *Config) applyDefaults() {
 		c.LLM.Temperature = 0.2
 	}
 	if c.LLM.MaxTokens == 0 {
-		c.LLM.MaxTokens = 4096
+		c.LLM.MaxTokens = 512
 	}
 	if c.LLM.ChunkRunes == 0 {
-		c.LLM.ChunkRunes = 8000
+		c.LLM.ChunkRunes = 2000
 	}
 	if c.LLM.Prompt.System == "" {
 		c.LLM.Prompt.System = defaultParagraphSystemPrompt

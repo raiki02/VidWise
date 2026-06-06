@@ -36,12 +36,14 @@ func NewChatModel(ctx context.Context, cfg appconfig.LLMConfig) (einomodel.BaseC
 		if err != nil {
 			return nil, err
 		}
+		thinkFalse := ollama.ThinkValue{Value: false}
 		return ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
 			BaseURL:   cfg.BaseURL,
 			Timeout:   timeout,
 			Model:     cfg.Model,
 			KeepAlive: keepAlive,
 			Options:   &ollama.Options{Temperature: cfg.Temperature},
+			Thinking:  &thinkFalse,
 		})
 	case "deepseek":
 		apiKey := cfg.ResolvedAPIKey()

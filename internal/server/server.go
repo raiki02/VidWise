@@ -3,6 +3,7 @@ package server
 import (
 	"embed"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/video-extractor/internal/appconfig"
 	"github.com/raiki02/video-extractor/internal/extractor"
+	"github.com/raiki02/video-extractor/internal/paragraph"
 )
 
 type Server struct {
@@ -44,6 +46,7 @@ func New(cfg appconfig.Config) *gin.Engine {
 	e.GET("/health", s.health)
 	e.GET("/extract", s.extract)
 	e.POST("/extract", s.extract)
+	e.POST("/format", s.formatText)
 	return e
 }
 
@@ -107,4 +110,40 @@ func statusForExtractError(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusBadGateway
+}
+
+func (s *Server) formatText(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		return
+	}
+	defer f.Close()
+
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		return
+	}
+
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		return
+	}
+
+	formatted, err := paragraph.FormatText(c.Request.Context(), text, s.cfg.LLM)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=\"formatted.txt\"")
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(formatted))
 }

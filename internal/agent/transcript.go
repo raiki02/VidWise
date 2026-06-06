@@ -54,7 +54,7 @@ func (a *TranscriptAgent) Run(ctx context.Context, audioPath string) (string, er
 	slog.Info("transcript.stage", "stage", "asr", "elapsed", time.Since(stage))
 
 	stage = time.Now()
-	formattedText, err := paragraph.FormatText(ctx, rawText, a.cfg.LLM)
+	formattedText, err := paragraph.FormatTextWithFallback(ctx, rawText, a.cfg.LLM)
 	if err != nil {
 		return "", fmt.Errorf("format transcript paragraphs failed: %w", err)
 	}

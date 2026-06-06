@@ -108,10 +108,10 @@
         <div>
           <label for="type">Type</label>
           <select id="type" name="type" required>
-            <option value="video">video (mp4)</option>
-            <option value="audio">audio (mp3)</option>
             <option value="text">text (txt)</option>
             <option value="transcript">transcript (txt)</option>
+            <option value="audio">audio (mp3)</option>
+            <option value="video">video (mp4)</option>
             <option value="summary">summary (txt)</option>
           </select>
         </div>
@@ -120,7 +120,19 @@
       <div id="status" role="status" aria-live="polite"></div>
     </form>
 
-    <footer>Tip: the server also supports GET /extract with query parameters.</footer>
+    <h1 style="margin-top:48px;">Format Text</h1>
+    <p>Upload a text file to segment paragraphs and correct typos via LLM.</p>
+
+    <form id="format-form">
+      <div>
+        <label for="file">Text File</label>
+        <input id="file" name="file" type="file" accept=".txt,text/plain" required />
+      </div>
+      <button id="format-submit" type="submit">Format</button>
+      <div id="format-status" role="status" aria-live="polite"></div>
+    </form>
+
+    <footer>Tip: the server also supports GET /extract with query parameters, and POST /format for text files.</footer>
   </main>
 
   <script>
@@ -208,6 +220,61 @@
         setStatus(error.message || "Request failed", "error");
       } finally {
         submitButton.disabled = false;
+      }
+    });
+
+    // --- Format form ---
+    const formatForm = document.getElementById("format-form");
+    const formatStatus = document.getElementById("format-status");
+    const formatButton = document.getElementById("format-submit");
+
+    formatForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const fileInput = document.getElementById("file");
+      const file = fileInput.files[0];
+      if (!file) {
+        formatStatus.textContent = "Please select a file";
+        formatStatus.className = "error";
+        return;
+      }
+
+      formatButton.disabled = true;
+      formatStatus.textContent = "Formatting...";
+      formatStatus.className = "";
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/format", { method: "POST", body: formData });
+
+        const contentType = response.headers.get("content-type") || "";
+        if (!response.ok) {
+          let message = `Format failed (${response.status})`;
+          if (contentType.includes("application/json")) {
+            const data = await response.json();
+            if (data && data.error) message = data.error;
+          } else {
+            const text = await response.text();
+            if (text) message = text;
+          }
+          formatStatus.textContent = message;
+          formatStatus.className = "error";
+          return;
+        }
+
+        const blob = await response.blob();
+        const disposition = response.headers.get("content-disposition") || "";
+        const filename = filenameFromDisposition(disposition) || "formatted.txt";
+        downloadBlob(blob, filename);
+        formatStatus.textContent = "Downloaded " + filename;
+        formatStatus.className = "ok";
+      } catch (error) {
+        formatStatus.textContent = error.message || "Format request failed";
+        formatStatus.className = "error";
+      } finally {
+        formatButton.disabled = false;
       }
     });
   </script>
