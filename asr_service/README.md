@@ -1,36 +1,31 @@
 # ASR Service (Streaming)
 
-This service exposes ASR HTTP and streaming WebSocket endpoints backed by a pluggable ASR backend.
+This service exposes ASR HTTP and streaming WebSocket endpoints backed by OpenAI Whisper via transformers.
 
-## Backends
+## Backend
 
-Set the backend in `config.yaml`:
-
-```yaml
-asr:
-  model:
-    provider: "faster-whisper"
-    name: "small"
-```
-
-For SenseVoice:
+The service uses `transformers` with the Whisper model:
 
 ```yaml
 asr:
   model:
-    provider: "sensevoice"
-    name: "FunAudioLLM/SenseVoiceSmall"
+    provider: "whisper"
+    name: "./models/whisper-small"
+    device: "auto"
+    torch_dtype: "auto"
 ```
 
-The service keeps the same JSON response shape for all backends:
+The `name` supports any HuggingFace Whisper model ID or local path (e.g., `"openai/whisper-small"`, `"openai/whisper-large-v3"`, or `"./models/whisper-small"`).
+
+## Response Shape
+
+All endpoints return:
 
 - `text`
 - `language`
 - `language_probability`
 - `duration`
 - `segments`
-
-SenseVoice does not currently return word or segment timestamps through this adapter, so the response contains one segment covering the whole input when duration can be determined.
 
 ## Streaming Endpoint
 
@@ -52,16 +47,17 @@ Server responses:
 1. Start the service (example):
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8001
+uvicorn asr_service.app:app --host 0.0.0.0 --port 8001
 ```
 
 2. Stream a 16 kHz mono WAV file:
 
 ```bash
-python stream_client.py --ws-url ws://127.0.0.1:8001/stream --wav ./samples/16k_mono.wav
+python asr_service/stream_client.py --ws-url ws://127.0.0.1:8001/stream --wav ./samples/16k_mono.wav
 ```
 
 ## Notes
 
-- On first run, the Silero VAD weights are downloaded via `torch.hub`.
+- On first run, the Whisper model weights are downloaded from Hugging Face (or loaded from the local path).
+- The Silero VAD weights are downloaded via `torch.hub` on first use.
 - Adjust stream settings in `config.yaml` under `asr.stream`.

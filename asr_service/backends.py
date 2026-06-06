@@ -1,9 +1,4 @@
-import os
-import re
-import tempfile
-import wave
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -39,20 +34,177 @@ class ASRBackend(Protocol):
         ...
 
 
+class WhisperBackend:
+    """OpenAI Whisper via transformers (AutoModelForSpeechSeq2Seq)."""
+
+    def __init__(self, model_config: dict[str, Any],
+                 transcribe_config: dict[str, Any] | None = None,
+                 vad_model: Any = None,
+                 vad_get_speech_ts: Any = None) -> None:
+        import torch
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+        model_name = model_config["name"]
+        device = model_config.get("device", "auto")
+        torch_dtype_str = model_config.get("torch_dtype", "auto")
+
+        if torch_dtype_str in ("", "auto"):
+            self._torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        elif torch_dtype_str == "float16":
+            self._torch_dtype = torch.float16
+        elif torch_dtype_str == "bfloat16":
+            self._torch_dtype = torch.bfloat16
+        else:
+            self._torch_dtype = torch.float32
+
+        if device in ("", "auto"):
+            device_map = "auto" if torch.cuda.is_available() else None
+        elif device == "cuda":
+            device_map = "auto"
+        else:
+            device_map = None
+
+        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_name,
+            torch_dtype=self._torch_dtype,
+            device_map=device_map,
+            low_cpu_mem_usage=True,
+        )
+        self.processor = AutoProcessor.from_pretrained(model_name)
+
+        self._vad_model = vad_model
+        self._vad_get_speech_ts = vad_get_speech_ts
+
+        vad_cfg = (transcribe_config or {}).get("vad") or {}
+        self._vad_threshold = float(vad_cfg.get("threshold", 0.3))
+        self._vad_min_speech_ms = int(vad_cfg.get("min_speech_duration_ms", 100))
+        self._vad_min_silence_ms = int(vad_cfg.get("min_silence_duration_ms", 500))
+        self._vad_speech_pad_ms = int(vad_cfg.get("speech_pad_ms", 600))
+
+    def transcribe(
+        self,
+        audio: str | np.ndarray,
+        *,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        initial_prompt: str,
+        sample_rate: int = 16000,
+    ) -> TranscriptionResult:
+        import torch
+
+        audio_array = self._load_audio(audio, sample_rate)
+
+        if vad_filter and self._vad_model is not None and self._vad_get_speech_ts is not None:
+            audio_array = self._apply_vad(audio_array, sample_rate)
+
+        duration = float(audio_array.size) / float(sample_rate)
+
+        inputs = self.processor(audio_array, sampling_rate=sample_rate, return_tensors="pt")
+        input_features = inputs.input_features
+
+        device = next(self.model.parameters()).device
+        if self._torch_dtype in (torch.float16, torch.bfloat16):
+            input_features = input_features.to(device=device, dtype=self._torch_dtype)
+        else:
+            input_features = input_features.to(device=device)
+
+        gen_kwargs: dict[str, Any] = {"return_timestamps": True}
+        if beam_size > 1:
+            gen_kwargs["num_beams"] = beam_size
+
+        if language and language.lower() != "auto":
+            gen_kwargs["forced_decoder_ids"] = self.processor.get_decoder_prompt_ids(
+                language=language, task="transcribe"
+            )
+
+        if initial_prompt:
+            prompt_ids = self.processor.tokenizer.encode(initial_prompt, add_special_tokens=False)
+            gen_kwargs["prompt_ids"] = prompt_ids[:224]
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(input_features, **gen_kwargs)
+
+        segments = self._decode_segments(generated_ids[0], duration)
+        text = "".join(seg.text for seg in segments)
+
+        return TranscriptionResult(
+            text=text,
+            language=language or "auto",
+            language_probability=1.0,
+            duration=duration,
+            segments=segments,
+        )
+
+    def _load_audio(self, audio: str | np.ndarray, sample_rate: int) -> np.ndarray:
+        if isinstance(audio, str):
+            import librosa
+
+            audio_array, _sr = librosa.load(audio, sr=sample_rate, mono=True)
+            return audio_array.astype(np.float32)
+        if isinstance(audio, np.ndarray):
+            return audio.astype(np.float32)
+        raise ValueError(f"Unsupported audio type: {type(audio)}")
+
+    def _apply_vad(self, audio_array: np.ndarray, sample_rate: int) -> np.ndarray:
+        import torch
+
+        audio_tensor = torch.from_numpy(audio_array)
+        speech_ts = self._vad_get_speech_ts(
+            audio_tensor,
+            self._vad_model,
+            sampling_rate=sample_rate,
+            threshold=self._vad_threshold,
+            min_speech_duration_ms=self._vad_min_speech_ms,
+            min_silence_duration_ms=self._vad_min_silence_ms,
+            speech_pad_ms=self._vad_speech_pad_ms,
+            return_seconds=False,
+        )
+        if not speech_ts:
+            return np.array([], dtype=np.float32)
+        segments = [audio_array[ts["start"]:ts["end"]] for ts in speech_ts]
+        return np.concatenate(segments) if len(segments) > 1 else segments[0]
+
+    def _decode_segments(self, generated_ids: Any, duration: float) -> list[TranscriptionSegment]:
+        try:
+            decoded = self.processor.tokenizer.decode(
+                generated_ids, skip_special_tokens=False, decode_with_timestamps=True
+            )
+            if isinstance(decoded, list):
+                return [
+                    TranscriptionSegment(
+                        start=float(item["timestamp"][0]),
+                        end=float(item["timestamp"][1]),
+                        text=str(item["text"]).strip(),
+                    )
+                    for item in decoded
+                    if str(item.get("text", "")).strip()
+                ]
+        except Exception:
+            pass
+
+        text = self.processor.decode(generated_ids, skip_special_tokens=True).strip()
+        return [TranscriptionSegment(start=0.0, end=duration, text=text)] if text else []
+
+
 class FasterWhisperBackend:
+    """CTranslate2-based faster-whisper backend."""
+
     def __init__(self, model_config: dict[str, Any],
                  transcribe_config: dict[str, Any] | None = None) -> None:
         from faster_whisper import WhisperModel
 
         kwargs: dict[str, Any] = {
             "model_size_or_path": model_config["name"],
-            "device": model_config["device"],
-            "compute_type": model_config["compute_type"],
+            "device": model_config.get("device", "auto"),
+            "compute_type": model_config.get("compute_type", "default"),
         }
-        if model_config["cpu_threads"] > 0:
-            kwargs["cpu_threads"] = model_config["cpu_threads"]
-        if model_config["workers"] > 0:
-            kwargs["num_workers"] = model_config["workers"]
+        cpu_threads = model_config.get("cpu_threads", 0)
+        if cpu_threads > 0:
+            kwargs["cpu_threads"] = cpu_threads
+        workers = model_config.get("workers", 0)
+        if workers > 0:
+            kwargs["num_workers"] = workers
 
         self.model = WhisperModel(**kwargs)
         self.vad_parameters = (transcribe_config or {}).get("vad") or None
@@ -80,10 +232,10 @@ class FasterWhisperBackend:
 
         segments_iter, info = self.model.transcribe(audio, **transcribe_kwargs)
         segments = [
-            TranscriptionSegment(start=segment.start, end=segment.end, text=segment.text.strip())
-            for segment in segments_iter
+            TranscriptionSegment(start=s.start, end=s.end, text=s.text.strip())
+            for s in segments_iter
         ]
-        text = "\n".join(segment.text for segment in segments if segment.text)
+        text = "\n".join(s.text for s in segments if s.text)
         return TranscriptionResult(
             text=text,
             language=info.language,
@@ -93,264 +245,13 @@ class FasterWhisperBackend:
         )
 
 
-class SenseVoiceBackend:
-    def __init__(self, model_config: dict[str, Any]) -> None:
-        from funasr import AutoModel
-
-        self.model_name = model_config["name"]
-        device = _sensevoice_device(model_config["device"])
-        self.model = AutoModel(
-            model=self.model_name,
-            trust_remote_code=True,
-            device=device,
-        )
-
-    def transcribe(
-        self,
-        audio: str | np.ndarray,
-        *,
-        language: str,
-        beam_size: int,
-        vad_filter: bool,
-        initial_prompt: str,
-        sample_rate: int = 16000,
-    ) -> TranscriptionResult:
-        audio_path: str | None = None
-        remove_audio = False
-        if isinstance(audio, np.ndarray):
-            audio_path = _write_pcm_wav(audio, sample_rate)
-            remove_audio = True
-        else:
-            audio_path = audio
-
-        try:
-            result = self.model.generate(
-                input=audio_path,
-                cache={},
-                language=_sensevoice_language(language),
-                use_itn=True,
-                batch_size_s=60,
-                merge_vad=vad_filter,
-                merge_length_s=15,
-            )
-        finally:
-            if remove_audio and audio_path:
-                try:
-                    os.remove(audio_path)
-                except OSError:
-                    pass
-
-        text = _extract_sensevoice_text(result)
-        duration = _audio_duration(audio, sample_rate)
-        return TranscriptionResult(
-            text=text,
-            language=language or "auto",
-            language_probability=0.0,
-            duration=duration,
-            segments=[TranscriptionSegment(start=0.0, end=duration, text=text)] if text else [],
-        )
-
-
-class UltravoxBackend:
-    def __init__(self, model_config: dict[str, Any]) -> None:
-        import transformers
-
-        self.model_name = model_config["name"]
-        device = _ultravox_device(model_config["device"])
-        self.pipe = transformers.pipeline(
-            model=self.model_name,
-            trust_remote_code=True,
-            device=device,
-        )
-
-    def transcribe(
-        self,
-        audio: str | np.ndarray,
-        *,
-        language: str,
-        beam_size: int,
-        vad_filter: bool,
-        initial_prompt: str,
-        sample_rate: int = 16000,
-    ) -> TranscriptionResult:
-        import librosa
-
-        if isinstance(audio, str):
-            audio_array, _sr = librosa.load(audio, sr=16000)
-        else:
-            audio_array = audio.astype(np.float32)
-            # Ensure 1D
-            if audio_array.ndim > 1:
-                audio_array = audio_array.mean(axis=0)
-
-        duration = _audio_duration(audio, sample_rate)
-
-        prompt = _build_ultravox_prompt(language, initial_prompt)
-        turns = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ]
-
-        generate_kwargs: dict[str, Any] = {"max_new_tokens": 256}
-        if beam_size > 1:
-            generate_kwargs["num_beams"] = beam_size
-
-        result = self.pipe(
-            {"audio": audio_array, "turns": turns, "sampling_rate": 16000},
-            **generate_kwargs,
-        )
-
-        text = _extract_ultravox_text(result)
-        return TranscriptionResult(
-            text=text,
-            language=language or "auto",
-            language_probability=0.0,
-            duration=duration,
-            segments=[TranscriptionSegment(start=0.0, end=duration, text=text)] if text else [],
-        )
-
-
 def create_asr_backend(model_config: dict[str, Any],
-                       transcribe_config: dict[str, Any] | None = None) -> ASRBackend:
-    provider = str(model_config.get("provider") or "faster-whisper").strip().lower()
-    if provider in {"faster-whisper", "faster_whisper", "whisper"}:
+                       transcribe_config: dict[str, Any] | None = None,
+                       vad_model: Any = None,
+                       vad_get_speech_ts: Any = None) -> ASRBackend:
+    provider = str(model_config.get("provider") or "whisper").strip().lower()
+    if provider in {"whisper"}:
+        return WhisperBackend(model_config, transcribe_config, vad_model, vad_get_speech_ts)
+    if provider in {"faster-whisper", "faster_whisper"}:
         return FasterWhisperBackend(model_config, transcribe_config)
-    if provider in {"sensevoice", "sensevoice-small", "funasr"}:
-        return SenseVoiceBackend(model_config)
-    if provider in {"ultravox"}:
-        return UltravoxBackend(model_config)
-    raise ValueError("asr.model.provider must be one of: faster-whisper, sensevoice, ultravox")
-
-
-def _sensevoice_device(device: str) -> str:
-    if device in {"", "auto"}:
-        try:
-            import torch
-
-            return "cuda:0" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
-    if device == "cuda":
-        return "cuda:0"
-    return device
-
-
-def _sensevoice_language(language: str) -> str:
-    normalized = (language or "auto").lower()
-    if normalized.startswith("zh"):
-        return "zh"
-    if normalized.startswith("en"):
-        return "en"
-    if normalized.startswith("ja"):
-        return "ja"
-    if normalized.startswith("ko"):
-        return "ko"
-    if normalized.startswith("yue"):
-        return "yue"
-    return "auto"
-
-
-def _extract_sensevoice_text(result: Any) -> str:
-    if isinstance(result, list):
-        parts = [_extract_sensevoice_text(item) for item in result]
-        return "\n".join(part for part in parts if part)
-    if isinstance(result, dict):
-        text = str(result.get("text") or "")
-    else:
-        text = str(result or "")
-
-    try:
-        from funasr.utils.postprocess_utils import rich_transcription_postprocess
-
-        return rich_transcription_postprocess(text).strip()
-    except Exception:
-        return re.sub(r"<\|[^|]+?\|>", "", text).strip()
-
-
-def _write_pcm_wav(audio: np.ndarray, sample_rate: int) -> str:
-    pcm = np.clip(audio, -1.0, 1.0)
-    pcm_i16 = (pcm * 32767).astype(np.int16)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        path = tmp.name
-    with wave.open(path, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(pcm_i16.tobytes())
-    return path
-
-
-def _audio_duration(audio: str | np.ndarray, sample_rate: int) -> float:
-    if isinstance(audio, np.ndarray):
-        return float(audio.size) / float(sample_rate)
-    if Path(audio).suffix.lower() == ".wav":
-        try:
-            with wave.open(audio, "rb") as wav:
-                return float(wav.getnframes()) / float(wav.getframerate())
-        except wave.Error:
-            return 0.0
-    return 0.0
-
-
-def _ultravox_device(device: str) -> int | str:
-    if device in {"", "auto"}:
-        try:
-            import torch
-
-            return 0 if torch.cuda.is_available() else -1
-        except Exception:
-            return -1
-    if device == "cuda":
-        return 0
-    if device == "cpu":
-        return -1
-    try:
-        return int(device)
-    except ValueError:
-        return -1
-
-
-def _build_ultravox_prompt(language: str, initial_prompt: str) -> str:
-    if initial_prompt:
-        return f"{initial_prompt}<|audio|>"
-    lang_name = _ultravox_language_name(language)
-    if lang_name:
-        return f"Transcribe the following audio in {lang_name}:<|audio|>"
-    return "Transcribe this audio:<|audio|>"
-
-
-def _ultravox_language_name(language: str) -> str | None:
-    mapping = {
-        "zh": "Chinese",
-        "en": "English",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "yue": "Cantonese",
-        "fr": "French",
-        "de": "German",
-        "es": "Spanish",
-        "ru": "Russian",
-        "ar": "Arabic",
-        "hi": "Hindi",
-        "pt": "Portuguese",
-        "it": "Italian",
-        "vi": "Vietnamese",
-        "th": "Thai",
-        "tr": "Turkish",
-    }
-    normalized = (language or "").strip().lower()
-    if normalized in mapping:
-        return mapping[normalized]
-    for code, name in mapping.items():
-        if normalized.startswith(code):
-            return name
-    return None
-
-
-def _extract_ultravox_text(result: Any) -> str:
-    if isinstance(result, list):
-        parts = [_extract_ultravox_text(item) for item in result]
-        return "\n".join(part for part in parts if part)
-    if isinstance(result, dict):
-        return str(result.get("generated_text") or result.get("text") or "").strip()
-    return str(result or "").strip()
+    raise ValueError(f"Unsupported ASR provider: {provider}")

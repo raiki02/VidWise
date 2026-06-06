@@ -22,12 +22,10 @@ from asr_service.backends import ASRBackend, TranscriptionResult, create_asr_bac
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
 DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "model": {
-        "provider": "faster-whisper",
-        "name": "small",
+        "provider": "whisper",
+        "name": "./models/whisper-small",
         "device": "auto",
-        "compute_type": "default",
-        "cpu_threads": 0,
-        "workers": 1,
+        "torch_dtype": "auto",
     },
     "transcribe": {
         "beam_size": 5,
@@ -147,16 +145,8 @@ def load_model() -> None:
         asr_config = load_asr_config()
         model_config = asr_config["model"]
 
-        logger.info(
-            "loading ASR model provider=%s model=%s device=%s",
-            model_config["provider"],
-            model_config["name"],
-            model_config["device"],
-        )
-        model = create_asr_backend(model_config, transcribe_config=asr_config["transcribe"])
-        logger.info("ASR model loaded")
-
         stream_config = asr_config["stream"]
+        vad_get_speech_ts = None
         if stream_config.get("enabled", True):
             logger.info("loading Silero VAD model")
             vad_model, vad_utils = torch.hub.load(
@@ -165,7 +155,22 @@ def load_model() -> None:
                 trust_repo=True,
             )
             vad_iterator_cls = vad_utils[3]
+            vad_get_speech_ts = vad_utils[2]
             logger.info("Silero VAD model loaded")
+
+        logger.info(
+            "loading ASR model provider=%s model=%s device=%s",
+            model_config["provider"],
+            model_config["name"],
+            model_config["device"],
+        )
+        model = create_asr_backend(
+            model_config,
+            transcribe_config=asr_config["transcribe"],
+            vad_model=vad_model,
+            vad_get_speech_ts=vad_get_speech_ts,
+        )
+        logger.info("ASR model loaded")
     except Exception:
         logger.exception("failed to load ASR model")
         raise
@@ -496,12 +501,10 @@ def load_asr_config() -> dict[str, Any]:
     stream_config = config["stream"]
     vad_config = stream_config["vad"]
 
-    model_config["provider"] = os.getenv("ASR_PROVIDER", model_config.get("provider", "faster-whisper"))
+    model_config["provider"] = os.getenv("ASR_PROVIDER", model_config.get("provider", "whisper"))
     model_config["name"] = os.getenv("ASR_MODEL", model_config["name"])
     model_config["device"] = os.getenv("ASR_DEVICE", model_config["device"])
-    model_config["compute_type"] = os.getenv("ASR_COMPUTE_TYPE", model_config["compute_type"])
-    model_config["cpu_threads"] = int(os.getenv("ASR_CPU_THREADS", model_config["cpu_threads"]))
-    model_config["workers"] = int(os.getenv("ASR_WORKERS", model_config["workers"]))
+    model_config["torch_dtype"] = os.getenv("ASR_TORCH_DTYPE", model_config.get("torch_dtype", "auto"))
 
     transcribe_config["beam_size"] = int(transcribe_config["beam_size"])
     transcribe_config["vad_filter"] = bool(transcribe_config["vad_filter"])

@@ -6,12 +6,16 @@ asr:
   timeout: "10m"
   language: "zh"
   model:
-    # provider supports: faster-whisper, sensevoice, ultravox
-    provider: "faster-whisper"
-    # faster-whisper example: "small" or "./models/faster-whisper-small"
-    # sensevoice example: "FunAudioLLM/SenseVoiceSmall"
-    name: "path/to/models"
+    # Backend options:
+    #   whisper       - OpenAI Whisper via transformers (supports local or HF model)
+    #   faster-whisper - CTranslate2-optimized faster-whisper
+    provider: "whisper"
+    # whisper: "./models/whisper-small" or "openai/whisper-large-v3"
+    # faster-whisper: "small" or "medium" or path to CTranslate2 model dir
+    name: "./models/whisper-small"
     device: "auto"
+    torch_dtype: "auto"
+    # --- faster-whisper only ---
     compute_type: "default"
     cpu_threads: 0
     workers: 1
@@ -19,7 +23,6 @@ asr:
     beam_size: 5
     vad_filter: true
     initial_prompt: ""
-    # VAD for HTTP /transcribe (faster-whisper built-in)
     vad:
       threshold: 0.3
       min_speech_duration_ms: 100
@@ -30,7 +33,6 @@ asr:
     sample_rate: 16000
     chunk_size: 1600
     max_buffer_seconds: 30
-    # VAD for WebSocket /stream (app-level Silero VAD)
     vad:
       threshold: 0.5
       min_speech_duration_ms: 250
@@ -57,14 +59,6 @@ video_summary:
     do_sample: false
     temperature: 1.0
     top_p: 1.0
-
-whisper:
-  # Used as a fallback when the Python ASR service is unavailable.
-  # The service will POST multipart/form-data to: <base_url>/inference
-  # Example (matching whisper.cpp server): "http://127.0.0.1:8080"
-  base_url: "http://127.0.0.1:8080"
-  language: "zh"
-  prompt: "以下是普通话的句子，请使用简体中文输出。"
 
 llm:
   # Set to false to skip the paragraph-formatting LLM call and return raw ASR text.

@@ -15,7 +15,7 @@ type TranscribeInput struct {
 func NewTranscribeTool(client *Client) (tool.InvokableTool, error) {
 	return utils.InferTool(
 		"transcribe_audio",
-		"Transcribe a local audio file to text by calling the faster-whisper ASR service.",
+		"Transcribe a local audio file to text by calling the ASR service.",
 		func(ctx context.Context, input TranscribeInput) (TranscribeResponse, error) {
 			return client.Transcribe(ctx, input.AudioPath, input.Language)
 		},

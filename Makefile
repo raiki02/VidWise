@@ -6,21 +6,21 @@ else
 PYTHON ?= python3
 endif
 
-.PHONY: help deps check-deps deps-python deps-video-summary install-ffmpeg install-yt-dlp check-whisper-cli run run-asr run-video-summary test
+.PHONY: help deps check-deps deps-python deps-video-summary install-ffmpeg install-yt-dlp run run-asr run-video-summary test
 
 help:
 	@echo "Usage:"
-	@echo "  make deps        Check/install ffmpeg and yt-dlp, and check whisper-cli fallback"
+	@echo "  make deps        Check/install ffmpeg and yt-dlp"
 	@echo "  make deps-python Install Python ASR dependencies"
 	@echo "  make deps-video-summary Install Python Marlin video summary dependencies"
-	@echo "  make run-asr     Run the faster-whisper ASR service"
+	@echo "  make run-asr     Run the ASR service"
 	@echo "  make run-video-summary Run the Marlin video summary service"
 	@echo "  make run         Install deps when needed, then run the Go backend service"
 	@echo "  make test        Run Go tests"
 
 deps: check-deps
 
-check-deps: install-ffmpeg install-yt-dlp check-whisper-cli
+check-deps: install-ffmpeg install-yt-dlp
 
 deps-python:
 	$(PYTHON) -m pip install -r asr_service/requirements.txt
@@ -34,9 +34,6 @@ install-ffmpeg:
 
 install-yt-dlp:
 	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Command yt-dlp -ErrorAction SilentlyContinue) { Write-Host 'yt-dlp already installed' } elseif (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements } elseif (Get-Command choco -ErrorAction SilentlyContinue) { choco install yt-dlp -y } elseif (Get-Command python -ErrorAction SilentlyContinue) { python -m pip install --user --upgrade yt-dlp } else { throw 'yt-dlp is missing. Install winget, Chocolatey, or Python, then run make deps again.' }"
-
-check-whisper-cli:
-	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Command whisper-cli -ErrorAction SilentlyContinue) { Write-Host 'whisper-cli already installed' } else { throw 'whisper-cli is missing. It is required only as fallback when the Python ASR service is unavailable. Install whisper.cpp and make sure whisper-cli is on PATH.' }"
 else
 install-ffmpeg:
 	@if command -v ffmpeg >/dev/null 2>&1; then \
@@ -60,14 +57,6 @@ install-yt-dlp:
 		exit 1; \
 	fi
 
-check-whisper-cli:
-	@if command -v whisper-cli >/dev/null 2>&1; then \
-		echo "whisper-cli already installed"; \
-	else \
-		echo "whisper-cli is missing. It is required only as fallback when the Python ASR service is unavailable."; \
-		echo "Install whisper.cpp and make sure whisper-cli is on PATH."; \
-		exit 1; \
-	fi
 endif
 
 run: deps

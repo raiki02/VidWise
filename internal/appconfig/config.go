@@ -12,7 +12,6 @@ import (
 
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
-	Whisper      WhisperConfig      `yaml:"whisper"`
 	ASR          ASRConfig          `yaml:"asr"`
 	VideoSummary VideoSummaryConfig `yaml:"video_summary"`
 	LLM          LLMConfig          `yaml:"llm"`
@@ -30,19 +29,11 @@ type ASRConfig struct {
 	Transcribe ASRTranscribeConfig `yaml:"transcribe"`
 }
 
-type WhisperConfig struct {
-	// BaseURL is the whisper-server base address used for fallback transcription
-	// when the primary ASR service is unavailable. Example: "http://127.0.0.1:8080".
-	BaseURL   string `yaml:"base_url"`
-	ModelPath string `yaml:"model_path"`
-	Language  string `yaml:"language"`
-	Prompt    string `yaml:"prompt"`
-}
-
 type ASRModelConfig struct {
 	Provider    string `yaml:"provider"`
 	Name        string `yaml:"name"`
 	Device      string `yaml:"device"`
+	TorchDType  string `yaml:"torch_dtype"`
 	ComputeType string `yaml:"compute_type"`
 	CPUThreads  int    `yaml:"cpu_threads"`
 	Workers     int    `yaml:"workers"`
@@ -134,13 +125,16 @@ func (c *Config) applyDefaults() {
 		c.ASR.Language = "zh"
 	}
 	if c.ASR.Model.Provider == "" {
-		c.ASR.Model.Provider = "faster-whisper"
+		c.ASR.Model.Provider = "whisper"
 	}
 	if c.ASR.Model.Name == "" {
-		c.ASR.Model.Name = "small"
+		c.ASR.Model.Name = "./models/whisper-small"
 	}
 	if c.ASR.Model.Device == "" {
 		c.ASR.Model.Device = "auto"
+	}
+	if c.ASR.Model.TorchDType == "" {
+		c.ASR.Model.TorchDType = "auto"
 	}
 	if c.ASR.Model.ComputeType == "" {
 		c.ASR.Model.ComputeType = "default"
@@ -177,15 +171,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.VideoSummary.Summarize.TopP == 0 {
 		c.VideoSummary.Summarize.TopP = 1.0
-	}
-	if c.Whisper.ModelPath == "" {
-		c.Whisper.ModelPath = "./models/ggml-small.bin"
-	}
-	if c.Whisper.Language == "" {
-		c.Whisper.Language = c.ASR.Language
-	}
-	if c.Whisper.Prompt == "" {
-		c.Whisper.Prompt = c.ASR.Transcribe.InitialPrompt
 	}
 	c.LLM.Provider = strings.ToLower(strings.TrimSpace(c.LLM.Provider))
 	if c.LLM.Enabled == nil {

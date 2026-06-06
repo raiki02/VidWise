@@ -1,10 +1,7 @@
 fastapi==0.115.6
 faster-whisper==1.1.0
-funasr
 librosa
-modelscope
 numpy==1.26.4
-peft
 python-multipart==0.0.20
 PyYAML==6.0.2
 torch==2.3.1

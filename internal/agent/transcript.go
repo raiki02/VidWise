@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
-	"github.com/raiki02/video-extractor/cmd/transcript"
 	"github.com/raiki02/video-extractor/internal/appconfig"
 	"github.com/raiki02/video-extractor/internal/asr"
 	"github.com/raiki02/video-extractor/internal/paragraph"
@@ -77,8 +75,7 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 
 	outputJSON, err := a.asrTool.InvokableRun(ctx, string(args))
 	if err != nil {
-		slog.Warn("asr.primary_failed", "elapsed", time.Since(stage), "err", err)
-		return a.transcribeWithWhisperServer(audioPath, err)
+		return "", fmt.Errorf("transcribe audio failed: %w", err)
 	}
 	slog.Info("asr.primary_ok", "elapsed", time.Since(stage))
 
@@ -87,21 +84,4 @@ func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (str
 		return "", fmt.Errorf("decode asr tool output failed: %w", err)
 	}
 	return output.Text, nil
-}
-
-func (a *TranscriptAgent) transcribeWithWhisperServer(audioPath string, primaryErr error) (string, error) {
-	rawTextPath, out, err := transcript.Text(audioPath, a.cfg.Whisper.BaseURL, a.cfg.Whisper.Language, a.cfg.Whisper.Prompt)
-	if err != nil {
-		return "", fmt.Errorf(
-			"transcribe audio failed: python asr error: %w; whisper-server fallback error: %w",
-			primaryErr,
-			transcript.CommandError("whisper-server transcribe failed", out, err),
-		)
-	}
-
-	rawText, err := os.ReadFile(rawTextPath)
-	if err != nil {
-		return "", fmt.Errorf("read whisper-cli transcript failed: %w", err)
-	}
-	return string(rawText), nil
 }
