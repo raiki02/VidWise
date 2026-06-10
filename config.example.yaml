@@ -1,6 +1,11 @@
 server:
   addr: ":8080"
 
+download:
+  # Optional path to yt-dlp cookies.txt file.
+  # Example: "/Users/you/cookies.txt"
+  cookies_path: ""
+
 asr:
   base_url: "http://localhost:8001"
   timeout: "10m"

@@ -42,7 +42,7 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 	case "video":
 		videoPath := filepath.Join(workDir, name+".mp4")
 		stage := time.Now()
-		if out, err := download.Video(url, videoPath); err != nil {
+		if out, err := download.Video(url, videoPath, s.cfg.Download.CookiesPath); err != nil {
 			cleanup()
 			return Result{}, nil, commandError("download video failed", out, err)
 		}
@@ -88,7 +88,7 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 	case "summary", "video_summary":
 		videoPath := filepath.Join(workDir, name+".mp4")
 		stage := time.Now()
-		if out, err := download.Video(url, videoPath); err != nil {
+		if out, err := download.Video(url, videoPath, s.cfg.Download.CookiesPath); err != nil {
 			cleanup()
 			return Result{}, nil, commandError("download video failed", out, err)
 		}

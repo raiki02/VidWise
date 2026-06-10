@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
+	Download     DownloadConfig     `yaml:"download"`
 	ASR          ASRConfig          `yaml:"asr"`
 	VideoSummary VideoSummaryConfig `yaml:"video_summary"`
 	LLM          LLMConfig          `yaml:"llm"`
@@ -19,6 +20,10 @@ type Config struct {
 
 type ServerConfig struct {
 	Addr string `yaml:"addr"`
+}
+
+type DownloadConfig struct {
+	CookiesPath string `yaml:"cookies_path"`
 }
 
 type ASRConfig struct {
