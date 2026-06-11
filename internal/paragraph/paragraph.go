@@ -47,13 +47,21 @@ func formatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig, ha
 		return "", err
 	}
 
-	chunks := splitByRunes(rawText, cfg.ChunkRunes)
-	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes)
-
 	perChunkTimeout, err := cfg.TimeoutDuration()
 	if err != nil {
 		perChunkTimeout = 3 * time.Minute
 	}
+
+	if cfg.TwoStep {
+		text := formatTwoStep(formatCtx, cm, rawText, cfg, perChunkTimeout, fallback)
+		if text == "" && !fallback {
+			return "", errChunkFailed
+		}
+		return text, nil
+	}
+
+	chunks := splitByRunes(rawText, cfg.ChunkRunes)
+	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes)
 
 	formatted := formatChunksParallel(formatCtx, cm, chunks, rawText, cfg, perChunkTimeout, fallback)
 	slog.Info("llm.format.done", "elapsed", time.Since(start))
@@ -166,6 +174,44 @@ func renderUserPrompt(template, text string) string {
 		return text
 	}
 	return strings.ReplaceAll(template, "{{text}}", text)
+}
+
+func formatTwoStep(
+	ctx context.Context,
+	cm einomodel.BaseChatModel,
+	rawText string,
+	cfg appconfig.LLMConfig,
+	perChunkTimeout time.Duration,
+	fallback bool,
+) string {
+	start := time.Now()
+
+	// Step 1: split into smaller chunks, fix typos + trad→simp per chunk
+	chunks := splitByRunes(rawText, cfg.Step1ChunkRunes)
+	slog.Info("llm.format.step1.start", "chunks", len(chunks), "chunk_runes", cfg.Step1ChunkRunes)
+
+	step1Cfg := appconfig.LLMConfig{
+		Prompt:      cfg.Step1Prompt,
+		Temperature: cfg.Temperature,
+		MaxTokens:   cfg.MaxTokens,
+	}
+	step1Results := formatChunksParallel(ctx, cm, chunks, rawText, step1Cfg, perChunkTimeout, fallback)
+	if step1Results == nil {
+		return ""
+	}
+	step1Text := strings.Join(step1Results, "\n\n")
+	slog.Info("llm.format.step1.done", "elapsed", time.Since(start))
+
+	// Step 2: semantic paragraph organization, chunked to avoid OOM on long texts
+	step2Chunks := splitByRunes(step1Text, cfg.ChunkRunes)
+	slog.Info("llm.format.step2.start", "chunks", len(step2Chunks), "chunk_runes", cfg.ChunkRunes)
+	step2Results := formatChunksParallel(ctx, cm, step2Chunks, step1Text, cfg, perChunkTimeout, fallback)
+	if step2Results == nil {
+		return ""
+	}
+	result := strings.Join(step2Results, "\n\n")
+	slog.Info("llm.format.done", "elapsed", time.Since(start))
+	return result
 }
 
 func splitByRunes(text string, limit int) []string {

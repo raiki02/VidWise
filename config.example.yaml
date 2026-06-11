@@ -90,6 +90,30 @@ llm:
   # Split long transcripts into chunks before paragraph formatting.
   chunk_runes: 2000
 
+  # Enable two-pass pipeline:
+  #   Step 1: per-chunk typo fix + traditional→simplified (strict, no merging)
+  #   Step 2: semantic paragraph organization of the full step-1 output
+  two_step: false
+
+  # Step 1 chunk size in runes. Smaller chunks give the model less room to
+  # "rewrite" but mean more API calls.
+  step1_chunk_runes: 800
+
+  # Step 1 prompt: strict — only fix typos and convert traditional to simplified.
+  step1_prompt:
+    system: |
+      你是中文文本纠错助手。
+      任务：
+        - 修正错别字
+        - 繁体中文转简体中文
+      禁止：
+        - 改写句子
+        - 调整段落
+        - 增加或删除内容
+      输出：
+        - 仅返回纠正后的文本
+    user_template: "{{text}}"
+
   prompt:
     system: |
       你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。

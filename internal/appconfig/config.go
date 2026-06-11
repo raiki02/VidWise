@@ -91,6 +91,12 @@ type LLMConfig struct {
 	KeepAlive            string       `yaml:"keep_alive"`
 	Prompt               PromptConfig `yaml:"prompt"`
 	ChunkRunes           int          `yaml:"chunk_runes"`
+	// TwoStep enables a two-pass pipeline:
+	//   Step 1: per-chunk typo fix + traditional→simplified conversion (strict, no merging)
+	//   Step 2: semantic paragraph organization of the full step-1 output
+	TwoStep         bool         `yaml:"two_step"`
+	Step1Prompt     PromptConfig `yaml:"step1_prompt"`
+	Step1ChunkRunes int          `yaml:"step1_chunk_runes"`
 }
 
 type PromptConfig struct {
@@ -204,11 +210,20 @@ func (c *Config) applyDefaults() {
 	if c.LLM.ChunkRunes == 0 {
 		c.LLM.ChunkRunes = 2000
 	}
+	if c.LLM.Step1ChunkRunes == 0 {
+		c.LLM.Step1ChunkRunes = 800
+	}
 	if c.LLM.Prompt.System == "" {
 		c.LLM.Prompt.System = defaultParagraphSystemPrompt
 	}
 	if c.LLM.Prompt.UserTemplate == "" {
 		c.LLM.Prompt.UserTemplate = defaultParagraphUserTemplate
+	}
+	if c.LLM.Step1Prompt.System == "" {
+		c.LLM.Step1Prompt.System = defaultStep1SystemPrompt
+	}
+	if c.LLM.Step1Prompt.UserTemplate == "" {
+		c.LLM.Step1Prompt.UserTemplate = defaultStep1UserTemplate
 	}
 }
 
@@ -287,3 +302,19 @@ const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你
 5. 不要添加标题、列表、Markdown 标记或解释。`
 
 const defaultParagraphUserTemplate = "请为下面的转写文本划分自然段，只返回处理后的正文：\n\n{{text}}"
+
+const defaultStep1SystemPrompt = `你是中文文本纠错助手。
+
+任务：
+  - 修正错别字
+  - 繁体中文转简体中文
+
+禁止：
+  - 改写句子
+  - 调整段落
+  - 增加或删除内容
+
+输出：
+  - 仅返回纠正后的文本`
+
+const defaultStep1UserTemplate = "{{text}}"
