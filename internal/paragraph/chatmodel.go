@@ -8,7 +8,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	einomodel "github.com/cloudwego/eino/components/model"
-	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/appconfig"
 )
 
 func NewChatModel(ctx context.Context, cfg appconfig.LLMConfig) (einomodel.BaseChatModel, error) {

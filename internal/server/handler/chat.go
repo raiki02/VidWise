@@ -9,10 +9,10 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/chat"
-	"github.com/raiki02/video-extractor/internal/paragraph"
-	"github.com/raiki02/video-extractor/internal/rag"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/chat"
+	"github.com/raiki02/vidwise/internal/paragraph"
+	"github.com/raiki02/vidwise/internal/rag"
 )
 
 type ChatHandler struct {

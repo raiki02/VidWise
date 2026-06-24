@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/tool"
 )
 
 // ExecuteVideoProcess runs the video processing pipeline:

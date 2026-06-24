@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	mysqlclient "github.com/raiki02/video-extractor/internal/storage/mysql"
+	mysqlclient "github.com/raiki02/vidwise/internal/storage/mysql"
 	"gorm.io/gorm"
 )
 

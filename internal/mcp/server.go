@@ -8,7 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/tool"
 )
 
 // Server wraps the mcp-go MCPServer and bridges it with the tool registry.

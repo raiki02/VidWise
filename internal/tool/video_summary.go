@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	video_summary "github.com/raiki02/video-extractor/internal/video_summary"
+	video_summary "github.com/raiki02/vidwise/internal/video_summary"
 )
 
 func NewVideoSummaryTool(client *video_summary.Client) (tool.InvokableTool, *Wrapper, error) {

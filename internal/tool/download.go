@@ -6,7 +6,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	downloadcmd "github.com/raiki02/video-extractor/cmd/download"
+	downloadcmd "github.com/raiki02/vidwise/cmd/download"
 )
 
 // DownloadInput is the input for the video download tool.

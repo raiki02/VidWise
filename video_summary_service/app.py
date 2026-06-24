@@ -32,7 +32,7 @@ DEFAULT_VIDEO_SUMMARY_CONFIG: dict[str, Any] = {
     },
 }
 
-app = FastAPI(title="video-extractor-video-summary")
+app = FastAPI(title="vidwise-video-summary")
 model: VideoSummaryBackend | None = None
 video_summary_config: dict[str, Any] = DEFAULT_VIDEO_SUMMARY_CONFIG
 model_lock = threading.Lock()
@@ -48,7 +48,7 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
-logger = logging.getLogger("video_extractor.video_summary")
+logger = logging.getLogger("vidwise.video_summary")
 
 
 @app.middleware("http")

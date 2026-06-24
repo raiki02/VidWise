@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Protocol, Tuple
 
 from typing_extensions import TypedDict
 
-logger = logging.getLogger("video_extractor.video_summary.backend")
+logger = logging.getLogger("vidwise.video_summary.backend")
 
 
 # ---------------------------------------------------------------------------

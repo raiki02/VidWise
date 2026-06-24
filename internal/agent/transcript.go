@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/asr"
-	"github.com/raiki02/video-extractor/internal/paragraph"
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/asr"
+	"github.com/raiki02/vidwise/internal/paragraph"
+	"github.com/raiki02/vidwise/internal/tool"
 )
 
 type TranscriptAgent struct {

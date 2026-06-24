@@ -5,8 +5,8 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/paragraph"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/paragraph"
 )
 
 // TextFormatInput is the input for the LLM paragraph formatting tool.

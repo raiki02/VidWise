@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	video_summary "github.com/raiki02/video-extractor/internal/video_summary"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	video_summary "github.com/raiki02/vidwise/internal/video_summary"
 )
 
 type VideoSummaryAgent struct {

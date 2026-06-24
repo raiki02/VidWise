@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/raiki02/video-extractor/internal/agent"
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/agent"
+	"github.com/raiki02/vidwise/internal/tool"
 )
 
 type VideoHandler struct {

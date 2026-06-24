@@ -1,4 +1,4 @@
-module github.com/raiki02/video-extractor
+module github.com/raiki02/vidwise
 
 go 1.26.1
 

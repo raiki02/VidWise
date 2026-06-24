@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/raiki02/video-extractor/cmd/audio"
-	"github.com/raiki02/video-extractor/cmd/download"
-	"github.com/raiki02/video-extractor/cmd/video"
-	"github.com/raiki02/video-extractor/internal/agent"
-	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/vidwise/cmd/audio"
+	"github.com/raiki02/vidwise/cmd/download"
+	"github.com/raiki02/vidwise/cmd/video"
+	"github.com/raiki02/vidwise/internal/agent"
+	"github.com/raiki02/vidwise/internal/appconfig"
 )
 
 type Service struct {

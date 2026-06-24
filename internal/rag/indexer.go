@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
-	"github.com/raiki02/video-extractor/internal/model"
-	qdrantclient "github.com/raiki02/video-extractor/internal/storage/qdrant"
+	"github.com/raiki02/vidwise/internal/model"
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 )
 
 // Indexer indexes text chunks into Qdrant.

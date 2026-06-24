@@ -10,7 +10,7 @@ import (
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/appconfig"
 )
 
 const maxParallelChunks = 3

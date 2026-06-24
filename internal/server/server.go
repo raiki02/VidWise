@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/appconfig"
 )
 
 // New creates a Gin engine with all routes registered.

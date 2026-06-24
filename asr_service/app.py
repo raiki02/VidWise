@@ -59,7 +59,7 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
     },
 }
 
-app = FastAPI(title="video-extractor-asr")
+app = FastAPI(title="vidwise-asr")
 model: ASRBackend | None = None
 asr_config: dict[str, Any] = DEFAULT_ASR_CONFIG
 vad_model: Any | None = None
@@ -77,7 +77,7 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
-logger = logging.getLogger("video_extractor.asr")
+logger = logging.getLogger("vidwise.asr")
 
 
 @app.middleware("http")

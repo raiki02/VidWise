@@ -7,13 +7,13 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/chat"
-	"github.com/raiki02/video-extractor/internal/model"
-	"github.com/raiki02/video-extractor/internal/rag"
-	"github.com/raiki02/video-extractor/internal/server/handler"
-	qdrantclient "github.com/raiki02/video-extractor/internal/storage/qdrant"
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/chat"
+	"github.com/raiki02/vidwise/internal/model"
+	"github.com/raiki02/vidwise/internal/rag"
+	"github.com/raiki02/vidwise/internal/server/handler"
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
+	"github.com/raiki02/vidwise/internal/tool"
 
 	_ "embed"
 )

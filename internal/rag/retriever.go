@@ -6,8 +6,8 @@ import (
 	"log/slog"
 
 	pb "github.com/qdrant/go-client/qdrant"
-	"github.com/raiki02/video-extractor/internal/model"
-	qdrantclient "github.com/raiki02/video-extractor/internal/storage/qdrant"
+	"github.com/raiki02/vidwise/internal/model"
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 )
 
 // RelevantChunk is a retrieved chunk with relevance score.

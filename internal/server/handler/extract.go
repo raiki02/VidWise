@@ -12,11 +12,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/raiki02/video-extractor/internal/appconfig"
-	"github.com/raiki02/video-extractor/internal/extractor"
-	"github.com/raiki02/video-extractor/internal/paragraph"
-	"github.com/raiki02/video-extractor/internal/rag"
-	"github.com/raiki02/video-extractor/internal/tool"
+	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/extractor"
+	"github.com/raiki02/vidwise/internal/paragraph"
+	"github.com/raiki02/vidwise/internal/rag"
+	"github.com/raiki02/vidwise/internal/tool"
 )
 
 // ExtractHandler retains backward compatibility with the legacy /extract and /format endpoints.

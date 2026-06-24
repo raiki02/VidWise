@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/raiki02/video-extractor/internal/asr"
+	"github.com/raiki02/vidwise/internal/asr"
 )
 
 func NewASRTool(client *asr.Client) (tool.InvokableTool, *Wrapper, error) {

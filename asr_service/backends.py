@@ -110,7 +110,7 @@ class WhisperBackend:
             )
 
         import logging
-        _log = logging.getLogger("video_extractor.asr")
+        _log = logging.getLogger("vidwise.asr")
         _log.info(
             "whisper.long_audio_chunking samples=%d duration=%.1fs chunk_size=%ds",
             audio_array.size, total_duration, 25,

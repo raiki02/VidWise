@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/raiki02/video-extractor/internal/model"
+	"github.com/raiki02/vidwise/internal/model"
 )
 
 // EmbedInput is the input for the embedding tool.

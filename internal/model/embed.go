@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/appconfig"
 )
 
 type EmbedClient struct {

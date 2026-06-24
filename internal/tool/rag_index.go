@@ -5,7 +5,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
-	"github.com/raiki02/video-extractor/internal/rag"
+	"github.com/raiki02/vidwise/internal/rag"
 )
 
 // RAGIndexInput is the input for the RAG indexing tool.
