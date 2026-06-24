@@ -7,18 +7,18 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/cloudwego/eino/components/tool"
 	"github.com/raiki02/video-extractor/internal/appconfig"
 	"github.com/raiki02/video-extractor/internal/asr"
 	"github.com/raiki02/video-extractor/internal/paragraph"
+	"github.com/raiki02/video-extractor/internal/tool"
 )
 
 type TranscriptAgent struct {
 	cfg     appconfig.Config
-	asrTool tool.InvokableTool
+	asrTool *tool.Wrapper
 }
 
-func NewTranscriptAgent(cfg appconfig.Config) (*TranscriptAgent, error) {
+func NewTranscriptAgent(cfg appconfig.Config, registry *tool.Registry) (*TranscriptAgent, error) {
 	timeout, err := cfg.ASR.TimeoutDuration()
 	if err != nil {
 		return nil, fmt.Errorf("invalid asr.timeout: %w", err)
@@ -33,55 +33,48 @@ func NewTranscriptAgent(cfg appconfig.Config) (*TranscriptAgent, error) {
 		return nil, err
 	}
 
-	asrTool, err := asr.NewTranscribeTool(client)
+	inner, asrWrapper, err := tool.NewASRTool(client)
 	if err != nil {
-		return nil, fmt.Errorf("create asr tool failed: %w", err)
+		return nil, fmt.Errorf("create asr tool: %w", err)
 	}
 
+	registry.Register("transcribe_audio", inner, nil)
 	return &TranscriptAgent{
 		cfg:     cfg,
-		asrTool: asrTool,
+		asrTool: asrWrapper,
 	}, nil
 }
 
 func (a *TranscriptAgent) Run(ctx context.Context, audioPath string) (string, error) {
 	start := time.Now()
-	stage := time.Now()
-	rawText, err := a.transcribe(ctx, audioPath)
-	if err != nil {
-		return "", err
-	}
-	slog.Info("transcript.stage", "stage", "asr", "elapsed", time.Since(stage))
 
-	stage = time.Now()
-	formattedText, err := paragraph.FormatTextWithFallback(ctx, rawText, a.cfg.LLM)
+	// Run ASR via tool wrapper (with retry and circuit breaker)
+	args, err := tool.ToJSON(asr.TranscribeInput{
+		AudioPath: audioPath,
+		Language:  a.cfg.ASR.Language,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode asr input: %w", err)
+	}
+
+	outputJSON, err := a.asrTool.Run(ctx, args)
+	if err != nil {
+		return "", fmt.Errorf("transcribe audio: %w", err)
+	}
+
+	var output asr.TranscribeResponse
+	if err := json.Unmarshal([]byte(outputJSON), &output); err != nil {
+		return "", fmt.Errorf("decode asr output: %w", err)
+	}
+	slog.Info("transcript.stage", "stage", "asr", "elapsed", time.Since(start))
+
+	// Format with LLM
+	stage := time.Now()
+	formattedText, err := paragraph.FormatTextWithFallback(ctx, output.Text, a.cfg.LLM)
 	if err != nil {
 		return "", fmt.Errorf("format transcript paragraphs failed: %w", err)
 	}
 	slog.Info("transcript.stage", "stage", "paragraph_format", "elapsed", time.Since(stage))
 	slog.Info("transcript.done", "elapsed", time.Since(start))
 	return formattedText, nil
-}
-
-func (a *TranscriptAgent) transcribe(ctx context.Context, audioPath string) (string, error) {
-	stage := time.Now()
-	args, err := json.Marshal(asr.TranscribeInput{
-		AudioPath: audioPath,
-		Language:  a.cfg.ASR.Language,
-	})
-	if err != nil {
-		return "", fmt.Errorf("encode asr tool input failed: %w", err)
-	}
-
-	outputJSON, err := a.asrTool.InvokableRun(ctx, string(args))
-	if err != nil {
-		return "", fmt.Errorf("transcribe audio failed: %w", err)
-	}
-	slog.Info("asr.primary_ok", "elapsed", time.Since(stage))
-
-	var output asr.TranscribeResponse
-	if err := json.Unmarshal([]byte(outputJSON), &output); err != nil {
-		return "", fmt.Errorf("decode asr tool output failed: %w", err)
-	}
-	return output.Text, nil
 }

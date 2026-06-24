@@ -3,7 +3,6 @@ server:
 
 download:
   # Optional path to yt-dlp cookies.txt file.
-  # Example: "/Users/you/cookies.txt"
   cookies_path: ""
 
 asr:
@@ -11,16 +10,10 @@ asr:
   timeout: "10m"
   language: "zh"
   model:
-    # Backend options:
-    #   whisper       - OpenAI Whisper via transformers (supports local or HF model)
-    #   faster-whisper - CTranslate2-optimized faster-whisper
     provider: "whisper"
-    # whisper: "./models/whisper-small" or "openai/whisper-large-v3"
-    # faster-whisper: "small" or "medium" or path to CTranslate2 model dir
     name: "./models/whisper-small"
     device: "auto"
     torch_dtype: "auto"
-    # --- faster-whisper only ---
     compute_type: "default"
     cpu_threads: 0
     workers: 1
@@ -49,11 +42,7 @@ video_summary:
   base_url: "http://localhost:8002"
   timeout: "20m"
   model:
-    # Use "./models/marlin" for the local NemoStation/Marlin-2B files in this repo,
-    # or "NemoStation/Marlin-2B" to load from Hugging Face.
     name: "./models/marlin"
-    # provider: "huggingface" (PyTorch, default) or "mlx" (Apple Silicon via mlx-vlm).
-    # Example MLX model: junwatu/Marlin-2B-MLX-8bit
     provider: "huggingface"
     device: "auto"
     dtype: "bfloat16"
@@ -66,12 +55,8 @@ video_summary:
     top_p: 1.0
 
 llm:
-  # Set to false to skip the paragraph-formatting LLM call and return raw ASR text.
   enabled: true
-  # When enabled, if the LLM is misconfigured/unreachable, the service will fall back
-  # to returning raw ASR text instead of failing the whole extraction.
   fallback_to_raw_on_error: true
-  # provider supports: openai, ollama, deepseek
   provider: "openai"
   model: ""
   base_url: ""
@@ -80,26 +65,11 @@ llm:
   timeout: "2m"
   temperature: 0.2
   max_tokens: 512
-
-  # deepseek only. Leave empty to use the provider default path.
   path: ""
-
-  # ollama only. Example: "5m". Leave empty to use Ollama's default.
   keep_alive: ""
-
-  # Split long transcripts into chunks before paragraph formatting.
   chunk_runes: 2000
-
-  # Enable two-pass pipeline:
-  #   Step 1: per-chunk typo fix + traditional→simplified (strict, no merging)
-  #   Step 2: semantic paragraph organization of the full step-1 output
   two_step: false
-
-  # Step 1 chunk size in runes. Smaller chunks give the model less room to
-  # "rewrite" but mean more API calls.
   step1_chunk_runes: 800
-
-  # Step 1 prompt: strict — only fix typos and convert traditional to simplified.
   step1_prompt:
     system: |
       你是中文文本纠错助手。
@@ -113,7 +83,6 @@ llm:
       输出：
         - 仅返回纠正后的文本
     user_template: "{{text}}"
-
   prompt:
     system: |
       你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。
@@ -128,3 +97,33 @@ llm:
       请为下面的转写文本划分自然段，只返回处理后的正文：
 
       {{text}}
+
+mysql:
+  dsn: "video_extractor:password@tcp(localhost:3306)/video_extractor?parseTime=true"
+  max_open: 10
+  max_idle: 5
+
+qdrant:
+  host: "localhost"
+  port: 6334
+  api_key: ""
+  use_tls: false
+  collection: "transcript_chunks"
+  vector_dim: 1024
+
+embedding:
+  base_url: "http://localhost:8003"
+  model: "qwen"
+  device: "auto"
+  timeout: "2m"
+
+rerank:
+  base_url: "http://localhost:8003"
+  model: "qwen"
+  top_k: 3
+  timeout: "1m"
+
+mcp:
+  enabled: true
+  addr: ":8082"
+  mode: "sse"

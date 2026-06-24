@@ -16,6 +16,11 @@ type Config struct {
 	ASR          ASRConfig          `yaml:"asr"`
 	VideoSummary VideoSummaryConfig `yaml:"video_summary"`
 	LLM          LLMConfig          `yaml:"llm"`
+	MySQL        MySQLConfig        `yaml:"mysql"`
+	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	Embedding    EmbeddingConfig    `yaml:"embedding"`
+	Rerank       RerankConfig       `yaml:"rerank"`
+	MCP          MCPConfig          `yaml:"mcp"`
 }
 
 type ServerConfig struct {
@@ -102,6 +107,41 @@ type LLMConfig struct {
 type PromptConfig struct {
 	System       string `yaml:"system"`
 	UserTemplate string `yaml:"user_template"`
+}
+
+type MySQLConfig struct {
+	DSN     string `yaml:"dsn"`
+	MaxOpen int    `yaml:"max_open"`
+	MaxIdle int    `yaml:"max_idle"`
+}
+
+type QdrantConfig struct {
+	Host       string `yaml:"host"`
+	Port       int    `yaml:"port"`
+	APIKey     string `yaml:"api_key"`
+	UseTLS     bool   `yaml:"use_tls"`
+	Collection string `yaml:"collection"`
+	VectorDim  int    `yaml:"vector_dim"`
+}
+
+type EmbeddingConfig struct {
+	BaseURL string `yaml:"base_url"`
+	Model   string `yaml:"model"`
+	Device  string `yaml:"device"`
+	Timeout string `yaml:"timeout"`
+}
+
+type RerankConfig struct {
+	BaseURL string `yaml:"base_url"`
+	Model   string `yaml:"model"`
+	TopK    int    `yaml:"top_k"`
+	Timeout string `yaml:"timeout"`
+}
+
+type MCPConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Mode    string `yaml:"mode"`
 }
 
 func Load(path string) (Config, error) {
@@ -225,6 +265,59 @@ func (c *Config) applyDefaults() {
 	if c.LLM.Step1Prompt.UserTemplate == "" {
 		c.LLM.Step1Prompt.UserTemplate = defaultStep1UserTemplate
 	}
+	// MySQL defaults
+	if c.MySQL.MaxOpen == 0 {
+		c.MySQL.MaxOpen = 10
+	}
+	if c.MySQL.MaxIdle == 0 {
+		c.MySQL.MaxIdle = 5
+	}
+	// Qdrant defaults
+	if c.Qdrant.Host == "" {
+		c.Qdrant.Host = "localhost"
+	}
+	if c.Qdrant.Port == 0 {
+		c.Qdrant.Port = 6334
+	}
+	if c.Qdrant.Collection == "" {
+		c.Qdrant.Collection = "transcript_chunks"
+	}
+	if c.Qdrant.VectorDim == 0 {
+		c.Qdrant.VectorDim = 1024
+	}
+	// Embedding defaults
+	if c.Embedding.BaseURL == "" {
+		c.Embedding.BaseURL = "http://localhost:8003"
+	}
+	if c.Embedding.Model == "" {
+		c.Embedding.Model = "qwen"
+	}
+	if c.Embedding.Device == "" {
+		c.Embedding.Device = "auto"
+	}
+	if c.Embedding.Timeout == "" {
+		c.Embedding.Timeout = "2m"
+	}
+	// Rerank defaults
+	if c.Rerank.BaseURL == "" {
+		c.Rerank.BaseURL = "http://localhost:8003"
+	}
+	if c.Rerank.Model == "" {
+		c.Rerank.Model = "qwen"
+	}
+	if c.Rerank.TopK == 0 {
+		c.Rerank.TopK = 3
+	}
+	if c.Rerank.Timeout == "" {
+		c.Rerank.Timeout = "1m"
+	}
+	// MCP defaults
+	if c.MCP.Addr == "" {
+		c.MCP.Addr = ":8082"
+	}
+	if c.MCP.Mode == "" {
+		c.MCP.Mode = "sse"
+	}
 }
 
 func (c Config) validate() error {
@@ -290,6 +383,18 @@ func (c LLMConfig) ResolvedAPIKey() string {
 		return ""
 	}
 	return strings.TrimSpace(os.Getenv(c.APIKeyEnv))
+}
+
+func (c EmbeddingConfig) TimeoutDuration() (time.Duration, error) {
+	return time.ParseDuration(c.Timeout)
+}
+
+func (c RerankConfig) TimeoutDuration() (time.Duration, error) {
+	return time.ParseDuration(c.Timeout)
+}
+
+func (c QdrantConfig) Addr() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
 const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。

@@ -127,7 +127,7 @@ func (s *Service) createAudio(videoPath, workDir, name string) (string, error) {
 
 func (s *Service) createTranscript(ctx context.Context, audioPath, workDir, name string) (string, error) {
 	stage := time.Now()
-	transcriptAgent, err := agent.NewTranscriptAgent(s.cfg)
+	transcriptAgent, err := agent.NewTranscriptAgent(s.cfg, nil)
 	if err != nil {
 		return "", err
 	}
