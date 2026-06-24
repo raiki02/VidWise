@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -11,18 +15,24 @@ import (
 	"github.com/raiki02/video-extractor/internal/appconfig"
 	"github.com/raiki02/video-extractor/internal/extractor"
 	"github.com/raiki02/video-extractor/internal/paragraph"
+	"github.com/raiki02/video-extractor/internal/rag"
+	"github.com/raiki02/video-extractor/internal/tool"
 )
 
 // ExtractHandler retains backward compatibility with the legacy /extract and /format endpoints.
 type ExtractHandler struct {
 	cfg       appconfig.Config
 	extractor *extractor.Service
+	indexer   *rag.Indexer
+	registry  *tool.Registry
 }
 
-func NewExtractHandler(cfg appconfig.Config) *ExtractHandler {
+func NewExtractHandler(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer) *ExtractHandler {
 	return &ExtractHandler{
 		cfg:       cfg,
 		extractor: extractor.NewService(cfg),
+		indexer:   indexer,
+		registry:  registry,
 	}
 }
 
@@ -41,6 +51,21 @@ func (h *ExtractHandler) Extract(c *gin.Context) {
 	if err != nil {
 		c.JSON(statusForExtractError(err), gin.H{"error": err.Error()})
 		return
+	}
+
+	// For text/transcript extractions, also index into RAG knowledge base.
+	if (req.Type == "text" || req.Type == "transcript") && h.indexer != nil {
+		raw, readErr := readTextFile(result.Path)
+		if readErr == nil && raw != "" {
+			go func() {
+				count, idxErr := h.indexer.IndexText(context.Background(), raw)
+				if idxErr != nil {
+					slog.Warn("extract.rag_index_failed", "name", req.Name, "err", idxErr)
+				} else {
+					slog.Info("extract.rag_index_done", "name", req.Name, "chunks", count)
+				}
+			}()
+		}
 	}
 
 	c.FileAttachment(result.Path, result.Filename)
@@ -88,6 +113,17 @@ type extractRequest struct {
 	URL  string `form:"url" json:"url" binding:"required"`
 	Name string `form:"name" json:"name" binding:"required"`
 	Type string `form:"type" json:"type" binding:"required"`
+}
+
+func readTextFile(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func bindExtractRequest(c *gin.Context) (extractRequest, error) {

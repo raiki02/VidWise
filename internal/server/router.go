@@ -3,14 +3,18 @@ package server
 import (
 	"embed"
 	"io/fs"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/video-extractor/internal/appconfig"
+	"github.com/raiki02/video-extractor/internal/chat"
+	"github.com/raiki02/video-extractor/internal/model"
+	"github.com/raiki02/video-extractor/internal/rag"
 	"github.com/raiki02/video-extractor/internal/server/handler"
+	qdrantclient "github.com/raiki02/video-extractor/internal/storage/qdrant"
 	"github.com/raiki02/video-extractor/internal/tool"
 
-	// embed the web frontend
 	_ "embed"
 )
 
@@ -18,10 +22,10 @@ import (
 var webFS embed.FS
 
 // Router assembles all HTTP routes for the gateway.
-func Router(cfg appconfig.Config, registry *tool.Registry) *gin.Engine {
+// Pass nil for optional dependencies if not available.
+func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.Client, embedClient *model.EmbedClient, rerankClient *model.RerankClient, chatRepo *chat.Repo) *gin.Engine {
 	e := gin.Default()
 
-	// Middleware
 	e.Use(TraceID())
 	e.Use(RequestLogger())
 
@@ -38,22 +42,48 @@ func Router(cfg appconfig.Config, registry *tool.Registry) *gin.Engine {
 	})
 
 	// Handlers
-	extractHandler := handler.NewExtractHandler(cfg)
+	extractHandler := handler.NewExtractHandler(cfg, registry, nil)
 	videoHandler := handler.NewVideoHandler(registry)
-	chatHandler := handler.NewChatHandler(registry)
 	taskHandler := handler.NewTaskHandler()
-	sessionHandler := handler.NewSessionHandler()
+
+	// Build RAG indexer and retriever if Qdrant and embedding are available
+	var indexer *rag.Indexer
+	var retriever *rag.Retriever
+	if qdConn != nil && embedClient != nil {
+		indexer = rag.NewIndexer(embedClient, qdConn, cfg.Qdrant.Collection)
+		extractHandler = handler.NewExtractHandler(cfg, registry, indexer)
+		retriever = rag.NewRetriever(embedClient, rerankClient, qdConn, cfg.Qdrant.Collection)
+		slog.Info("gateway.rag_ready")
+	} else {
+		slog.Warn("gateway.rag_unavailable", "qdrant", qdConn != nil, "embedding", embedClient != nil)
+	}
+
+	chatHandler := handler.NewChatHandler(chatRepo, retriever, cfg.LLM)
 
 	// Legacy endpoints (backward compatible)
 	e.GET("/extract", extractHandler.Extract)
 	e.POST("/extract", extractHandler.Extract)
 	e.POST("/format", extractHandler.FormatText)
 
-	// New endpoints
+	// Video process
 	e.POST("/video/process", videoHandler.VideoProcess)
+
+	// Chat / sessions (session-based, no user_id)
+	e.POST("/chat/new", chatHandler.NewSession)
+	e.GET("/chat/sessions", chatHandler.ListSessions)
+	e.GET("/chat/session/:id", chatHandler.GetSession)
 	e.POST("/chat/query", chatHandler.ChatQuery)
+
+	// Task status
 	e.GET("/task/:id", taskHandler.GetTask)
-	e.GET("/session/:id", sessionHandler.GetSession)
+
+	// Health
+	e.GET("/rag/health", chatHandler.RAGHealth)
+
+	// Serve the chat UI at root
+	e.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/static/index.html")
+	})
 
 	return e
 }

@@ -6,13 +6,7 @@ import (
 )
 
 // New creates a Gin engine with all routes registered.
+// This keeps backward compatibility — optional services are nil.
 func New(cfg appconfig.Config) *gin.Engine {
-	return Router(cfg, nil)
-}
-
-// NewWithRegistry creates a Gin engine with a tool registry for new endpoints.
-func NewWithRegistry(cfg appconfig.Config, registry interface{}) *gin.Engine {
-	// For backward compatibility, accept nil registry
-	_ = registry
-	return Router(cfg, nil)
+	return Router(cfg, nil, nil, nil, nil, nil)
 }

@@ -10,9 +10,7 @@ import (
 
 // RAGQueryInput is the input for the RAG retrieval tool.
 type RAGQueryInput struct {
-	Query     string `json:"query" jsonschema:"required" jsonschema_description:"The user's question for retrieving relevant context."`
-	UserID    string `json:"user_id" jsonschema:"required" jsonschema_description:"Filter results to this user."`
-	SessionID string `json:"session_id" jsonschema:"required" jsonschema_description:"Filter results to this session."`
+	Query string `json:"query" jsonschema:"required" jsonschema_description:"The user's question for retrieving relevant context."`
 }
 
 type RAGQueryOutput struct {
@@ -24,7 +22,7 @@ func NewRAGQueryTool(retriever *rag.Retriever) (tool.InvokableTool, *Wrapper, er
 		"rag_query",
 		"Search the RAG knowledge base. Embeds the query, retrieves relevant chunks from Qdrant, and reranks them.",
 		func(ctx context.Context, input RAGQueryInput) (RAGQueryOutput, error) {
-			chunks, err := retriever.Retrieve(ctx, input.Query, input.UserID, input.SessionID)
+			chunks, err := retriever.Retrieve(ctx, input.Query)
 			if err != nil {
 				return RAGQueryOutput{}, err
 			}

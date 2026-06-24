@@ -5,8 +5,15 @@ Supports Qwen and BGE model backends.
 """
 
 import os
+import sys
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+# Ensure the embedding_service directory is on the path for local imports.
+_svc_dir = os.path.dirname(os.path.abspath(__file__))
+if _svc_dir not in sys.path:
+    sys.path.insert(0, _svc_dir)
+
 from backends import create_backend
 import logging
 
@@ -16,6 +23,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Embedding Service", version="1.0.0")
 
 # Configuration
+# EMBEDDING_MODEL: shortcut name (qwen, bge, bge-large) or path to local model dir.
+# Models must be downloaded first with huggingface-cli:
+#   huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
+#   huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 MODEL_PROVIDER = os.getenv("EMBEDDING_MODEL", "qwen")
 MODEL_DEVICE = os.getenv("EMBEDDING_DEVICE", "auto")
 CONFIG_PATH = os.getenv("CONFIG_PATH", "config.yaml")

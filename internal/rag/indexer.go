@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
 	"github.com/raiki02/video-extractor/internal/model"
 	qdrantclient "github.com/raiki02/video-extractor/internal/storage/qdrant"
@@ -24,14 +25,72 @@ func NewIndexer(embedClient *model.EmbedClient, qdrantClient *qdrantclient.Clien
 		embedClient:  embedClient,
 		qdrantClient: qdrantClient,
 		collection:   collection,
-		chunkRunes:   512,
-		overlapRunes: 64,
+		chunkRunes:   1024,
+		overlapRunes: 128,
 	}
 }
 
+// EnsureCollection checks if the collection exists and creates it with the
+// correct vector dimension if not. The dimension is detected from a sample embedding.
+func (idx *Indexer) EnsureCollection(ctx context.Context) error {
+	listResp, err := idx.qdrantClient.Collections.List(ctx, &pb.ListCollectionsRequest{})
+	if err != nil {
+		return fmt.Errorf("qdrant list collections: %w", err)
+	}
+	for _, col := range listResp.Collections {
+		if col.Name == idx.collection {
+			slog.Info("rag.indexer.collection_exists", "name", idx.collection)
+			return nil
+		}
+	}
+
+	// Collection doesn't exist — detect dimension from a sample embedding
+	slog.Info("rag.indexer.creating_collection", "name", idx.collection, "reason", "not found")
+	dim, err := idx.detectDimension(ctx)
+	if err != nil {
+		return fmt.Errorf("detect embedding dimension: %w", err)
+	}
+	slog.Info("rag.indexer.detected_dim", "dim", dim)
+
+	_, err = idx.qdrantClient.Collections.Create(ctx, &pb.CreateCollection{
+		CollectionName: idx.collection,
+		VectorsConfig: &pb.VectorsConfig{
+			Config: &pb.VectorsConfig_Params{
+				Params: &pb.VectorParams{
+					Size:     dim,
+					Distance: pb.Distance_Cosine,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create collection %s: %w", idx.collection, err)
+	}
+
+	slog.Info("rag.indexer.collection_created", "name", idx.collection, "dim", dim)
+	return nil
+}
+
+// detectDimension gets vector dimension from a sample embedding.
+func (idx *Indexer) detectDimension(ctx context.Context) (uint64, error) {
+	embeddings, err := idx.embedClient.Embed(ctx, []string{"dimension check"})
+	if err != nil {
+		return 0, fmt.Errorf("sample embed: %w", err)
+	}
+	if len(embeddings) == 0 || len(embeddings[0]) == 0 {
+		return 0, fmt.Errorf("empty embedding returned")
+	}
+	return uint64(len(embeddings[0])), nil
+}
+
 // IndexText splits text into chunks, embeds each, and upserts to Qdrant.
-// Returns the number of chunks indexed.
-func (idx *Indexer) IndexText(ctx context.Context, text, taskID, userID, sessionID string) (int, error) {
+// Automatically ensures the collection exists first.
+func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
+	// Ensure collection exists with correct vector dimension
+	if err := idx.EnsureCollection(ctx); err != nil {
+		return 0, fmt.Errorf("ensure collection: %w", err)
+	}
+
 	chunks := ChunkText(text, idx.chunkRunes, idx.overlapRunes)
 	if len(chunks) == 0 {
 		return 0, nil
@@ -39,7 +98,6 @@ func (idx *Indexer) IndexText(ctx context.Context, text, taskID, userID, session
 
 	slog.Info("rag.indexer.chunked", "chunks", len(chunks))
 
-	// Prepare texts for batch embedding
 	texts := make([]string, len(chunks))
 	for i, c := range chunks {
 		texts[i] = c.Text
@@ -54,27 +112,22 @@ func (idx *Indexer) IndexText(ctx context.Context, text, taskID, userID, session
 		return 0, fmt.Errorf("embedding count mismatch: got %d, want %d", len(embeddings), len(texts))
 	}
 
-	// Build Qdrant points
 	points := make([]*pb.PointStruct, len(chunks))
 	for i, chunk := range chunks {
 		points[i] = &pb.PointStruct{
 			Id: &pb.PointId{
-				PointIdOptions: &pb.PointId_Uuid{Uuid: fmt.Sprintf("%s_%d", taskID, i)},
+				PointIdOptions: &pb.PointId_Uuid{Uuid: uuid.New().String()},
 			},
 			Vectors: &pb.Vectors{
 				VectorsOptions: &pb.Vectors_Vector{Vector: &pb.Vector{Data: toFloat32Slice(embeddings[i])}},
 			},
 			Payload: map[string]*pb.Value{
-				qdrantclient.FieldTaskID:    {Kind: &pb.Value_StringValue{StringValue: taskID}},
-				qdrantclient.FieldUserID:    {Kind: &pb.Value_StringValue{StringValue: userID}},
-				qdrantclient.FieldSessionID: {Kind: &pb.Value_StringValue{StringValue: sessionID}},
-				qdrantclient.FieldChunkIdx:  {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
-				qdrantclient.FieldText:      {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+				qdrantclient.FieldChunkIdx: {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
+				qdrantclient.FieldText:     {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
 			},
 		}
 	}
 
-	// Batch upsert
 	_, err = idx.qdrantClient.Points.Upsert(ctx, &pb.UpsertPoints{
 		CollectionName: idx.collection,
 		Points:         points,

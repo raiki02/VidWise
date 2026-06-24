@@ -1,10 +1,16 @@
 import logging
 import os
+import sys
 import tempfile
 import time
 import traceback
 from pathlib import Path
 from typing import Any
+
+# Ensure the asr_service directory is on the path for local imports.
+_svc_dir = os.path.dirname(os.path.abspath(__file__))
+if _svc_dir not in sys.path:
+    sys.path.insert(0, _svc_dir)
 
 import anyio
 import inspect
@@ -16,7 +22,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, W
 from fastapi.responses import JSONResponse
 import yaml
 
-from asr_service.backends import ASRBackend, TranscriptionResult, create_asr_backend
+from backends import ASRBackend, TranscriptionResult, create_asr_backend
 
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "config.yaml"))
@@ -155,7 +161,7 @@ def load_model() -> None:
                 trust_repo=True,
             )
             vad_iterator_cls = vad_utils[3]
-            vad_get_speech_ts = vad_utils[2]
+            vad_get_speech_ts = vad_utils[0]
             logger.info("Silero VAD model loaded")
 
         logger.info(

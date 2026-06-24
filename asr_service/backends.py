@@ -94,11 +94,65 @@ class WhisperBackend:
         import torch
 
         audio_array = self._load_audio(audio, sample_rate)
+        total_duration = float(audio_array.size) / float(sample_rate)
 
         if vad_filter and self._vad_model is not None and self._vad_get_speech_ts is not None:
             audio_array = self._apply_vad(audio_array, sample_rate)
 
-        duration = float(audio_array.size) / float(sample_rate)
+        # Whisper-small positional encoding covers ~30 seconds.
+        # For longer audio, chunk into overlapping windows to avoid silent truncation.
+        max_chunk_samples = 25 * sample_rate  # 25s per chunk
+        overlap_samples = 2 * sample_rate     # 2s overlap
+
+        if audio_array.size <= max_chunk_samples:
+            return self._transcribe_chunk(
+                audio_array, sample_rate, language, beam_size, initial_prompt, total_duration,
+            )
+
+        import logging
+        _log = logging.getLogger("video_extractor.asr")
+        _log.info(
+            "whisper.long_audio_chunking samples=%d duration=%.1fs chunk_size=%ds",
+            audio_array.size, total_duration, 25,
+        )
+
+        all_segments: list[TranscriptionSegment] = []
+        offset = 0
+        while offset < audio_array.size:
+            chunk_end = min(offset + max_chunk_samples, audio_array.size)
+            chunk = audio_array[offset:chunk_end]
+            chunk_duration = float(chunk.size) / float(sample_rate)
+            _log.info("whisper.chunk %d-%d/%d (%.1fs-%.1fs)", offset, chunk_end, audio_array.size, offset / sample_rate, chunk_end / sample_rate)
+            result = self._transcribe_chunk(
+                chunk, sample_rate, language, beam_size, initial_prompt, chunk_duration,
+            )
+            for seg in result.segments:
+                seg.start += offset / sample_rate
+                seg.end += offset / sample_rate
+            all_segments.extend(result.segments)
+            if chunk_end >= audio_array.size:
+                break
+            offset = chunk_end - overlap_samples
+
+        text = "".join(seg.text for seg in all_segments)
+        return TranscriptionResult(
+            text=text,
+            language=language or "auto",
+            language_probability=1.0,
+            duration=total_duration,
+            segments=all_segments,
+        )
+
+    def _transcribe_chunk(
+        self,
+        audio_array: np.ndarray,
+        sample_rate: int,
+        language: str,
+        beam_size: int,
+        initial_prompt: str,
+        duration: float,
+    ) -> TranscriptionResult:
+        import torch
 
         inputs = self.processor(audio_array, sampling_rate=sample_rate, return_tensors="pt")
         input_features = inputs.input_features
@@ -109,7 +163,15 @@ class WhisperBackend:
         else:
             input_features = input_features.to(device=device)
 
-        gen_kwargs: dict[str, Any] = {"return_timestamps": True}
+        gen_kwargs: dict[str, Any] = {
+            "return_timestamps": True,
+            # Suppress repeated n-grams to break hallucination loops.
+            "no_repeat_ngram_size": 4,
+            # Prevent the model from running away (Whisper generates ~1 token per
+            # 20ms of audio, so max 448 tokens covers the full 25s chunk with
+            # generous headroom).
+            "max_new_tokens": 448,
+        }
         if beam_size > 1:
             gen_kwargs["num_beams"] = beam_size
 

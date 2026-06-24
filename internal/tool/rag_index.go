@@ -10,10 +10,7 @@ import (
 
 // RAGIndexInput is the input for the RAG indexing tool.
 type RAGIndexInput struct {
-	Text      string `json:"text" jsonschema:"required" jsonschema_description:"The text to chunk, embed, and index into the vector database."`
-	TaskID    string `json:"task_id" jsonschema:"required" jsonschema_description:"The task ID for metadata tracking."`
-	UserID    string `json:"user_id" jsonschema:"required" jsonschema_description:"The user ID for metadata filtering."`
-	SessionID string `json:"session_id" jsonschema:"required" jsonschema_description:"The session ID for metadata filtering."`
+	Text string `json:"text" jsonschema:"required" jsonschema_description:"The text to chunk, embed, and index into the vector database."`
 }
 
 type RAGIndexOutput struct {
@@ -25,7 +22,7 @@ func NewRAGIndexTool(indexer *rag.Indexer) (tool.InvokableTool, *Wrapper, error)
 		"rag_index",
 		"Index text into the RAG knowledge base. Splits text into chunks, generates embeddings, and stores them in the Qdrant vector database.",
 		func(ctx context.Context, input RAGIndexInput) (RAGIndexOutput, error) {
-			count, err := indexer.IndexText(ctx, input.Text, input.TaskID, input.UserID, input.SessionID)
+			count, err := indexer.IndexText(ctx, input.Text)
 			if err != nil {
 				return RAGIndexOutput{}, err
 			}

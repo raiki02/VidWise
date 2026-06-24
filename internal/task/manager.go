@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-
-	"github.com/google/uuid"
 )
 
 // Manager orchestrates task lifecycle: create, query, cancel.
@@ -22,7 +20,6 @@ func (m *Manager) CreateTask(ctx context.Context, userID, sessionID, taskType st
 	inputJSON, _ := json.Marshal(input)
 
 	t := &Task{
-		ID:        uuid.New().String(),
 		UserID:    userID,
 		SessionID: sessionID,
 		Type:      taskType,
@@ -43,7 +40,7 @@ func (m *Manager) GetTask(ctx context.Context, id string) (*Task, error) {
 }
 
 // GetTaskWithSteps returns a task and its steps.
-func (m *Manager) GetTaskWithSteps(ctx context.Context, id string) (*Task, []*Step, error) {
+func (m *Manager) GetTaskWithSteps(ctx context.Context, id string) (*Task, []Step, error) {
 	t, err := m.repo.GetTask(ctx, id)
 	if err != nil {
 		return nil, nil, err

@@ -245,7 +245,7 @@ func (c *Config) applyDefaults() {
 		c.LLM.Temperature = 0.2
 	}
 	if c.LLM.MaxTokens == 0 {
-		c.LLM.MaxTokens = 512
+		c.LLM.MaxTokens = 4096
 	}
 	if c.LLM.ChunkRunes == 0 {
 		c.LLM.ChunkRunes = 2000

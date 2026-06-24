@@ -32,7 +32,7 @@ func (r *Runner) RegisterStep(name string, fn StepFunc) {
 
 // Run executes all steps in DAG order for a task.
 func (r *Runner) Run(taskID string) error {
-	_, steps, err := r.manager.GetTaskWithSteps(nil, taskID)
+	_, stepsRaw, err := r.manager.GetTaskWithSteps(nil, taskID)
 	if err != nil {
 		return fmt.Errorf("get task: %w", err)
 	}
@@ -42,6 +42,12 @@ func (r *Runner) Run(taskID string) error {
 	}
 
 	slog.Info("task.runner.start", "task_id", taskID)
+
+	// Collect step pointers
+	steps := make([]*Step, len(stepsRaw))
+	for i := range stepsRaw {
+		steps[i] = &stepsRaw[i]
+	}
 
 	prevOutputs := make(map[string]json.RawMessage)
 	done := make(map[string]bool)

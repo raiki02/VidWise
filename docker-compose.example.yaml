@@ -1,8 +1,50 @@
-# Example Docker Compose for video-extractor services.
-# Copy this to docker-compose.yaml and adjust as needed.
+# Example Docker Compose for infrastructure services (MySQL + Qdrant).
+# Copy to docker-compose.yaml and adjust as needed.
 #
 # Usage:
-#   docker compose up -d
+#   docker compose -f docker-compose.example.yaml up -d
 #
-# Note: The Python ASR service is not containerized here. Run it directly with:
-#   make run-asr
+# This starts only the infrastructure services needed for local development.
+# The Go gateway and Python services (ASR, embedding, video-summary) run
+# directly on the host via `make run-*` targets.
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: video-extractor-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: video_extractor
+      MYSQL_USER: video_extractor
+      MYSQL_PASSWORD: password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: video-extractor-qdrant
+    ports:
+      # 6333 - REST API
+      # 6334 - gRPC API
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  qdrant_data:

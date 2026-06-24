@@ -32,49 +32,26 @@ func NewRetriever(embedClient *model.EmbedClient, rerankClient *model.RerankClie
 		rerankClient: rerankClient,
 		qdrantClient: qdrantClient,
 		collection:   collection,
-		searchTopK:   10,
-		rerankTopK:   3,
+		searchTopK:   20,
+		rerankTopK:   8,
 	}
 }
 
-// Retrieve embeds a query, searches Qdrant, and reranks results.
-func (r *Retriever) Retrieve(ctx context.Context, query, userID, sessionID string) ([]RelevantChunk, error) {
+// Retrieve embeds a query, searches Qdrant (no user/session filter — all
+// indexed content is visible), and reranks results.
+func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk, error) {
 	// 1. Embed query
 	queryVec, err := r.embedClient.EmbedSingle(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	// 2. Search Qdrant
+	// 2. Search Qdrant — no filter, search entire knowledge base
 	points, err := r.qdrantClient.Points.Search(ctx, &pb.SearchPoints{
 		CollectionName: r.collection,
 		Vector:         toFloat32Slice(queryVec),
 		Limit:          uint64(r.searchTopK),
 		WithPayload:    &pb.WithPayloadSelector{SelectorOptions: &pb.WithPayloadSelector_Enable{Enable: true}},
-		Filter: &pb.Filter{
-			Must: []*pb.Condition{
-				{
-					ConditionOneOf: &pb.Condition_Field{
-						Field: &pb.FieldCondition{
-							Key: qdrantclient.FieldUserID,
-							Match: &pb.Match{
-								MatchValue: &pb.Match_Keyword{Keyword: userID},
-							},
-						},
-					},
-				},
-				{
-					ConditionOneOf: &pb.Condition_Field{
-						Field: &pb.FieldCondition{
-							Key: qdrantclient.FieldSessionID,
-							Match: &pb.Match{
-								MatchValue: &pb.Match_Keyword{Keyword: sessionID},
-							},
-						},
-					},
-				},
-			},
-		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search qdrant: %w", err)
@@ -110,7 +87,6 @@ func (r *Retriever) Retrieve(ctx context.Context, query, userID, sessionID strin
 		reranked, err := r.rerankClient.Rerank(ctx, query, docs)
 		if err != nil {
 			slog.Warn("rag.retriever.rerank_failed", "err", err)
-			// Fall back to vector search results
 		} else {
 			result := make([]RelevantChunk, 0, r.rerankTopK)
 			for i, rr := range reranked {
