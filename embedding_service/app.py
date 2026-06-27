@@ -2,10 +2,20 @@
 Embedding and Rerank Service
 FastAPI service providing /embed and /rerank endpoints.
 Supports Qwen and BGE model backends.
+
+Configuration is read from config.yaml (same file used by the Go gateway),
+with environment variables as overrides:
+
+  config.yaml                    env var override
+  embedding.model              EMBEDDING_MODEL
+  embedding.device             EMBEDDING_DEVICE
+  rerank.top_k                 RERANK_TOP_K
 """
 
 import os
 import sys
+
+import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -22,14 +32,50 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Embedding Service", version="1.0.0")
 
-# Configuration
-# EMBEDDING_MODEL: shortcut name (qwen, bge, bge-large) or path to local model dir.
-# Models must be downloaded first with huggingface-cli:
-#   huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
-#   huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
-MODEL_PROVIDER = os.getenv("EMBEDDING_MODEL", "qwen")
-MODEL_DEVICE = os.getenv("EMBEDDING_DEVICE", "auto")
+# --- Configuration -----------------------------------------------------------
+# Priority: env var > config.yaml > hardcoded default
+
 CONFIG_PATH = os.getenv("CONFIG_PATH", "config.yaml")
+
+
+def _load_config(config_path: str) -> dict:
+    """Load the embedding and rerank sections from config.yaml."""
+    if not os.path.isfile(config_path):
+        logger.warning("Config file %s not found, using defaults", config_path)
+        return {}
+    with open(config_path, "r") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    return cfg
+
+
+def _get_int_env_or_cfg(env_name: str, cfg: dict, cfg_section: str, cfg_key: str, default: int) -> int:
+    """Read an integer from env var, falling back to config.yaml, then the default.
+    Guards against empty-string env vars and null YAML values."""
+    raw_env = os.getenv(env_name, "")
+    if raw_env != "":
+        return int(raw_env)
+    raw_cfg = cfg.get(cfg_section, {}).get(cfg_key)
+    if raw_cfg is not None:
+        return int(raw_cfg)
+    return default
+
+
+_cfg = _load_config(CONFIG_PATH)
+
+MODEL_PROVIDER = os.getenv(
+    "EMBEDDING_MODEL",
+    _cfg.get("embedding", {}).get("model", "./models/qwen3-embedding"),
+)
+MODEL_DEVICE = os.getenv(
+    "EMBEDDING_DEVICE",
+    _cfg.get("embedding", {}).get("device", "auto"),
+)
+RERANK_TOP_K = _get_int_env_or_cfg("RERANK_TOP_K", _cfg, "rerank", "top_k", 3)
+
+logger.info(
+    "Embedding service config: model=%s device=%s rerank_top_k=%d config_path=%s",
+    MODEL_PROVIDER, MODEL_DEVICE, RERANK_TOP_K, CONFIG_PATH,
+)
 
 backend = None
 
@@ -40,6 +86,8 @@ def get_backend():
         backend = create_backend(MODEL_PROVIDER, MODEL_DEVICE)
     return backend
 
+
+# --- Request / Response types ------------------------------------------------
 
 class EmbedRequest(BaseModel):
     texts: list[str]
@@ -67,9 +115,11 @@ class RerankResponse(BaseModel):
     results: list[RerankResult]
 
 
+# --- Endpoints ---------------------------------------------------------------
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "provider": MODEL_PROVIDER}
+    return {"status": "ok", "provider": MODEL_PROVIDER, "device": MODEL_DEVICE}
 
 
 @app.post("/embed")
@@ -87,7 +137,7 @@ def embed(req: EmbedRequest):
 def rerank(req: RerankRequest):
     try:
         be = get_backend()
-        top_k = min(req.top_k, len(req.documents))
+        top_k = min(req.top_k or RERANK_TOP_K, len(req.documents))
         results = be.rerank(req.query, req.documents, top_k)
         return RerankResponse(
             results=[
