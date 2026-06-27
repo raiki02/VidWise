@@ -38,3 +38,4 @@ go.work.sum
 docker-compose.yaml
 models/*
 !models/README.md
+.claude

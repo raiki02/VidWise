@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/chat"
+	"github.com/raiki02/vidwise/internal/memory"
 	"github.com/raiki02/vidwise/internal/model"
 	"github.com/raiki02/vidwise/internal/rag"
 	"github.com/raiki02/vidwise/internal/server/handler"
@@ -23,7 +24,7 @@ var webFS embed.FS
 
 // Router assembles all HTTP routes for the gateway.
 // Pass nil for optional dependencies if not available.
-func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.Client, embedClient *model.EmbedClient, rerankClient *model.RerankClient, chatRepo *chat.Repo) *gin.Engine {
+func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.Client, embedClient *model.EmbedClient, rerankClient *model.RerankClient, chatRepo *chat.Repo, memRepo *memory.Repo) *gin.Engine {
 	e := gin.Default()
 
 	e.Use(TraceID())
@@ -58,7 +59,7 @@ func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.
 		slog.Warn("gateway.rag_unavailable", "qdrant", qdConn != nil, "embedding", embedClient != nil)
 	}
 
-	chatHandler := handler.NewChatHandler(chatRepo, retriever, cfg.LLM)
+	chatHandler := handler.NewChatHandler(chatRepo, memRepo, retriever, cfg.LLM)
 
 	// Legacy endpoints (backward compatible)
 	e.GET("/extract", extractHandler.Extract)
@@ -79,6 +80,10 @@ func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.
 
 	// Health
 	e.GET("/rag/health", chatHandler.RAGHealth)
+
+	// User memory / cross-session profile
+	e.GET("/user/facts", chatHandler.GetUserFacts)
+	e.GET("/user/profile", chatHandler.GetUserFacts) // alias
 
 	// File upload — index text into knowledge base
 	e.POST("/upload", extractHandler.UploadText)

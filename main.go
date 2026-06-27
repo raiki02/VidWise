@@ -13,6 +13,7 @@ import (
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/chat"
 	"github.com/raiki02/vidwise/internal/mcp"
+	"github.com/raiki02/vidwise/internal/memory"
 	"github.com/raiki02/vidwise/internal/model"
 	"github.com/raiki02/vidwise/internal/rag"
 	"github.com/raiki02/vidwise/internal/server"
@@ -79,6 +80,7 @@ func runGateway(cfg appconfig.Config) {
 
 	// Connect to MySQL and run migrations
 	var chatRepo *chat.Repo
+	var memRepo *memory.Repo
 	if cfg.MySQL.DSN != "" {
 		mysqlCtx, mysqlCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer mysqlCancel()
@@ -91,6 +93,13 @@ func runGateway(cfg appconfig.Config) {
 				slog.Warn("gateway.chat_migration_failed", "err", err)
 			} else {
 				slog.Info("gateway.mysql_ready")
+			}
+
+			memRepo = memory.NewRepo(mc.DB)
+			if err := memRepo.AutoMigrate(); err != nil {
+				slog.Warn("gateway.memory_migration_failed", "err", err)
+			} else {
+				slog.Info("gateway.memory_ready")
 			}
 			// Clean up mysql context
 			_ = mysqlCtx
@@ -118,12 +127,13 @@ func runGateway(cfg appconfig.Config) {
 	}
 
 	// Build and start Gin engine
-	e := server.Router(cfg, registry, qdConn, embedClient, rerankClient, chatRepo)
+	e := server.Router(cfg, registry, qdConn, embedClient, rerankClient, chatRepo, memRepo)
 	slog.Info("gateway.starting", "addr", cfg.Server.Addr,
 		"qdrant", qdConn != nil,
 		"embedding", embedClient != nil,
 		"rerank", rerankClient != nil,
 		"mysql", chatRepo != nil,
+		"memory", memRepo != nil,
 		"mcp_enabled", cfg.MCP.Enabled,
 	)
 

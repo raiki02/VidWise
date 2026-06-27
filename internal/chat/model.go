@@ -10,6 +10,7 @@ import (
 // Session represents a chat conversation session.
 type Session struct {
 	ID        string    `gorm:"type:varchar(36);primaryKey" json:"id"`
+	UserID    string    `gorm:"type:varchar(36);index:idx_cs_user" json:"user_id,omitempty"`
 	Title     string    `gorm:"type:varchar(512)" json:"title"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`

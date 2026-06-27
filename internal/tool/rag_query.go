@@ -22,7 +22,7 @@ func NewRAGQueryTool(retriever *rag.Retriever) (tool.InvokableTool, *Wrapper, er
 		"rag_query",
 		"Search the RAG knowledge base. Embeds the query, retrieves relevant chunks from Qdrant, and reranks them.",
 		func(ctx context.Context, input RAGQueryInput) (RAGQueryOutput, error) {
-			chunks, err := retriever.Retrieve(ctx, input.Query)
+			chunks, err := retriever.Retrieve(ctx, input.Query, nil)
 			if err != nil {
 				return RAGQueryOutput{}, err
 			}

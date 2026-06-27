@@ -10,10 +10,19 @@ import (
 	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 )
 
-// RelevantChunk is a retrieved chunk with relevance score.
+// RelevantChunk is a retrieved chunk with relevance score and metadata.
 type RelevantChunk struct {
 	Text  string  `json:"text"`
 	Score float64 `json:"score"`
+	// Source metadata for citation
+	SessionID string `json:"session_id,omitempty"`
+	ChunkIdx  int64  `json:"chunk_idx,omitempty"`
+}
+
+// RetrieveFilter scopes retrieval to a specific user or session.
+type RetrieveFilter struct {
+	UserID    string
+	SessionID string
 }
 
 // Retriever handles query embedding, Qdrant search, and reranking.
@@ -37,22 +46,31 @@ func NewRetriever(embedClient *model.EmbedClient, rerankClient *model.RerankClie
 	}
 }
 
-// Retrieve embeds a query, searches Qdrant (no user/session filter — all
-// indexed content is visible), and reranks results.
-func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk, error) {
+// Retrieve embeds a query, searches Qdrant (scoped by filter if provided),
+// and reranks results.
+func (r *Retriever) Retrieve(ctx context.Context, query string, filter *RetrieveFilter) ([]RelevantChunk, error) {
 	// 1. Embed query
 	queryVec, err := r.embedClient.EmbedSingle(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	// 2. Search Qdrant — no filter, search entire knowledge base
-	points, err := r.qdrantClient.Points.Search(ctx, &pb.SearchPoints{
+	// 2. Build search request with optional filter
+	searchReq := &pb.SearchPoints{
 		CollectionName: r.collection,
 		Vector:         toFloat32Slice(queryVec),
 		Limit:          uint64(r.searchTopK),
 		WithPayload:    &pb.WithPayloadSelector{SelectorOptions: &pb.WithPayloadSelector_Enable{Enable: true}},
-	})
+	}
+
+	// Apply user/session filter for multi-tenant isolation.
+	// When a user_id is provided, we scope to that user's indexed content.
+	// When only a session_id is provided, we scope to that session.
+	if filter != nil {
+		searchReq.Filter = buildScopeFilter(filter)
+	}
+
+	points, err := r.qdrantClient.Points.Search(ctx, searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("search qdrant: %w", err)
 	}
@@ -64,10 +82,12 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk
 
 	slog.Info("rag.retriever.search_done", "results", len(points.Result))
 
-	// 3. Extract texts and scores from Qdrant results
+	// 3. Extract texts, scores, and metadata from Qdrant results
 	type qdrantHit struct {
-		text  string
-		score float64
+		text      string
+		score     float64
+		sessionID string
+		chunkIdx  int64
 	}
 	hits := make([]qdrantHit, 0, len(points.Result))
 	for _, p := range points.Result {
@@ -75,7 +95,12 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk
 		if text == "" {
 			continue
 		}
-		hits = append(hits, qdrantHit{text: text, score: float64(p.Score)})
+		hits = append(hits, qdrantHit{
+			text:      text,
+			score:     float64(p.Score),
+			sessionID: getPayloadString(p.Payload, qdrantclient.FieldSessionID),
+			chunkIdx:  getPayloadInt(p.Payload, qdrantclient.FieldChunkIdx),
+		})
 	}
 
 	// 4. Rerank
@@ -93,7 +118,13 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk
 				if i >= r.rerankTopK {
 					break
 				}
-				result = append(result, RelevantChunk{Text: rr.Text, Score: rr.Score})
+				orig := hits[rr.Index]
+				result = append(result, RelevantChunk{
+					Text:      rr.Text,
+					Score:     rr.Score,
+					SessionID: orig.sessionID,
+					ChunkIdx:  orig.chunkIdx,
+				})
 			}
 			return result, nil
 		}
@@ -105,9 +136,49 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RelevantChunk
 		if i >= r.rerankTopK {
 			break
 		}
-		result = append(result, RelevantChunk{Text: h.text, Score: h.score})
+		result = append(result, RelevantChunk{
+			Text:      h.text,
+			Score:     h.score,
+			SessionID: h.sessionID,
+			ChunkIdx:  h.chunkIdx,
+		})
 	}
 	return result, nil
+}
+
+// buildScopeFilter creates a Qdrant filter from a RetrieveFilter.
+func buildScopeFilter(f *RetrieveFilter) *pb.Filter {
+	var mustClauses []*pb.Condition
+
+	if f.UserID != "" {
+		mustClauses = append(mustClauses, &pb.Condition{
+			ConditionOneOf: &pb.Condition_Field{
+				Field: &pb.FieldCondition{
+					Key:   qdrantclient.FieldUserID,
+					Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: f.UserID}},
+				},
+			},
+		})
+	}
+
+	if f.SessionID != "" {
+		mustClauses = append(mustClauses, &pb.Condition{
+			ConditionOneOf: &pb.Condition_Field{
+				Field: &pb.FieldCondition{
+					Key:   qdrantclient.FieldSessionID,
+					Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: f.SessionID}},
+				},
+			},
+		})
+	}
+
+	if len(mustClauses) == 0 {
+		return nil
+	}
+
+	return &pb.Filter{
+		Must: mustClauses,
+	}
 }
 
 func getPayloadString(payload map[string]*pb.Value, key string) string {
@@ -122,4 +193,15 @@ func getPayloadString(payload map[string]*pb.Value, key string) string {
 		return sv
 	}
 	return ""
+}
+
+func getPayloadInt(payload map[string]*pb.Value, key string) int64 {
+	if payload == nil {
+		return 0
+	}
+	v, ok := payload[key]
+	if !ok {
+		return 0
+	}
+	return v.GetIntegerValue()
 }

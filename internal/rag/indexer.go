@@ -95,7 +95,13 @@ func (idx *Indexer) detectDimension(ctx context.Context) (uint64, error) {
 
 // IndexText splits text into chunks, embeds each, and upserts to Qdrant.
 // Automatically ensures the collection exists first.
+// If userID/sessionID are provided, they are stored in the payload for later filtering.
 func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
+	return idx.IndexTextScoped(ctx, text, "", "")
+}
+
+// IndexTextScoped indexes text with user and session metadata for multi-tenant isolation.
+func (idx *Indexer) IndexTextScoped(ctx context.Context, text, userID, sessionID string) (int, error) {
 	// Ensure collection exists with correct vector dimension
 	if err := idx.EnsureCollection(ctx); err != nil {
 		return 0, fmt.Errorf("ensure collection: %w", err)
@@ -124,6 +130,16 @@ func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
 
 	points := make([]*pb.PointStruct, len(chunks))
 	for i, chunk := range chunks {
+		payload := map[string]*pb.Value{
+			qdrantclient.FieldChunkIdx: {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
+			qdrantclient.FieldText:     {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+		}
+		if userID != "" {
+			payload[qdrantclient.FieldUserID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: userID}}
+		}
+		if sessionID != "" {
+			payload[qdrantclient.FieldSessionID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: sessionID}}
+		}
 		points[i] = &pb.PointStruct{
 			Id: &pb.PointId{
 				PointIdOptions: &pb.PointId_Uuid{Uuid: uuid.New().String()},
@@ -131,10 +147,7 @@ func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
 			Vectors: &pb.Vectors{
 				VectorsOptions: &pb.Vectors_Vector{Vector: &pb.Vector{Data: toFloat32Slice(embeddings[i])}},
 			},
-			Payload: map[string]*pb.Value{
-				qdrantclient.FieldChunkIdx: {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
-				qdrantclient.FieldText:     {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
-			},
+			Payload: payload,
 		}
 	}
 

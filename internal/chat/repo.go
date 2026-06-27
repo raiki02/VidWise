@@ -25,7 +25,11 @@ func (r *Repo) AutoMigrate() error {
 // ---- Sessions ----
 
 func (r *Repo) CreateSession(ctx context.Context, title string) (*Session, error) {
-	s := &Session{Title: title}
+	return r.CreateSessionForUser(ctx, "", title)
+}
+
+func (r *Repo) CreateSessionForUser(ctx context.Context, userID, title string) (*Session, error) {
+	s := &Session{UserID: userID, Title: title}
 	if err := r.db.WithContext(ctx).Create(s).Error; err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -43,6 +47,21 @@ func (r *Repo) ListSessions(ctx context.Context, limit int) ([]Session, error) {
 	var sessions []Session
 	if err := r.db.WithContext(ctx).Order("updated_at DESC").Limit(limit).Find(&sessions).Error; err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	return sessions, nil
+}
+
+func (r *Repo) ListSessionsByUser(ctx context.Context, userID string, limit int) ([]Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var sessions []Session
+	if err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("updated_at DESC").
+		Limit(limit).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("list sessions by user: %w", err)
 	}
 	return sessions, nil
 }
