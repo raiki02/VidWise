@@ -21,6 +21,7 @@ type Config struct {
 	Embedding    EmbeddingConfig    `yaml:"embedding"`
 	Rerank       RerankConfig       `yaml:"rerank"`
 	MCP          MCPConfig          `yaml:"mcp"`
+	Upload       UploadConfig       `yaml:"upload"`
 }
 
 type ServerConfig struct {
@@ -142,6 +143,12 @@ type MCPConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Addr    string `yaml:"addr"`
 	Mode    string `yaml:"mode"`
+}
+
+type UploadConfig struct {
+	ChunkRunes   int   `yaml:"chunk_runes"`
+	OverlapRunes int   `yaml:"overlap_runes"`
+	MaxFileBytes int64 `yaml:"max_file_bytes"` // 0 = no limit
 }
 
 func Load(path string) (Config, error) {
@@ -317,6 +324,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MCP.Mode == "" {
 		c.MCP.Mode = "sse"
+	}
+	// Upload defaults
+	if c.Upload.ChunkRunes == 0 {
+		c.Upload.ChunkRunes = 1024
+	}
+	if c.Upload.OverlapRunes == 0 {
+		c.Upload.OverlapRunes = 128
+	}
+	if c.Upload.MaxFileBytes == 0 {
+		c.Upload.MaxFileBytes = 10 * 1024 * 1024 // 10 MB
 	}
 }
 

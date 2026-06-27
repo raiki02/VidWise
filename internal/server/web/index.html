@@ -193,6 +193,7 @@
   <a class="nav-item active" href="#" onclick="switchTab('chat', this)">RAG 知识库问答</a>
   <a class="nav-item" href="#" onclick="switchTab('extract', this)">视频提取</a>
   <a class="nav-item" href="#" onclick="switchTab('format', this)">文本格式化</a>
+  <a class="nav-item" href="#" onclick="switchTab('upload', this)">知识库上传</a>
 
   <hr>
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -268,6 +269,19 @@
       <div id="format-status" style="padding:10px;border-radius:8px;background:#10131a;min-height:20px;font-size:14px;"></div>
     </form>
   </div>
+
+  <!-- Upload tab -->
+  <div id="tab-upload">
+    <form id="upload-form" style="display:grid;gap:16px;background:#171a21;border-radius:12px;padding:20px;max-width:600px;">
+      <div>
+        <label style="font-weight:600;">文本文件 (.txt, .md, .srt, .csv)</label>
+        <input id="upload-file" type="file" accept=".txt,.md,.srt,.csv,text/plain,text/markdown,text/csv" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;" />
+        <p style="font-size:12px;color:#98a2b3;margin:6px 0 0;">上传文本文件内容，将自动分块 (chunk) 并存入向量知识库，用于后续 RAG 问答检索。</p>
+      </div>
+      <button type="submit" style="padding:12px;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">上传并索引</button>
+      <div id="upload-status" style="padding:10px;border-radius:8px;background:#10131a;min-height:20px;font-size:14px;"></div>
+    </form>
+  </div>
 </div>
 
 <script>
@@ -292,17 +306,16 @@ function escHtml(s) {
 
 // --- Navigation ---
 function switchTab(tab, link) {
-  ["tab-chat", "tab-extract", "tab-format"].forEach(id => {
+  ["tab-chat", "tab-extract", "tab-format", "tab-upload"].forEach(id => {
     $$("#" + id).style.display = id === "tab-" + tab ? "flex" : "none";
   });
   document.querySelectorAll(".nav-item").forEach(a => a.classList.remove("active"));
   if (link) link.classList.add("active");
   $$("#chat-header").textContent =
     tab === "chat" ? (currentSessionId ? "对话中" : "RAG 知识库问答") :
-    tab === "extract" ? "视频提取" : "文本格式化";
+    tab === "extract" ? "视频提取" :
+    tab === "upload" ? "知识库上传" : "文本格式化";
 }
-
-// --- Sessions ---
 async function loadSessions() {
   try {
     const resp = await fetch("/chat/sessions");
@@ -452,6 +465,31 @@ async function checkRAGHealth() {
     $$("#rag-status-text").textContent = "RAG 不可用";
   }
 }
+
+// --- Upload form ---
+$$("#upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = $$("#upload-file").files[0];
+  const status = $$("#upload-status");
+  if (!file) { status.textContent = "请选择文件"; status.style.color = "#ff8b8b"; return; }
+  status.textContent = "上传索引中...";
+  status.style.color = "";
+  try {
+    const fd = new FormData(); fd.append("file", file);
+    const resp = await fetch("/upload", { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = data.error || `请求失败 (${resp.status})`;
+      status.style.color = "#ff8b8b";
+      return;
+    }
+    status.innerHTML = `✅ 上传成功！<br>文件: ${escHtml(data.filename)}<br>大小: ${data.size_bytes?.toLocaleString()} 字符<br>分块数: ${data.chunk_count}`;
+    status.style.color = "#9ee6a8";
+  } catch (err) {
+    status.textContent = err.message;
+    status.style.color = "#ff8b8b";
+  }
+})
 
 // --- Extract form ---
 $$("#extract-form").addEventListener("submit", async (e) => {

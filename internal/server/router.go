@@ -80,6 +80,9 @@ func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.
 	// Health
 	e.GET("/rag/health", chatHandler.RAGHealth)
 
+	// File upload — index text into knowledge base
+	e.POST("/upload", extractHandler.UploadText)
+
 	// Serve the chat UI at root
 	e.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, "/static/index.html")

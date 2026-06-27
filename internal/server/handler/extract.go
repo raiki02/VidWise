@@ -108,6 +108,67 @@ func (h *ExtractHandler) FormatText(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(formatted))
 }
 
+// UploadText handles POST /upload — accepts a text file, chunks it, and indexes into
+// the vector database for later retrieval.
+func (h *ExtractHandler) UploadText(c *gin.Context) {
+	// Check that RAG indexing is available
+	if h.indexer == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "RAG indexing is not available (Qdrant or embedding service not connected)"})
+		return
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+
+	// Check file size limit
+	if h.cfg.Upload.MaxFileBytes > 0 && file.Size > h.cfg.Upload.MaxFileBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": fmt.Sprintf("file too large: %d bytes, max %d bytes", file.Size, h.cfg.Upload.MaxFileBytes),
+		})
+		return
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		return
+	}
+	defer f.Close()
+
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		return
+	}
+
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		return
+	}
+
+	// Override indexer chunk parameters from upload config
+	h.indexer.SetChunkParams(h.cfg.Upload.ChunkRunes, h.cfg.Upload.OverlapRunes)
+
+	count, err := h.indexer.IndexText(c.Request.Context(), text)
+	if err != nil {
+		slog.Error("upload.index_failed", "filename", file.Filename, "err", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("indexing failed: %v", err)})
+		return
+	}
+
+	slog.Info("upload.done", "filename", file.Filename, "bytes", len(text), "chunks", count)
+	c.JSON(http.StatusOK, gin.H{
+		"status":      "ok",
+		"filename":    file.Filename,
+		"size_bytes":  len(text),
+		"chunk_count": count,
+	})
+}
+
 // extractRequest for legacy endpoint.
 type extractRequest struct {
 	URL  string `form:"url" json:"url" binding:"required"`

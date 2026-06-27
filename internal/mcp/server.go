@@ -27,7 +27,7 @@ func New(addr, mode string, registry *tool.Registry) *Server {
 	}
 
 	mcpServer := server.NewMCPServer(
-		"video-extractor",
+		"vidwise-mcp",
 		"1.0.0",
 		server.WithToolCapabilities(true),
 	)

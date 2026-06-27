@@ -30,6 +30,16 @@ func NewIndexer(embedClient *model.EmbedClient, qdrantClient *qdrantclient.Clien
 	}
 }
 
+// SetChunkParams overrides the default chunking parameters.
+func (idx *Indexer) SetChunkParams(chunkRunes, overlapRunes int) {
+	if chunkRunes > 0 {
+		idx.chunkRunes = chunkRunes
+	}
+	if overlapRunes >= 0 {
+		idx.overlapRunes = overlapRunes
+	}
+}
+
 // EnsureCollection checks if the collection exists and creates it with the
 // correct vector dimension if not. The dimension is detected from a sample embedding.
 func (idx *Indexer) EnsureCollection(ctx context.Context) error {

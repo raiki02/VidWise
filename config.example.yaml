@@ -131,3 +131,8 @@ mcp:
   enabled: true
   addr: ":8082"
   mode: "sse"
+
+upload:
+  chunk_runes: 1024
+  overlap_runes: 128
+  max_file_bytes: 10485760 # 10 MB
