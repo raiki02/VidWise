@@ -11,19 +11,31 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/chunk"
 )
 
 const maxParallelChunks = 3
 
+type TextFormat string
+
+const (
+	TextFormatPlain    TextFormat = "plain"
+	TextFormatMarkdown TextFormat = "markdown"
+)
+
 func FormatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (string, error) {
-	return formatText(ctx, rawText, cfg, false)
+	return formatText(ctx, rawText, TextFormatPlain, cfg, false)
+}
+
+func FormatTextWithFormat(ctx context.Context, rawText string, sourceFormat TextFormat, cfg appconfig.LLMConfig) (string, error) {
+	return formatText(ctx, rawText, sourceFormat, cfg, false)
 }
 
 func FormatTextWithFallback(ctx context.Context, rawText string, cfg appconfig.LLMConfig) (string, error) {
-	return formatText(ctx, rawText, cfg, true)
+	return formatText(ctx, rawText, TextFormatPlain, cfg, true)
 }
 
-func formatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig, hasFallback bool) (string, error) {
+func formatText(ctx context.Context, rawText string, sourceFormat TextFormat, cfg appconfig.LLMConfig, hasFallback bool) (string, error) {
 	start := time.Now()
 	rawText = strings.TrimSpace(rawText)
 	if rawText == "" {
@@ -53,15 +65,15 @@ func formatText(ctx context.Context, rawText string, cfg appconfig.LLMConfig, ha
 	}
 
 	if cfg.TwoStep {
-		text := formatTwoStep(formatCtx, cm, rawText, cfg, perChunkTimeout, fallback)
+		text := formatTwoStep(formatCtx, cm, rawText, sourceFormat, cfg, perChunkTimeout, fallback)
 		if text == "" && !fallback {
 			return "", errChunkFailed
 		}
 		return text, nil
 	}
 
-	chunks := splitByRunes(rawText, cfg.ChunkRunes)
-	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes)
+	chunks := splitForLLM(rawText, cfg.ChunkRunes, sourceFormat)
+	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes, "format", sourceFormat)
 
 	formatted := formatChunksParallel(formatCtx, cm, chunks, rawText, cfg, perChunkTimeout, fallback)
 	slog.Info("llm.format.done", "elapsed", time.Since(start))
@@ -180,6 +192,7 @@ func formatTwoStep(
 	ctx context.Context,
 	cm einomodel.BaseChatModel,
 	rawText string,
+	sourceFormat TextFormat,
 	cfg appconfig.LLMConfig,
 	perChunkTimeout time.Duration,
 	fallback bool,
@@ -187,8 +200,8 @@ func formatTwoStep(
 	start := time.Now()
 
 	// Step 1: split into smaller chunks, fix typos + trad→simp per chunk
-	chunks := splitByRunes(rawText, cfg.Step1ChunkRunes)
-	slog.Info("llm.format.step1.start", "chunks", len(chunks), "chunk_runes", cfg.Step1ChunkRunes)
+	chunks := splitForLLM(rawText, cfg.Step1ChunkRunes, sourceFormat)
+	slog.Info("llm.format.step1.start", "chunks", len(chunks), "chunk_runes", cfg.Step1ChunkRunes, "format", sourceFormat)
 
 	step1Cfg := appconfig.LLMConfig{
 		Prompt:      cfg.Step1Prompt,
@@ -203,8 +216,8 @@ func formatTwoStep(
 	slog.Info("llm.format.step1.done", "elapsed", time.Since(start))
 
 	// Step 2: semantic paragraph organization, chunked to avoid OOM on long texts
-	step2Chunks := splitByRunes(step1Text, cfg.ChunkRunes)
-	slog.Info("llm.format.step2.start", "chunks", len(step2Chunks), "chunk_runes", cfg.ChunkRunes)
+	step2Chunks := splitForLLM(step1Text, cfg.ChunkRunes, sourceFormat)
+	slog.Info("llm.format.step2.start", "chunks", len(step2Chunks), "chunk_runes", cfg.ChunkRunes, "format", sourceFormat)
 	step2Results := formatChunksParallel(ctx, cm, step2Chunks, step1Text, cfg, perChunkTimeout, fallback)
 	if step2Results == nil {
 		return ""
@@ -214,25 +227,26 @@ func formatTwoStep(
 	return result
 }
 
-func splitByRunes(text string, limit int) []string {
+func splitForLLM(text string, limit int, sourceFormat TextFormat) []string {
 	if limit <= 0 {
 		limit = utf8.RuneCountInString(text)
 	}
-	if utf8.RuneCountInString(text) <= limit {
-		return []string{text}
+	format := chunk.FormatPlain
+	if sourceFormat == TextFormatMarkdown {
+		format = chunk.FormatMarkdown
 	}
 
-	var chunks []string
-	runes := []rune(text)
-	for start := 0; start < len(runes); start += limit {
-		end := start + limit
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunk := strings.TrimSpace(string(runes[start:end]))
-		if chunk != "" {
-			chunks = append(chunks, chunk)
+	chunks := chunk.SplitText(text, chunk.Config{
+		MaxRunes:     limit,
+		MinRunes:     0,
+		OverlapRunes: 0,
+		Format:       format,
+	})
+	out := make([]string, 0, len(chunks))
+	for _, c := range chunks {
+		if strings.TrimSpace(c.Text) != "" {
+			out = append(out, c.Text)
 		}
 	}
-	return chunks
+	return out
 }

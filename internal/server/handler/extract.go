@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -98,7 +99,12 @@ func (h *ExtractHandler) FormatText(c *gin.Context) {
 		return
 	}
 
-	formatted, err := paragraph.FormatText(c.Request.Context(), text, h.cfg.LLM)
+	sourceFormat := paragraph.TextFormatPlain
+	if isMarkdownUpload(file.Filename, file.Header.Get("Content-Type")) {
+		sourceFormat = paragraph.TextFormatMarkdown
+	}
+
+	formatted, err := paragraph.FormatTextWithFormat(c.Request.Context(), text, sourceFormat, h.cfg.LLM)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -185,6 +191,15 @@ func readTextFile(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func isMarkdownUpload(filename, contentType string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".md" || ext == ".markdown" || ext == ".mdown" {
+		return true
+	}
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return contentType == "text/markdown" || contentType == "text/x-markdown"
 }
 
 func bindExtractRequest(c *gin.Context) (extractRequest, error) {

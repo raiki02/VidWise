@@ -39,3 +39,4 @@ docker-compose.yaml
 models/*
 !models/README.md
 .claude
+.codex

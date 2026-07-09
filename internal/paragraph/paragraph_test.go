@@ -127,3 +127,56 @@ func TestFormatChunksParallelFallsBackToRawWhenAllChunksFail(t *testing.T) {
 		t.Fatalf("unexpected raw fallback output: %#v", got)
 	}
 }
+
+func TestSplitMarkdownByRunesKeepsSectionsTogether(t *testing.T) {
+	text := strings.Join([]string{
+		"# Intro",
+		"",
+		"Short opening paragraph.",
+		"",
+		"## Details",
+		"",
+		"- first point",
+		"- second point",
+		"",
+		"## Next",
+		"",
+		"Another paragraph.",
+	}, "\n")
+
+	got := splitForLLM(text, 80, TextFormatMarkdown)
+	if len(got) != 2 {
+		t.Fatalf("expected two markdown chunks, got %#v", got)
+	}
+	if !strings.Contains(got[0], "# Intro") || !strings.Contains(got[0], "## Details") {
+		t.Fatalf("expected first chunk to keep adjacent sections, got %q", got[0])
+	}
+	if !strings.HasPrefix(got[1], "## Next") {
+		t.Fatalf("expected second chunk to start at heading, got %q", got[1])
+	}
+}
+
+func TestSplitMarkdownByRunesDoesNotSplitFenceAsBlock(t *testing.T) {
+	text := strings.Join([]string{
+		"# Notes",
+		"",
+		"```go",
+		"func main() {",
+		`	fmt.Println("hello")`,
+		"}",
+		"```",
+		"",
+		"After the code block.",
+	}, "\n")
+
+	got := splitForLLM(text, 70, TextFormatMarkdown)
+	if len(got) != 2 {
+		t.Fatalf("expected heading/code and paragraph chunks, got %#v", got)
+	}
+	if strings.Count(got[0], "```") != 2 {
+		t.Fatalf("expected complete fenced code block in first chunk, got %q", got[0])
+	}
+	if strings.Contains(got[1], "```") {
+		t.Fatalf("did not expect code fence to be split into second chunk, got %q", got[1])
+	}
+}
