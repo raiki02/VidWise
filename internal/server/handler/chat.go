@@ -38,19 +38,23 @@ type ChatQueryRequest struct {
 }
 
 type ChatChunk struct {
-	Text      string  `json:"text"`
-	Score     float64 `json:"score"`
-	SessionID string  `json:"session_id,omitempty"`
-	ChunkIdx  int64   `json:"chunk_idx,omitempty"`
+	Text          string  `json:"text"`
+	Score         float64 `json:"score"`
+	SessionID     string  `json:"session_id,omitempty"`
+	ChunkIdx      int64   `json:"chunk_idx,omitempty"`
+	SourceName    string  `json:"source_name,omitempty"`
+	ContentType   string  `json:"content_type,omitempty"`
+	DocumentTitle string  `json:"document_title,omitempty"`
+	HeadingPath   string  `json:"heading_path,omitempty"`
 }
 
 type ChatQueryResponse struct {
-	SessionID    string       `json:"session_id"`
-	Answer       string       `json:"answer"`
-	Chunks       []ChatChunk  `json:"chunks,omitempty"`
-	RAGTriggered bool         `json:"rag_triggered"`
-	RAGReason    string       `json:"rag_reason,omitempty"`
-	Question     string       `json:"question"`
+	SessionID    string      `json:"session_id"`
+	Answer       string      `json:"answer"`
+	Chunks       []ChatChunk `json:"chunks,omitempty"`
+	RAGTriggered bool        `json:"rag_triggered"`
+	RAGReason    string      `json:"rag_reason,omitempty"`
+	Question     string      `json:"question"`
 }
 
 type SessionListItem struct {
@@ -176,10 +180,10 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	}
 	if userCount == 1 {
 		func() {
-		tCtx, tCancel := genCtx()
-		defer tCancel()
-		h.autoGenerateTitle(tCtx, sessionID, req.Query)
-	}()
+			tCtx, tCancel := genCtx()
+			defer tCancel()
+			h.autoGenerateTitle(tCtx, sessionID, req.Query)
+		}()
 	}
 
 	// Load user memory facts for cross-session context
@@ -223,19 +227,23 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	// Step 4: Asynchronously extract/update user memory facts
 	if h.memRepo != nil && req.UserID != "" {
 		func() {
-		mCtx, mCancel := genCtx()
-		defer mCancel()
-		h.extractMemoryFacts(mCtx, req.UserID, sessionID, req.Query, answer, recentHistory)
-	}()
+			mCtx, mCancel := genCtx()
+			defer mCancel()
+			h.extractMemoryFacts(mCtx, req.UserID, sessionID, req.Query, answer, recentHistory)
+		}()
 	}
 
 	outChunks := make([]ChatChunk, 0)
 	for _, c := range chunks {
 		outChunks = append(outChunks, ChatChunk{
-			Text:      c.Text,
-			Score:     c.Score,
-			SessionID: c.SessionID,
-			ChunkIdx:  c.ChunkIdx,
+			Text:          c.Text,
+			Score:         c.Score,
+			SessionID:     c.SessionID,
+			ChunkIdx:      c.ChunkIdx,
+			SourceName:    c.SourceName,
+			ContentType:   c.ContentType,
+			DocumentTitle: c.DocumentTitle,
+			HeadingPath:   c.HeadingPath,
 		})
 	}
 
@@ -256,6 +264,9 @@ func (h *ChatHandler) buildAnswer(ctx context.Context, sessionID string, chunks 
 	for i, c := range chunks {
 		if i > 0 {
 			ragContext += "\n---\n"
+		}
+		if source := formatChunkSource(c); source != "" {
+			ragContext += "来源：" + source + "\n"
 		}
 		ragContext += c.Text
 		hasRAGContext = true
@@ -315,11 +326,28 @@ func (h *ChatHandler) buildAnswer(ctx context.Context, sessionID string, chunks 
 			if i >= 5 {
 				break
 			}
-			sb.WriteString(fmt.Sprintf("**片段 %d**（相关度 %.2f）：\n%s\n\n", i+1, c.Score, c.Text))
+			source := formatChunkSource(c)
+			if source != "" {
+				source = "，来源 " + source
+			}
+			sb.WriteString(fmt.Sprintf("**片段 %d**（相关度 %.2f%s）：\n%s\n\n", i+1, c.Score, source, c.Text))
 		}
 		return sb.String()
 	}
 	return "抱歉，我暂时无法处理你的请求。请稍后再试。"
+}
+
+func formatChunkSource(chunk rag.RelevantChunk) string {
+	parts := make([]string, 0, 2)
+	if chunk.SourceName != "" {
+		parts = append(parts, chunk.SourceName)
+	}
+	if chunk.HeadingPath != "" {
+		parts = append(parts, chunk.HeadingPath)
+	} else if chunk.DocumentTitle != "" {
+		parts = append(parts, chunk.DocumentTitle)
+	}
+	return strings.Join(parts, " / ")
 }
 
 func buildSystemPrompt(hasRAG bool, userFacts string) string {

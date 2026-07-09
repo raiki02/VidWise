@@ -9,11 +9,25 @@ import (
 )
 
 const (
-	FieldText      = "text"
-	FieldTaskID    = "task_id"
-	FieldUserID    = "user_id"
-	FieldSessionID = "session_id"
-	FieldChunkIdx  = "chunk_index"
+	FieldText              = "text"
+	FieldTaskID            = "task_id"
+	FieldUserID            = "user_id"
+	FieldSessionID         = "session_id"
+	FieldChunkIdx          = "chunk_index"
+	FieldContentType       = "content_type"
+	FieldSourceName        = "source_name"
+	FieldDocumentTitle     = "document_title"
+	FieldHeadingPath       = "heading_path"
+	FieldHeadingLevel      = "heading_level"
+	FieldSectionIndex      = "section_index"
+	FieldSectionChunkIndex = "section_chunk_index"
+	FieldChunkSource       = "chunk_source"
+	FieldHeader1           = "header_1"
+	FieldHeader2           = "header_2"
+	FieldHeader3           = "header_3"
+	FieldHeader4           = "header_4"
+	FieldHeader5           = "header_5"
+	FieldHeader6           = "header_6"
 )
 
 func EnsureCollection(ctx context.Context, c *Client, name string, vectorDim uint64) error {
@@ -54,6 +68,14 @@ func EnsureCollection(ctx context.Context, c *Client, name string, vectorDim uin
 		{FieldUserID, pb.FieldType_FieldTypeKeyword},
 		{FieldSessionID, pb.FieldType_FieldTypeKeyword},
 		{FieldChunkIdx, pb.FieldType_FieldTypeInteger},
+		{FieldContentType, pb.FieldType_FieldTypeKeyword},
+		{FieldSourceName, pb.FieldType_FieldTypeKeyword},
+		{FieldDocumentTitle, pb.FieldType_FieldTypeKeyword},
+		{FieldHeadingPath, pb.FieldType_FieldTypeKeyword},
+		{FieldHeadingLevel, pb.FieldType_FieldTypeInteger},
+		{FieldSectionIndex, pb.FieldType_FieldTypeInteger},
+		{FieldSectionChunkIndex, pb.FieldType_FieldTypeInteger},
+		{FieldChunkSource, pb.FieldType_FieldTypeKeyword},
 	}
 
 	for _, idx := range indexes {

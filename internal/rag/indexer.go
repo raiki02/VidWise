@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
@@ -62,19 +64,8 @@ func (idx *Indexer) EnsureCollection(ctx context.Context) error {
 	}
 	slog.Info("rag.indexer.detected_dim", "dim", dim)
 
-	_, err = idx.qdrantClient.Collections.Create(ctx, &pb.CreateCollection{
-		CollectionName: idx.collection,
-		VectorsConfig: &pb.VectorsConfig{
-			Config: &pb.VectorsConfig_Params{
-				Params: &pb.VectorParams{
-					Size:     dim,
-					Distance: pb.Distance_Cosine,
-				},
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create collection %s: %w", idx.collection, err)
+	if err := qdrantclient.EnsureCollection(ctx, idx.qdrantClient, idx.collection, dim); err != nil {
+		return err
 	}
 
 	slog.Info("rag.indexer.collection_created", "name", idx.collection, "dim", dim)
@@ -102,12 +93,40 @@ func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
 
 // IndexTextScoped indexes text with user and session metadata for multi-tenant isolation.
 func (idx *Indexer) IndexTextScoped(ctx context.Context, text, userID, sessionID string) (int, error) {
+	return idx.IndexDocumentsScoped(ctx, []Document{{
+		PageContent: text,
+		Metadata: map[string]string{
+			qdrantclient.FieldContentType: PlainContentType,
+		},
+	}}, userID, sessionID)
+}
+
+// IndexMarkdown parses a Markdown document, enriches sections with heading
+// metadata, chunks them, embeds the chunks, and stores them in Qdrant.
+func (idx *Indexer) IndexMarkdown(ctx context.Context, markdownText string, metadata map[string]string) (int, error) {
+	return idx.IndexMarkdownScoped(ctx, markdownText, metadata, "", "")
+}
+
+// IndexMarkdownScoped indexes Markdown with user/session metadata.
+func (idx *Indexer) IndexMarkdownScoped(ctx context.Context, markdownText string, metadata map[string]string, userID, sessionID string) (int, error) {
+	docs := ParseMarkdownDocuments(markdownText, metadata)
+	return idx.IndexDocumentsScoped(ctx, docs, userID, sessionID)
+}
+
+// IndexDocuments indexes pre-parsed documents.
+func (idx *Indexer) IndexDocuments(ctx context.Context, docs []Document) (int, error) {
+	return idx.IndexDocumentsScoped(ctx, docs, "", "")
+}
+
+// IndexDocumentsScoped indexes documents with user and session metadata for
+// multi-tenant isolation.
+func (idx *Indexer) IndexDocumentsScoped(ctx context.Context, docs []Document, userID, sessionID string) (int, error) {
 	// Ensure collection exists with correct vector dimension
 	if err := idx.EnsureCollection(ctx); err != nil {
 		return 0, fmt.Errorf("ensure collection: %w", err)
 	}
 
-	chunks := ChunkText(text, idx.chunkRunes, idx.overlapRunes)
+	chunks := idx.chunkDocuments(docs)
 	if len(chunks) == 0 {
 		return 0, nil
 	}
@@ -133,6 +152,12 @@ func (idx *Indexer) IndexTextScoped(ctx context.Context, text, userID, sessionID
 		payload := map[string]*pb.Value{
 			qdrantclient.FieldChunkIdx: {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
 			qdrantclient.FieldText:     {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+		}
+		for key, value := range chunk.Metadata {
+			if key == "" || value == "" {
+				continue
+			}
+			payload[key] = metadataPayloadValue(key, value)
 		}
 		if userID != "" {
 			payload[qdrantclient.FieldUserID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: userID}}
@@ -161,6 +186,53 @@ func (idx *Indexer) IndexTextScoped(ctx context.Context, text, userID, sessionID
 
 	slog.Info("rag.indexer.done", "chunks", len(chunks))
 	return len(chunks), nil
+}
+
+type documentChunk struct {
+	Text     string
+	Metadata map[string]string
+}
+
+func (idx *Indexer) chunkDocuments(docs []Document) []documentChunk {
+	var out []documentChunk
+	for _, doc := range docs {
+		content := strings.TrimSpace(doc.PageContent)
+		if content == "" {
+			continue
+		}
+		chunks := ChunkText(content, idx.chunkRunes, idx.overlapRunes)
+		for _, chunk := range chunks {
+			meta := mergeMetadata(doc.Metadata, map[string]string{
+				qdrantclient.FieldChunkSource:       string(chunk.Source),
+				qdrantclient.FieldSectionChunkIndex: strconv.Itoa(chunk.Index),
+			})
+			out = append(out, documentChunk{
+				Text:     chunk.Text,
+				Metadata: meta,
+			})
+		}
+	}
+	return out
+}
+
+func metadataPayloadValue(key, value string) *pb.Value {
+	if isIntegerMetadataField(key) {
+		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: parsed}}
+		}
+	}
+	return &pb.Value{Kind: &pb.Value_StringValue{StringValue: value}}
+}
+
+func isIntegerMetadataField(key string) bool {
+	switch key {
+	case qdrantclient.FieldHeadingLevel,
+		qdrantclient.FieldSectionIndex,
+		qdrantclient.FieldSectionChunkIndex:
+		return true
+	default:
+		return false
+	}
 }
 
 func toFloat32Slice(f64 []float64) []float32 {

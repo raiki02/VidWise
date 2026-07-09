@@ -9,6 +9,7 @@ require (
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/gomarkdown/markdown v0.0.0-20260614204949-e08cff860f76
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.55.0
 	github.com/qdrant/go-client v1.18.2

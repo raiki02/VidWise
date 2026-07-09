@@ -15,8 +15,12 @@ type RelevantChunk struct {
 	Text  string  `json:"text"`
 	Score float64 `json:"score"`
 	// Source metadata for citation
-	SessionID string `json:"session_id,omitempty"`
-	ChunkIdx  int64  `json:"chunk_idx,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	ChunkIdx      int64  `json:"chunk_idx,omitempty"`
+	SourceName    string `json:"source_name,omitempty"`
+	ContentType   string `json:"content_type,omitempty"`
+	DocumentTitle string `json:"document_title,omitempty"`
+	HeadingPath   string `json:"heading_path,omitempty"`
 }
 
 // RetrieveFilter scopes retrieval to a specific user or session.
@@ -84,10 +88,14 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, filter *Retrieve
 
 	// 3. Extract texts, scores, and metadata from Qdrant results
 	type qdrantHit struct {
-		text      string
-		score     float64
-		sessionID string
-		chunkIdx  int64
+		text          string
+		score         float64
+		sessionID     string
+		chunkIdx      int64
+		sourceName    string
+		contentType   string
+		documentTitle string
+		headingPath   string
 	}
 	hits := make([]qdrantHit, 0, len(points.Result))
 	for _, p := range points.Result {
@@ -96,10 +104,14 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, filter *Retrieve
 			continue
 		}
 		hits = append(hits, qdrantHit{
-			text:      text,
-			score:     float64(p.Score),
-			sessionID: getPayloadString(p.Payload, qdrantclient.FieldSessionID),
-			chunkIdx:  getPayloadInt(p.Payload, qdrantclient.FieldChunkIdx),
+			text:          text,
+			score:         float64(p.Score),
+			sessionID:     getPayloadString(p.Payload, qdrantclient.FieldSessionID),
+			chunkIdx:      getPayloadInt(p.Payload, qdrantclient.FieldChunkIdx),
+			sourceName:    getPayloadString(p.Payload, qdrantclient.FieldSourceName),
+			contentType:   getPayloadString(p.Payload, qdrantclient.FieldContentType),
+			documentTitle: getPayloadString(p.Payload, qdrantclient.FieldDocumentTitle),
+			headingPath:   getPayloadString(p.Payload, qdrantclient.FieldHeadingPath),
 		})
 	}
 
@@ -120,10 +132,14 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, filter *Retrieve
 				}
 				orig := hits[rr.Index]
 				result = append(result, RelevantChunk{
-					Text:      rr.Text,
-					Score:     rr.Score,
-					SessionID: orig.sessionID,
-					ChunkIdx:  orig.chunkIdx,
+					Text:          rr.Text,
+					Score:         rr.Score,
+					SessionID:     orig.sessionID,
+					ChunkIdx:      orig.chunkIdx,
+					SourceName:    orig.sourceName,
+					ContentType:   orig.contentType,
+					DocumentTitle: orig.documentTitle,
+					HeadingPath:   orig.headingPath,
 				})
 			}
 			return result, nil
@@ -137,10 +153,14 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, filter *Retrieve
 			break
 		}
 		result = append(result, RelevantChunk{
-			Text:      h.text,
-			Score:     h.score,
-			SessionID: h.sessionID,
-			ChunkIdx:  h.chunkIdx,
+			Text:          h.text,
+			Score:         h.score,
+			SessionID:     h.sessionID,
+			ChunkIdx:      h.chunkIdx,
+			SourceName:    h.sourceName,
+			ContentType:   h.contentType,
+			DocumentTitle: h.documentTitle,
+			HeadingPath:   h.headingPath,
 		})
 	}
 	return result, nil

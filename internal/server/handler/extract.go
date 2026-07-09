@@ -17,6 +17,7 @@ import (
 	"github.com/raiki02/vidwise/internal/extractor"
 	"github.com/raiki02/vidwise/internal/paragraph"
 	"github.com/raiki02/vidwise/internal/rag"
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
@@ -159,19 +160,34 @@ func (h *ExtractHandler) UploadText(c *gin.Context) {
 	// Override indexer chunk parameters from upload config
 	h.indexer.SetChunkParams(h.cfg.Upload.ChunkRunes, h.cfg.Upload.OverlapRunes)
 
-	count, err := h.indexer.IndexText(c.Request.Context(), text)
+	metadata := map[string]string{
+		qdrantclient.FieldSourceName: file.Filename,
+	}
+	contentType := rag.PlainContentType
+	var count int
+	if isMarkdownUpload(file.Filename, file.Header.Get("Content-Type")) {
+		contentType = rag.MarkdownContentType
+		count, err = h.indexer.IndexMarkdown(c.Request.Context(), text, metadata)
+	} else {
+		metadata[qdrantclient.FieldContentType] = rag.PlainContentType
+		count, err = h.indexer.IndexDocuments(c.Request.Context(), []rag.Document{{
+			PageContent: text,
+			Metadata:    metadata,
+		}})
+	}
 	if err != nil {
 		slog.Error("upload.index_failed", "filename", file.Filename, "err", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("indexing failed: %v", err)})
 		return
 	}
 
-	slog.Info("upload.done", "filename", file.Filename, "bytes", len(text), "chunks", count)
+	slog.Info("upload.done", "filename", file.Filename, "content_type", contentType, "bytes", len(text), "chunks", count)
 	c.JSON(http.StatusOK, gin.H{
-		"status":      "ok",
-		"filename":    file.Filename,
-		"size_bytes":  len(text),
-		"chunk_count": count,
+		"status":       "ok",
+		"filename":     file.Filename,
+		"content_type": contentType,
+		"size_bytes":   len(text),
+		"chunk_count":  count,
 	})
 }
 
