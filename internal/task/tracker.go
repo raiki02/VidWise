@@ -9,6 +9,8 @@ import (
 const (
 	defaultMaxTrackedTasks = 1000
 	defaultTaskRetention   = 24 * time.Hour
+	defaultTaskListLimit   = 50
+	maxTaskListLimit       = 100
 )
 
 // TrackedTask is the request-facing view of an asynchronous task.
@@ -46,6 +48,13 @@ type TrackCreateRequest struct {
 	SessionID string
 	TraceID   string
 	Steps     []string
+}
+
+type TrackListRequest struct {
+	UserID    string
+	SessionID string
+	Status    Status
+	Limit     int
 }
 
 type TrackerOptions struct {
@@ -187,6 +196,43 @@ func (t *Tracker) Get(id string) (TrackedTask, bool) {
 		return TrackedTask{}, false
 	}
 	return copyTrackedTask(task), true
+}
+
+func (t *Tracker) List(req TrackListRequest) []TrackedTask {
+	if t == nil {
+		return nil
+	}
+
+	now := t.currentTime()
+	limit := normalizeTaskListLimit(req.Limit)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pruneLocked(now)
+
+	matches := make([]TrackedTask, 0, len(t.tasks))
+	for _, task := range t.tasks {
+		if req.UserID != "" && task.UserID != req.UserID {
+			continue
+		}
+		if req.SessionID != "" && task.SessionID != req.SessionID {
+			continue
+		}
+		if req.Status != "" && task.Status != req.Status {
+			continue
+		}
+		matches = append(matches, copyTrackedTask(task))
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].UpdatedAt.Equal(matches[j].UpdatedAt) {
+			return matches[i].ID < matches[j].ID
+		}
+		return matches[i].UpdatedAt.After(matches[j].UpdatedAt)
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches
 }
 
 func (t *Tracker) updateStep(taskID, stepName string, mutate func(TrackedStep, time.Time) TrackedStep) (TrackedTask, bool) {
@@ -352,6 +398,16 @@ func normalizeTrackerOptions(opts TrackerOptions) TrackerOptions {
 		opts.Now = time.Now
 	}
 	return opts
+}
+
+func normalizeTaskListLimit(limit int) int {
+	if limit <= 0 {
+		return defaultTaskListLimit
+	}
+	if limit > maxTaskListLimit {
+		return maxTaskListLimit
+	}
+	return limit
 }
 
 type trackedTaskPruneCandidate struct {

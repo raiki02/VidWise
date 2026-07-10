@@ -175,6 +175,25 @@ func TestRouterMountsRAGSourceListRoute(t *testing.T) {
 	}
 }
 
+func TestRouterMountsTaskListRoute(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		ragruntime.Runtime{},
+		nil,
+		nil,
+		capability.FromRuntime(capability.RuntimeDeps{}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected mounted route to return 400 from handler, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func testRouterConfig() appconfig.Config {
 	enabled := true
 	return appconfig.Config{

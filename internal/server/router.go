@@ -91,6 +91,7 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	e.POST("/chat/query", chatHandler.ChatQuery)
 
 	// Task status
+	e.GET("/tasks", taskHandler.ListTasks)
 	e.GET("/task/:id", taskHandler.GetTask)
 
 	// Health

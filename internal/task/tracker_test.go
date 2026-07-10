@@ -245,3 +245,69 @@ func TestTrackerPrunesOldestTerminalTasksWhenOverCapacity(t *testing.T) {
 		t.Fatal("expected newest terminal task to be retained")
 	}
 }
+
+func TestTrackerListsTasksWithFiltersAndLimit(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		Now: func() time.Time {
+			now = now.Add(time.Second)
+			return now
+		},
+	})
+
+	tracker.Create(TrackCreateRequest{ID: "u1-old", UserID: "u1", SessionID: "s1"})
+	tracker.Start("u1-old")
+	tracker.Create(TrackCreateRequest{ID: "u2-task", UserID: "u2", SessionID: "s2"})
+	tracker.Start("u2-task")
+	tracker.Create(TrackCreateRequest{ID: "u1-new", UserID: "u1", SessionID: "s1"})
+	tracker.Fail("u1-new", "failed")
+
+	got := tracker.List(TrackListRequest{UserID: "u1", Limit: 10})
+	if len(got) != 2 {
+		t.Fatalf("listed tasks = %#v, want 2", got)
+	}
+	if got[0].ID != "u1-new" || got[1].ID != "u1-old" {
+		t.Fatalf("tasks not sorted newest first: %#v", got)
+	}
+
+	got = tracker.List(TrackListRequest{SessionID: "s1", Status: StatusFailed, Limit: 10})
+	if len(got) != 1 || got[0].ID != "u1-new" {
+		t.Fatalf("filtered tasks = %#v, want failed session task", got)
+	}
+
+	got = tracker.List(TrackListRequest{Limit: 1})
+	if len(got) != 1 {
+		t.Fatalf("limit result = %#v, want 1 task", got)
+	}
+}
+
+func TestTrackerListReturnsCopies(t *testing.T) {
+	tracker := NewTracker()
+	tracker.Create(TrackCreateRequest{ID: "task-1", Steps: []string{"download_audio"}})
+
+	got := tracker.List(TrackListRequest{Limit: 1})
+	if len(got) != 1 {
+		t.Fatalf("listed tasks = %#v, want 1 task", got)
+	}
+	got[0].Steps[0].Status = StatusFailed
+
+	again, ok := tracker.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to be queryable")
+	}
+	if again.Steps[0].Status != StatusPending {
+		t.Fatalf("tracker leaked mutable listed steps: %#v", again.Steps)
+	}
+}
+
+func TestNormalizeTaskListLimit(t *testing.T) {
+	if got := normalizeTaskListLimit(0); got != defaultTaskListLimit {
+		t.Fatalf("default limit = %d, want %d", got, defaultTaskListLimit)
+	}
+	if got := normalizeTaskListLimit(maxTaskListLimit + 1); got != maxTaskListLimit {
+		t.Fatalf("max limit = %d, want %d", got, maxTaskListLimit)
+	}
+	if got := normalizeTaskListLimit(7); got != 7 {
+		t.Fatalf("limit = %d, want 7", got)
+	}
+}
