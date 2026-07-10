@@ -45,6 +45,14 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 			"capabilities": caps.Map(),
 		})
 	})
+	e.GET("/ready", func(c *gin.Context) {
+		readiness := caps.Readiness(capability.RAG, capability.LLM)
+		status := http.StatusOK
+		if !readiness.Ready {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, readiness)
+	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
 

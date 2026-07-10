@@ -98,6 +98,55 @@ func TestSnapshotMapUsesStableStringKeys(t *testing.T) {
 	}
 }
 
+func TestReadinessAllowsDegradedRequiredCapabilities(t *testing.T) {
+	snapshot := FromRuntime(RuntimeDeps{
+		VectorStore:      true,
+		VectorCollection: true,
+		Embedding:        true,
+		Rerank:           false,
+		LLMConfig:        llmConfig(true, "qwen"),
+	})
+
+	got := snapshot.Readiness(RAG, LLM)
+
+	if !got.Ready {
+		t.Fatalf("expected degraded RAG to be ready, got %#v", got)
+	}
+	if got.Status != Available {
+		t.Fatalf("status = %q, want available", got.Status)
+	}
+	if len(got.Required) != 2 {
+		t.Fatalf("required = %#v, want RAG and LLM", got.Required)
+	}
+	if len(got.Blocking) != 0 {
+		t.Fatalf("blocking = %#v, want none", got.Blocking)
+	}
+}
+
+func TestReadinessReportsBlockingCapabilities(t *testing.T) {
+	snapshot := FromRuntime(RuntimeDeps{
+		VectorStore:      false,
+		VectorCollection: false,
+		Embedding:        false,
+		LLMConfig:        llmConfig(true, "qwen"),
+	})
+
+	got := snapshot.Readiness(RAG, LLM)
+
+	if got.Ready {
+		t.Fatalf("expected readiness failure, got %#v", got)
+	}
+	if got.Status != Unavailable {
+		t.Fatalf("status = %q, want unavailable", got.Status)
+	}
+	if len(got.Blocking) != 1 || got.Blocking[0].Name != RAG {
+		t.Fatalf("blocking = %#v, want RAG", got.Blocking)
+	}
+	if got.Blocking[0].Reason == "" {
+		t.Fatalf("expected blocking reason, got %#v", got.Blocking[0])
+	}
+}
+
 func TestFromRuntimeMarksExternalModelServices(t *testing.T) {
 	snapshot := FromRuntime(RuntimeDeps{
 		ASR:          true,

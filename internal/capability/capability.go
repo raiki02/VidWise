@@ -39,6 +39,14 @@ type Capability struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Readiness is the deployment readiness view for required capabilities.
+type Readiness struct {
+	Ready    bool         `json:"ready"`
+	Status   Status       `json:"status"`
+	Required []Capability `json:"required"`
+	Blocking []Capability `json:"blocking,omitempty"`
+}
+
 // Snapshot is an immutable capability view for the current gateway process.
 type Snapshot struct {
 	items map[Name]Capability
@@ -130,6 +138,25 @@ func (s Snapshot) Available(name Name) bool {
 func (s Snapshot) Usable(name Name) bool {
 	status := s.Get(name).Status
 	return status == Available || status == Degraded
+}
+
+// Readiness evaluates the capabilities that must be usable before this process
+// should receive production traffic.
+func (s Snapshot) Readiness(required ...Name) Readiness {
+	out := Readiness{
+		Ready:  true,
+		Status: Available,
+	}
+	for _, name := range required {
+		c := s.Get(name)
+		out.Required = append(out.Required, c)
+		if c.Status == Unavailable {
+			out.Ready = false
+			out.Status = Unavailable
+			out.Blocking = append(out.Blocking, c)
+		}
+	}
+	return out
 }
 
 // LegacyStatus keeps existing health clients working: degraded still means

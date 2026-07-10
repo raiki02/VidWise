@@ -45,6 +45,66 @@ func TestHealthExposesCanonicalCapabilities(t *testing.T) {
 	}
 }
 
+func TestReadyReturnsOKWhenRequiredCapabilitiesAreUsable(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		testRouterRAGRuntime(),
+		nil,
+		nil,
+		testRouterCapabilities(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["ready"] != true {
+		t.Fatalf("expected ready=true, got %#v", out)
+	}
+}
+
+func TestReadyReturnsUnavailableWhenRAGIsBlocking(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		ragruntime.Runtime{},
+		nil,
+		nil,
+		capability.FromRuntime(capability.RuntimeDeps{
+			LLMConfig: testRouterConfig().LLM,
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["ready"] != false {
+		t.Fatalf("expected ready=false, got %#v", out)
+	}
+	blocking, ok := out["blocking"].([]any)
+	if !ok || len(blocking) == 0 {
+		t.Fatalf("expected blocking capabilities, got %#v", out)
+	}
+}
+
 func TestRAGHealthKeepsLegacyRAGAvailableWhenCanonicalRAGIsDegraded(t *testing.T) {
 	engine := Router(
 		testRouterConfig(),
