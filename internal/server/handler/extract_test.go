@@ -19,6 +19,7 @@ func TestUploadTextReturnsCapabilityWhenRAGUnavailable(t *testing.T) {
 	h := NewExtractHandler(appconfig.Config{}, nil, nil, capability.FromRuntime(capability.RuntimeDeps{}))
 
 	router := gin.New()
+	router.Use(testTraceIDMiddleware("trace-upload-1"))
 	router.POST("/upload", h.UploadText)
 
 	req := httptest.NewRequest(http.MethodPost, "/upload", nil)
@@ -43,6 +44,9 @@ func TestUploadTextReturnsCapabilityWhenRAGUnavailable(t *testing.T) {
 	}
 	if capabilityPayload["status"] != string(capability.Unavailable) {
 		t.Fatalf("expected unavailable RAG capability, got %#v", capabilityPayload)
+	}
+	if out["trace_id"] != "trace-upload-1" {
+		t.Fatalf("expected trace_id in capability error response, got %#v", out)
 	}
 }
 

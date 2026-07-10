@@ -16,7 +16,7 @@ func NewTaskHandler() *TaskHandler {
 func (h *TaskHandler) GetTask(c *gin.Context) {
 	taskID := c.Param("id")
 	if taskID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "task id is required"})
+		errorJSON(c, http.StatusBadRequest, "task id is required")
 		return
 	}
 

@@ -16,7 +16,7 @@ func NewSessionHandler() *SessionHandler {
 func (h *SessionHandler) GetSession(c *gin.Context) {
 	sessionID := c.Param("id")
 	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session id is required"})
+		errorJSON(c, http.StatusBadRequest, "session id is required")
 		return
 	}
 

@@ -108,14 +108,14 @@ type SessionDetail struct {
 func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	var req ChatQueryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
+		errorJSON(c, http.StatusBadRequest, "query is required")
 		return
 	}
 
 	ctx := c.Request.Context()
 	req.Query = strings.TrimSpace(req.Query)
 	if req.Query == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
+		errorJSON(c, http.StatusBadRequest, "query is required")
 		return
 	}
 	requestedSessionID := strings.TrimSpace(req.SessionID)
@@ -127,7 +127,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		s, err := h.repo.CreateSessionForUser(ctx, req.UserID, title)
 		if err != nil {
 			slog.Error("chat.create_session_failed", "err", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
+			errorJSON(c, http.StatusInternalServerError, "创建会话失败")
 			return
 		}
 		sessionID = s.ID
@@ -177,7 +177,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		SessionID: sessionID,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	chunks := turn.Chunks
@@ -286,7 +286,7 @@ func (h *ChatHandler) ListSessions(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取会话列表失败"})
+		errorJSON(c, http.StatusInternalServerError, "获取会话列表失败")
 		return
 	}
 	list := make([]SessionListItem, 0, len(sessions))
@@ -308,13 +308,13 @@ func (h *ChatHandler) GetSession(c *gin.Context) {
 
 	sessionID := c.Param("id")
 	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session id is required"})
+		errorJSON(c, http.StatusBadRequest, "session id is required")
 		return
 	}
 
 	session, err := h.repo.GetSession(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		errorJSON(c, http.StatusNotFound, "会话不存在")
 		return
 	}
 
@@ -340,7 +340,7 @@ func (h *ChatHandler) NewSession(c *gin.Context) {
 
 	s, err := h.repo.CreateSessionForUser(c.Request.Context(), req.UserID, "新对话")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
+		errorJSON(c, http.StatusInternalServerError, "创建会话失败")
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -376,20 +376,17 @@ type MemoryFactResponse struct {
 func (h *ChatHandler) GetUserFacts(c *gin.Context) {
 	userID := c.Query("user_id")
 	if userID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
+		errorJSON(c, http.StatusBadRequest, "user_id is required")
 		return
 	}
 	if !h.memoryStoreAvailable() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":      "memory service unavailable",
-			"capability": h.caps.Get(capability.MemoryStore),
-		})
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "memory service unavailable", gin.H{"capability": h.caps.Get(capability.MemoryStore)})
 		return
 	}
 
 	facts, err := h.memRepo.GetFactsByUser(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户画像失败"})
+		errorJSON(c, http.StatusInternalServerError, "获取用户画像失败")
 		return
 	}
 
@@ -416,10 +413,7 @@ func (h *ChatHandler) hasSessionStore(c *gin.Context) bool {
 		return true
 	}
 	capabilityStatus := h.caps.Get(capability.ChatSessionStore)
-	c.JSON(http.StatusServiceUnavailable, gin.H{
-		"error":      "chat session store unavailable",
-		"capability": capabilityStatus,
-	})
+	errorJSONWithFields(c, http.StatusServiceUnavailable, "chat session store unavailable", gin.H{"capability": capabilityStatus})
 	return false
 }
 

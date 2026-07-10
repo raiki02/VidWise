@@ -37,7 +37,7 @@ type VideoProcessResponse struct {
 func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	var req VideoProcessRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "url, name, and user_id are required"})
+		errorJSON(c, http.StatusBadRequest, "url, name, and user_id are required")
 		return
 	}
 

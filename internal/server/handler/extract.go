@@ -67,15 +67,12 @@ func NewExtractHandlerWithSourceManagerAndBackground(cfg appconfig.Config, regis
 func (h *ExtractHandler) Extract(c *gin.Context) {
 	req, err := bindExtractRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if cap, ok := h.unavailableExtractCapability(req.Type); ok {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":      extractCapabilityError(cap.Name),
-			"capability": cap,
-		})
+		errorJSONWithFields(c, http.StatusServiceUnavailable, extractCapabilityError(cap.Name), gin.H{"capability": cap})
 		return
 	}
 
@@ -84,7 +81,7 @@ func (h *ExtractHandler) Extract(c *gin.Context) {
 		defer cleanup()
 	}
 	if err != nil {
-		c.JSON(statusForExtractError(err), gin.H{"error": err.Error()})
+		errorJSON(c, statusForExtractError(err), err.Error())
 		return
 	}
 
@@ -152,26 +149,26 @@ func extractCapabilityError(name capability.Name) string {
 func (h *ExtractHandler) FormatText(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		errorJSON(c, http.StatusBadRequest, "file is required")
 		return
 	}
 
 	f, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot open uploaded file")
 		return
 	}
 	defer f.Close()
 
 	raw, err := io.ReadAll(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot read uploaded file")
 		return
 	}
 
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		errorJSON(c, http.StatusBadRequest, "file is empty")
 		return
 	}
 
@@ -182,7 +179,7 @@ func (h *ExtractHandler) FormatText(c *gin.Context) {
 
 	formatted, err := paragraph.FormatTextWithFormat(c.Request.Context(), text, sourceFormat, h.cfg.LLM)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -195,49 +192,44 @@ func (h *ExtractHandler) FormatText(c *gin.Context) {
 func (h *ExtractHandler) UploadText(c *gin.Context) {
 	// Check that RAG indexing is available
 	if !h.ragIndexingAvailable() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":      "RAG indexing is not available",
-			"capability": h.ragIndexingCapability(),
-		})
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG indexing is not available", gin.H{"capability": h.ragIndexingCapability()})
 		return
 	}
 
 	scope, err := strictRAGScopeFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		errorJSON(c, http.StatusBadRequest, "file is required")
 		return
 	}
 
 	// Check file size limit
 	if h.cfg.Upload.MaxFileBytes > 0 && file.Size > h.cfg.Upload.MaxFileBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-			"error": fmt.Sprintf("file too large: %d bytes, max %d bytes", file.Size, h.cfg.Upload.MaxFileBytes),
-		})
+		errorJSON(c, http.StatusRequestEntityTooLarge, fmt.Sprintf("file too large: %d bytes, max %d bytes", file.Size, h.cfg.Upload.MaxFileBytes))
 		return
 	}
 
 	f, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot open uploaded file")
 		return
 	}
 	defer f.Close()
 
 	raw, err := io.ReadAll(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot read uploaded file")
 		return
 	}
 
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		errorJSON(c, http.StatusBadRequest, "file is empty")
 		return
 	}
 
@@ -248,7 +240,7 @@ func (h *ExtractHandler) UploadText(c *gin.Context) {
 	}, h.indexOptions(), scope.UserID, scope.SessionID)
 	if err != nil {
 		slog.Error("upload.index_failed", "filename", file.Filename, "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("indexing failed: %v", err)})
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("indexing failed: %v", err))
 		return
 	}
 
@@ -265,22 +257,19 @@ func (h *ExtractHandler) UploadText(c *gin.Context) {
 
 func (h *ExtractHandler) DeleteRAGSource(c *gin.Context) {
 	if !h.ragIndexingAvailable() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":      "RAG indexing is not available",
-			"capability": h.ragIndexingCapability(),
-		})
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG indexing is not available", gin.H{"capability": h.ragIndexingCapability()})
 		return
 	}
 
 	sourceID := strings.TrimSpace(c.Param("source_id"))
 	if sourceID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "source_id is required"})
+		errorJSON(c, http.StatusBadRequest, "source_id is required")
 		return
 	}
 
 	filter, err := deleteFilterFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -291,7 +280,7 @@ func (h *ExtractHandler) DeleteRAGSource(c *gin.Context) {
 	result, err := h.sources.DeleteSourcesWithOptions(c.Request.Context(), deleteReq)
 	if err != nil {
 		slog.Error("rag.delete_source_failed", "source_id", sourceID, "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("delete source failed: %v", err)})
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("delete source failed: %v", err))
 		return
 	}
 
@@ -304,21 +293,18 @@ func (h *ExtractHandler) DeleteRAGSource(c *gin.Context) {
 
 func (h *ExtractHandler) ListRAGSources(c *gin.Context) {
 	if !h.ragCatalogAvailable() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":      "RAG source catalog is not available",
-			"capability": h.ragCatalogCapability(),
-		})
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG source catalog is not available", gin.H{"capability": h.ragCatalogCapability()})
 		return
 	}
 
 	filter, err := strictRAGFilterFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	limit, err := sourceListLimitFromRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -328,7 +314,7 @@ func (h *ExtractHandler) ListRAGSources(c *gin.Context) {
 	})
 	if err != nil {
 		slog.Error("rag.list_sources_failed", "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("list sources failed: %v", err)})
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("list sources failed: %v", err))
 		return
 	}
 

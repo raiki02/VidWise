@@ -54,6 +54,7 @@ func TestChatQueryReportsRetrievalStatusWhenRetrieverUnavailable(t *testing.T) {
 	h := NewChatHandler(nil, nil, nil, llmCfg, testCapabilities(llmCfg))
 
 	router := gin.New()
+	router.Use(testTraceIDMiddleware("trace-chat-1"))
 	router.POST("/chat/query", h.ChatQuery)
 
 	body := bytes.NewBufferString(`{"query":"视频里讲了什么？"}`)
@@ -180,6 +181,7 @@ func TestChatQueryRejectsWhitespaceQuery(t *testing.T) {
 	h := NewChatHandler(nil, nil, nil, llmCfg, testCapabilities(llmCfg))
 
 	router := gin.New()
+	router.Use(testTraceIDMiddleware("trace-chat-1"))
 	router.POST("/chat/query", h.ChatQuery)
 
 	body := bytes.NewBufferString(`{"query":"   "}`)
@@ -191,6 +193,20 @@ func TestChatQueryRejectsWhitespaceQuery(t *testing.T) {
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["trace_id"] != "trace-chat-1" {
+		t.Fatalf("expected trace_id in error response, got %#v", out)
+	}
+}
+
+func testTraceIDMiddleware(traceID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("trace_id", traceID)
+		c.Next()
 	}
 }
 
