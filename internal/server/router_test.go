@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,6 +193,31 @@ func TestRouterMountsTaskListRoute(t *testing.T) {
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected mounted route to return 400 from handler, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
+	raw, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index: %v", err)
+	}
+	body := string(raw)
+	for _, want := range []string{
+		"/chat/query",
+		"/video/process",
+		"/tasks?",
+		"/rag/sources?",
+		"/rag/source/",
+		"source_ids",
+		"document_ids",
+		"rag_answer_status",
+		"rag_context_chunks",
+		"data-nav=\"sources\"",
+		"id=\"task-list\"",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("static index missing %q", want)
+		}
 	}
 }
 

@@ -3,568 +3,935 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VidWise — RAG Chat</title>
+  <title>VidWise</title>
   <style>
     :root {
-      color-scheme: light dark;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: dark;
+      --bg: #101014;
+      --surface: #18181d;
+      --surface-2: #202027;
+      --line: #30303a;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --soft: #71717a;
+      --accent: #2dd4bf;
+      --accent-2: #38bdf8;
+      --warning: #f59e0b;
+      --danger: #f87171;
+      --ok: #22c55e;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #0f1115;
-      color: #e6e6e6;
-      display: flex;
-      height: 100vh;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      grid-template-columns: 288px minmax(0, 1fr);
       overflow: hidden;
     }
-
-    /* Sidebar */
-    aside {
-      width: 260px;
-      background: #171a21;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      border-right: 1px solid #2f3642;
-      flex-shrink: 0;
-    }
-    aside h2 { font-size: 18px; margin: 0 0 12px; }
-    aside .nav-item {
-      display: block;
-      padding: 10px 12px;
+    button, input, select, textarea { font: inherit; }
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
       border-radius: 8px;
-      color: #b0b8c4;
-      text-decoration: none;
-      font-size: 14px;
-      margin-bottom: 4px;
-      transition: background 0.15s;
-    }
-    aside .nav-item:hover, aside .nav-item.active { background: #2f3642; color: #fff; }
-    aside .nav-item.active { font-weight: 600; color: #3b82f6; }
-    aside hr { border: none; border-top: 1px solid #2f3642; margin: 16px 0; }
-
-    /* Sessions list */
-    #session-list { flex: 1; overflow-y: auto; margin: 0 -8px; padding: 0 8px; }
-    #session-list .sess {
-      padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 13px;
+      min-height: 36px;
+      padding: 0 12px;
       cursor: pointer;
-      margin-bottom: 2px;
-      color: #b0b8c4;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      transition: background 0.15s;
     }
-    #session-list .sess:hover { background: #2f3642; }
-    #session-list .sess.active { background: #2f3642; color: #fff; font-weight: 600; }
-    #session-list .sess .time { font-size: 11px; color: #666; display: block; }
-
-    aside .btn {
-      display: block;
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #042f2e; font-weight: 700; }
+    button.danger { border-color: rgba(248, 113, 113, .5); color: #fecaca; }
+    button.ghost { background: transparent; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    input, select, textarea {
       width: 100%;
-      padding: 8px;
+      border: 1px solid var(--line);
+      background: #111116;
+      color: var(--text);
       border-radius: 8px;
-      border: 1px solid #3b82f6;
-      background: transparent;
-      color: #3b82f6;
-      font-size: 13px;
-      cursor: pointer;
-      margin-top: 8px;
-      text-align: center;
+      padding: 9px 10px;
+      min-height: 38px;
     }
-    aside .btn:hover { background: #3b82f6; color: #fff; }
-    aside .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-    aside .status-dot.ok { background: #22c55e; }
-    aside .status-dot.err { background: #ef4444; }
-    aside .config-row { font-size: 12px; color: #98a2b3; margin-bottom: 8px; }
-
-    /* Main chat area */
+    textarea { resize: vertical; line-height: 1.5; }
+    label { display: block; color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+    aside {
+      min-height: 100vh;
+      background: #151519;
+      border-right: 1px solid var(--line);
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .brand h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
+    .health-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--soft); display: inline-block; }
+    .health-dot.ok { background: var(--ok); }
+    .health-dot.warn { background: var(--warning); }
+    .health-dot.err { background: var(--danger); }
+    nav { display: grid; gap: 4px; margin-bottom: 16px; }
+    .nav-item {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      border-radius: 8px;
+      min-height: 38px;
+      padding: 0 10px;
+    }
+    .nav-item.active { background: var(--surface-2); color: var(--text); }
+    .side-section { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; display: grid; gap: 10px; }
+    .side-title { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .row > * { min-width: 0; }
+    .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill.ok { color: #bbf7d0; border-color: rgba(34, 197, 94, .45); }
+    .pill.warn { color: #fde68a; border-color: rgba(245, 158, 11, .45); }
+    .pill.err { color: #fecaca; border-color: rgba(248, 113, 113, .45); }
     .main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
       min-width: 0;
-      min-height: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
     }
     header {
-      padding: 16px 24px;
-      border-bottom: 1px solid #2f3642;
-      font-weight: 600;
-      font-size: 16px;
-      flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+      padding: 14px 20px;
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: rgba(16, 16, 20, .96);
     }
-
-    #tab-chat { flex:1; display:flex; flex-direction:column; min-height:0; }
-    #tab-extract, #tab-format { display:none; flex:1; overflow-y:auto; padding:24px; }
-
-    /* Messages */
+    header h2 { margin: 0; font-size: 16px; }
+    .header-meta { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .workspace { min-height: 0; overflow: hidden; }
+    .tab {
+      height: 100%;
+      display: none;
+      min-height: 0;
+      overflow: auto;
+      padding: 20px;
+    }
+    .tab.active { display: block; }
+    .grid-2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, .8fr); gap: 16px; align-items: start; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .panel h3 { margin: 0 0 14px; font-size: 15px; }
+    .panel + .panel { margin-top: 16px; }
+    .form-grid { display: grid; gap: 14px; }
+    .status-box {
+      background: #111116;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 40px;
+      padding: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
     #messages {
-      flex: 1;
+      height: calc(100vh - 174px);
+      min-height: 360px;
       overflow-y: auto;
-      padding: 20px 24px;
+      padding-right: 4px;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
     }
-    .msg {
-      max-width: 80%;
-      padding: 12px 16px;
-      border-radius: 12px;
-      font-size: 14px;
+    .message {
+      max-width: min(860px, 92%);
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
       line-height: 1.6;
+      font-size: 14px;
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .msg.user { align-self: flex-end; background: #3b82f6; color: #fff; }
-    .msg.assistant { align-self: flex-start; background: #1e2430; border: 1px solid #2f3642; }
-    .msg .sources { margin-top: 10px; font-size: 12px; color: #98a2b3; border-top: 1px solid #2f3642; padding-top: 8px; }
-    .msg .sources details { cursor: pointer; }
-    .msg .sources summary { font-weight: 600; margin-bottom: 4px; }
-    .msg .sources .chunk {
-      margin-bottom: 6px; padding: 6px 8px; background: #0f1115; border-radius: 6px; font-size: 12px;
+    .message.user { align-self: flex-end; background: #12313a; border-color: rgba(45, 212, 191, .35); }
+    .message.assistant { align-self: flex-start; background: var(--surface); }
+    .message .meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    details { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+    summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+    .chunk {
+      margin-top: 8px;
+      padding: 8px;
+      background: #111116;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 12px;
+      color: #d4d4d8;
+      line-height: 1.5;
     }
-
-    /* Input */
-    .input-area {
-      padding: 12px 24px 20px;
-      border-top: 1px solid #2f3642;
-      display: flex;
+    .chat-input {
+      border-top: 1px solid var(--line);
+      margin-top: 12px;
+      padding-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
-      flex-shrink: 0;
     }
-    .input-area textarea {
-      flex: 1;
-      padding: 10px 14px;
-      border-radius: 12px;
-      border: 1px solid #2f3642;
-      background: #171a21;
-      color: #e6e6e6;
-      font-size: 14px;
-      resize: none;
-      min-height: 44px;
-      max-height: 120px;
-      font-family: inherit;
-    }
-    .input-area button {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 12px;
-      background: #3b82f6;
-      color: #fff;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .input-area button:disabled { opacity: 0.6; cursor: not-allowed; }
-
-    /* Loading */
-    .typing::after { content: ""; animation: dots 1.5s steps(4, end) infinite; }
-    @keyframes dots {
-      0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } 100% { content: ""; }
-    }
-
-    /* Toast */
-    .toast {
-      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-      padding: 10px 20px; border-radius: 8px; font-size: 14px; z-index: 999;
-      background: #171a21; border: 1px solid #2f3642; color: #e6e6e6;
-      animation: fadeIn 0.2s ease;
-    }
-    .toast.error { border-color: #ef4444; color: #fca5a5; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-
-    @media (max-width: 640px) {
-      body { flex-direction: column; }
-      aside { width: 100%; border-right: none; border-bottom: 1px solid #2f3642; padding: 12px; }
-      .msg { max-width: 95%; }
+    .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .table th, .table td { border-bottom: 1px solid var(--line); padding: 9px 8px; text-align: left; vertical-align: top; }
+    .table th { color: var(--muted); font-size: 12px; }
+    .id { color: var(--soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .task { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #111116; }
+    .steps { display: grid; gap: 6px; margin-top: 8px; }
+    .step { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .hidden { display: none !important; }
+    @media (max-width: 860px) {
+      body { grid-template-columns: 1fr; overflow: auto; }
+      aside { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .main { min-height: auto; }
+      .grid-2 { grid-template-columns: 1fr; }
+      #messages { height: 52vh; }
+      .chat-input { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
     }
   </style>
 </head>
 <body>
-
-<aside>
-  <h2>VidWise</h2>
-  <a class="nav-item active" href="#" onclick="switchTab('chat', this)">RAG 知识库问答</a>
-  <a class="nav-item" href="#" onclick="switchTab('extract', this)">视频提取</a>
-  <a class="nav-item" href="#" onclick="switchTab('format', this)">文本格式化</a>
-  <a class="nav-item" href="#" onclick="switchTab('upload', this)">知识库上传</a>
-
-  <hr>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <span style="font-size:13px;font-weight:600;color:#98a2b3;">历史会话</span>
-    <button class="btn" style="width:auto;margin:0;padding:4px 12px;font-size:12px;" onclick="newChat()">+ 新对话</button>
-  </div>
-  <div id="session-list"></div>
-
-  <hr>
-  <div class="config-row">
-    <span class="status-dot" id="rag-status-dot"></span>
-    <span id="rag-status-text">检测中...</span>
-  </div>
-</aside>
-
-<div class="main">
-  <header id="chat-header">RAG 知识库问答</header>
-
-  <!-- Chat tab -->
-  <div id="tab-chat">
-    <div id="messages">
-      <div class="msg assistant">
-        👋 你好！这是你的视频知识库问答助手。<br><br>
-        <strong>使用步骤：</strong><br>
-        1. 在"视频提取"页面上传视频获取文本并索引到知识库<br>
-        2. 点击左侧"新对话"开始聊天<br>
-        3. 提出你的问题，我会从知识库中检索相关内容并结合对话历史回答<br>
-        <br>
-        对话会自动保存，左侧可以切换历史会话。
-      </div>
+  <aside>
+    <div class="brand">
+      <h1>VidWise</h1>
+      <span id="ready-dot" class="health-dot"></span>
     </div>
-    <div class="input-area">
-      <textarea id="chat-input" placeholder="输入你的问题..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-      <button id="send-btn" onclick="sendMessage()">发送</button>
+    <nav>
+      <button class="nav-item active" data-nav="chat" type="button">Agent 问答</button>
+      <button class="nav-item" data-nav="video" type="button">视频任务</button>
+      <button class="nav-item" data-nav="sources" type="button">知识库</button>
+      <button class="nav-item" data-nav="upload" type="button">上传索引</button>
+      <button class="nav-item" data-nav="format" type="button">文本格式化</button>
+      <button class="nav-item" data-nav="tasks" type="button">任务列表</button>
+    </nav>
+
+    <section class="side-section">
+      <div class="side-title">Scope</div>
+      <div>
+        <label for="scope-user">User ID</label>
+        <input id="scope-user" autocomplete="off" placeholder="u1" />
+      </div>
+      <div>
+        <label for="scope-session">Session ID</label>
+        <input id="scope-session" autocomplete="off" placeholder="自动或手动填写" />
+      </div>
+      <div class="row">
+        <button id="save-scope" class="primary" type="button">保存</button>
+        <button id="new-session" type="button">新对话</button>
+      </div>
+    </section>
+
+    <section class="side-section">
+      <div class="side-title">Runtime</div>
+      <div class="row"><span id="rag-dot" class="health-dot"></span><span id="rag-status" class="small muted">RAG 检测中</span></div>
+      <div class="row"><span id="llm-dot" class="health-dot"></span><span id="llm-status" class="small muted">LLM 检测中</span></div>
+      <button id="refresh-runtime" type="button">刷新状态</button>
+    </section>
+
+    <section class="side-section">
+      <div class="side-title">Sessions</div>
+      <div id="session-list" class="small muted"></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <header>
+      <h2 id="page-title">Agent 问答</h2>
+      <div class="header-meta">
+        <span id="scope-pill" class="pill">scope 未保存</span>
+        <span id="source-pill" class="pill">0 sources</span>
+        <span id="task-pill" class="pill">0 tasks</span>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <section id="tab-chat" class="tab active">
+        <div class="grid-2">
+          <div class="panel">
+            <div id="messages">
+              <div class="message assistant">RAG Agent 已就绪。</div>
+            </div>
+            <div class="chat-input">
+              <textarea id="chat-input" rows="2" placeholder="输入问题，Shift+Enter 换行"></textarea>
+              <button id="send-chat" class="primary" type="button">发送</button>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <h3>检索范围</h3>
+              <div id="selected-source-list" class="status-box">未选择 source 时使用当前 scope 下的知识库。</div>
+              <div style="margin-top:12px;">
+                <label for="document-filter">Document IDs</label>
+                <input id="document-filter" placeholder="doc-1, doc-2" />
+              </div>
+              <div class="row" style="margin-top:12px;">
+                <button id="reload-chat-sources" type="button">刷新 sources</button>
+                <button id="clear-source-filter" type="button">清空选择</button>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>最近一次回答</h3>
+              <div id="rag-diagnostics" class="status-box">暂无 RAG 诊断。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-video" class="tab">
+        <div class="grid-2">
+          <form id="video-form" class="panel form-grid">
+            <h3>异步视频处理</h3>
+            <div>
+              <label for="video-url">视频 URL</label>
+              <input id="video-url" placeholder="https://example.com/video" />
+            </div>
+            <div class="split">
+              <div>
+                <label for="video-name">名称</label>
+                <input id="video-name" placeholder="demo" />
+              </div>
+              <div>
+                <label for="video-language">语言</label>
+                <select id="video-language">
+                  <option value="zh">zh</option>
+                  <option value="en">en</option>
+                  <option value="auto">auto</option>
+                </select>
+              </div>
+            </div>
+            <button class="primary" type="submit">启动任务</button>
+            <div id="video-status" class="status-box"></div>
+          </form>
+          <div class="panel">
+            <h3>当前任务</h3>
+            <div id="active-task" class="status-box">暂无任务。</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-sources" class="tab">
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+            <h3 style="margin:0;">知识库 Sources</h3>
+            <button id="reload-sources" type="button">刷新</button>
+          </div>
+          <div id="source-status" class="status-box" style="margin-bottom:12px;"></div>
+          <div style="overflow:auto;">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>选择</th>
+                  <th>Source</th>
+                  <th>类型</th>
+                  <th>Chunks</th>
+                  <th>Scope</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="source-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-upload" class="tab">
+        <form id="upload-form" class="panel form-grid">
+          <h3>上传并索引</h3>
+          <div>
+            <label for="upload-file">文本或 Markdown 文件</label>
+            <input id="upload-file" type="file" accept=".txt,.md,.markdown,.srt,.csv,text/plain,text/markdown,text/csv" />
+          </div>
+          <button class="primary" type="submit">上传</button>
+          <div id="upload-status" class="status-box"></div>
+        </form>
+      </section>
+
+      <section id="tab-format" class="tab">
+        <form id="format-form" class="panel form-grid">
+          <h3>文本格式化</h3>
+          <div>
+            <label for="format-file">文本或 Markdown 文件</label>
+            <input id="format-file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" />
+          </div>
+          <button class="primary" type="submit">格式化并下载</button>
+          <div id="format-status" class="status-box"></div>
+        </form>
+      </section>
+
+      <section id="tab-tasks" class="tab">
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+            <h3 style="margin:0;">任务列表</h3>
+            <button id="reload-tasks" type="button">刷新</button>
+          </div>
+          <div id="task-status" class="status-box" style="margin-bottom:12px;"></div>
+          <div id="task-list"></div>
+        </div>
+      </section>
     </div>
-  </div>
+  </main>
 
-  <!-- Extract tab -->
-  <div id="tab-extract">
-    <form id="extract-form" style="display:grid;gap:16px;background:#171a21;border-radius:12px;padding:20px;max-width:600px;">
-      <div>
-        <label style="font-weight:600;">视频 URL</label>
-        <input id="extract-url" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;" placeholder="https://example.com/video" />
-      </div>
-      <div style="display:grid;gap:16px;grid-template-columns:1fr 1fr;">
-        <div>
-          <label style="font-weight:600;">名称</label>
-          <input id="extract-name" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;" placeholder="demo" />
-        </div>
-        <div>
-          <label style="font-weight:600;">类型</label>
-          <select id="extract-type" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;">
-            <option value="text">text (txt)</option>
-            <option value="audio">audio (mp3)</option>
-            <option value="video">video (mp4)</option>
-            <option value="summary">summary (txt)</option>
-          </select>
-        </div>
-      </div>
-      <button type="submit" style="padding:12px;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">提取</button>
-      <div id="extract-status" style="padding:10px;border-radius:8px;background:#10131a;min-height:20px;font-size:14px;"></div>
-    </form>
-  </div>
+  <script>
+    const state = {
+      tab: "chat",
+      userId: localStorage.getItem("vidwise.user_id") || "u1",
+      sessionId: localStorage.getItem("vidwise.session_id") || "",
+      selectedSourceIds: new Set(JSON.parse(localStorage.getItem("vidwise.selected_source_ids") || "[]")),
+      sources: [],
+      activeTaskId: "",
+      pollTimer: 0,
+    };
 
-  <!-- Format tab -->
-  <div id="tab-format">
-    <form id="format-form" style="display:grid;gap:16px;background:#171a21;border-radius:12px;padding:20px;max-width:600px;">
-      <div>
-        <label style="font-weight:600;">文本文件 (.txt, .md)</label>
-        <input id="format-file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;" />
-      </div>
-      <button type="submit" style="padding:12px;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">格式化</button>
-      <div id="format-status" style="padding:10px;border-radius:8px;background:#10131a;min-height:20px;font-size:14px;"></div>
-    </form>
-  </div>
+    const titles = {
+      chat: "Agent 问答",
+      video: "视频任务",
+      sources: "知识库",
+      upload: "上传索引",
+      format: "文本格式化",
+      tasks: "任务列表",
+    };
 
-  <!-- Upload tab -->
-  <div id="tab-upload">
-    <form id="upload-form" style="display:grid;gap:16px;background:#171a21;border-radius:12px;padding:20px;max-width:600px;">
-      <div>
-        <label style="font-weight:600;">文本文件 (.txt, .md, .srt, .csv)</label>
-        <input id="upload-file" type="file" accept=".txt,.md,.srt,.csv,text/plain,text/markdown,text/csv" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2f3642;background:#0f1115;color:#e6e6e6;font-size:14px;box-sizing:border-box;" />
-        <p style="font-size:12px;color:#98a2b3;margin:6px 0 0;">上传文本文件内容，将自动分块 (chunk) 并存入向量知识库，用于后续 RAG 问答检索。</p>
-      </div>
-      <button type="submit" style="padding:12px;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">上传并索引</button>
-      <div id="upload-status" style="padding:10px;border-radius:8px;background:#10131a;min-height:20px;font-size:14px;"></div>
-    </form>
-  </div>
-</div>
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-<script>
-// --- State ---
-let currentSessionId = "";
-let sessionMessages = [];
-
-// --- Helpers ---
-function $$(sel) { return document.querySelector(sel); }
-function toast(msg, kind) {
-  const el = document.createElement("div");
-  el.className = "toast" + (kind === "error" ? " error" : "");
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
-function escHtml(s) {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
-}
-
-// --- Navigation ---
-function switchTab(tab, link) {
-  ["tab-chat", "tab-extract", "tab-format", "tab-upload"].forEach(id => {
-    $$("#" + id).style.display = id === "tab-" + tab ? "flex" : "none";
-  });
-  document.querySelectorAll(".nav-item").forEach(a => a.classList.remove("active"));
-  if (link) link.classList.add("active");
-  $$("#chat-header").textContent =
-    tab === "chat" ? (currentSessionId ? "对话中" : "RAG 知识库问答") :
-    tab === "extract" ? "视频提取" :
-    tab === "upload" ? "知识库上传" : "文本格式化";
-}
-async function loadSessions() {
-  try {
-    const resp = await fetch("/chat/sessions");
-    const data = await resp.json();
-    const list = $$("#session-list");
-    list.innerHTML = "";
-    (data.sessions || []).forEach(s => {
+    function esc(value) {
       const div = document.createElement("div");
-      div.className = "sess" + (s.id === currentSessionId ? " active" : "");
-      div.innerHTML = `${escHtml(s.title || "新对话")}<span class="time">${escHtml(s.updated_at || "")}</span>`;
-      div.onclick = () => openSession(s.id);
-      list.appendChild(div);
-    });
-  } catch (err) {
-    console.error("loadSessions:", err);
-  }
-}
-
-async function openSession(id) {
-  currentSessionId = id;
-  try {
-    const resp = await fetch("/chat/session/" + id);
-    const data = await resp.json();
-    sessionMessages = data.messages || [];
-    renderMessages();
-    loadSessions();
-    $$("#chat-header").textContent = data.title || "对话中";
-  } catch (err) {
-    toast("加载会话失败", "error");
-  }
-}
-
-async function newChat() {
-  currentSessionId = "";
-  sessionMessages = [];
-  $$("#messages").innerHTML = `<div class="msg assistant">🆕 新对话已创建。输入你的第一个问题开始聊天。</div>`;
-  $$("#chat-header").textContent = "新对话";
-  $$("#chat-input").focus();
-  loadSessions();
-}
-
-function renderMessages() {
-  const container = $$("#messages");
-  container.innerHTML = "";
-  if (sessionMessages.length === 0) {
-    container.innerHTML = `<div class="msg assistant">👋 这个会话还没有消息。输入问题开始吧。</div>`;
-    return;
-  }
-  for (const m of sessionMessages) {
-    const div = document.createElement("div");
-    div.className = "msg " + (m.role === "user" ? "user" : "assistant");
-    div.textContent = m.content;
-    container.appendChild(div);
-  }
-  container.scrollTop = container.scrollHeight;
-}
-
-// --- Send Message ---
-async function sendMessage() {
-  const input = $$("#chat-input");
-  const query = input.value.trim();
-  if (!query) return;
-
-  const messages = $$("#messages");
-  const sendBtn = $$("#send-btn");
-
-  // Add user message
-  const userDiv = document.createElement("div");
-  userDiv.className = "msg user";
-  userDiv.textContent = query;
-  messages.appendChild(userDiv);
-
-  input.value = "";
-  input.style.height = "auto";
-
-  // Add placeholder
-  const placeholder = document.createElement("div");
-  placeholder.className = "msg assistant typing";
-  placeholder.innerHTML = "思考中<span class='typing'></span>";
-  messages.appendChild(placeholder);
-  messages.scrollTop = messages.scrollHeight;
-
-  sendBtn.disabled = true;
-
-  try {
-    const body = { query: query };
-    if (currentSessionId) body.session_id = currentSessionId;
-
-    const resp = await fetch("/chat/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      placeholder.innerHTML = `❌ 错误: ${escHtml(data.error || "Unknown error")}`;
-      toast(data.error || "请求失败", "error");
-      return;
+      div.textContent = value == null ? "" : String(value);
+      return div.innerHTML;
     }
 
-    // Update session ID if newly created
-    if (data.session_id && !currentSessionId) {
-      currentSessionId = data.session_id;
-      $$("#chat-header").textContent = "新对话";
+    function compactId(value) {
+      value = String(value || "");
+      return value.length > 18 ? value.slice(0, 8) + "..." + value.slice(-6) : value;
     }
 
-    let html = escHtml(data.answer || "无回答");
-    if (data.chunks && data.chunks.length > 0) {
-      html += `<div class="sources"><details><summary>📎 检索到的知识库片段 (${data.chunks.length})</summary>`;
-      data.chunks.forEach((c, i) => {
-        const source = [c.source_name, c.heading_path, c.source_url, c.task_id ? `task:${c.task_id}` : ""].filter(Boolean).join(" / ");
-        const sourceHtml = source ? `<br><span style="color:#98a2b3;">${escHtml(source)}</span>` : "";
-        html += `<div class="chunk"><strong>#${i+1}</strong> (相关度 ${c.score?.toFixed(3) || "-"})${sourceHtml}<br>${escHtml(c.text?.substring(0, 200) || "")}${c.text?.length > 200 ? "..." : ""}</div>`;
+    function statusClass(status) {
+      if (["available", "ok", "done", "grounded"].includes(status)) return "ok";
+      if (["degraded", "running", "pending", "missing_citations"].includes(status)) return "warn";
+      if (["unavailable", "failed", "insufficient_context"].includes(status)) return "err";
+      return "";
+    }
+
+    function saveScope() {
+      state.userId = $("#scope-user").value.trim();
+      state.sessionId = $("#scope-session").value.trim();
+      localStorage.setItem("vidwise.user_id", state.userId);
+      localStorage.setItem("vidwise.session_id", state.sessionId);
+      updateScopeUI();
+      refreshScopedData();
+    }
+
+    function updateScopeUI() {
+      $("#scope-user").value = state.userId;
+      $("#scope-session").value = state.sessionId;
+      $("#scope-pill").textContent = state.userId ? `user:${state.userId}` : (state.sessionId ? `session:${compactId(state.sessionId)}` : "scope 未保存");
+      $("#scope-pill").className = "pill" + (state.userId || state.sessionId ? " ok" : " warn");
+      $("#source-pill").textContent = `${state.selectedSourceIds.size} sources`;
+      $("#task-pill").textContent = state.activeTaskId ? `task:${compactId(state.activeTaskId)}` : "0 tasks";
+      renderSelectedSources();
+    }
+
+    function scopeParams() {
+      const params = new URLSearchParams();
+      if (state.userId) params.set("user_id", state.userId);
+      if (state.sessionId) params.set("session_id", state.sessionId);
+      return params;
+    }
+
+    function appendScopeToFormData(fd) {
+      if (state.userId) fd.append("user_id", state.userId);
+      if (state.sessionId) fd.append("session_id", state.sessionId);
+    }
+
+    function requireScope(target) {
+      if (state.userId || state.sessionId) return true;
+      target.textContent = "请先保存 User ID 或 Session ID。";
+      target.style.color = "var(--danger)";
+      return false;
+    }
+
+    function switchTab(tab) {
+      state.tab = tab;
+      $$(".tab").forEach((el) => el.classList.toggle("active", el.id === `tab-${tab}`));
+      $$(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.nav === tab));
+      $("#page-title").textContent = titles[tab] || "VidWise";
+      if (tab === "sources") loadSources();
+      if (tab === "tasks") loadTasks();
+      if (tab === "chat") renderSelectedSources();
+    }
+
+    async function fetchJSON(url, options) {
+      const resp = await fetch(url, options);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
+      return data;
+    }
+
+    async function loadRuntime() {
+      try {
+        const ready = await fetchJSON("/ready");
+        $("#ready-dot").className = "health-dot " + (ready.ready ? "ok" : "err");
+      } catch {
+        $("#ready-dot").className = "health-dot err";
+      }
+      try {
+        const health = await fetchJSON("/rag/health");
+        setRuntimeChip("rag", health.rag, "RAG");
+        const llmStatus = health.llm_status || (health.llm ? "available" : "unavailable");
+        setRuntimeChip("llm", llmStatus, "LLM");
+      } catch (err) {
+        setRuntimeChip("rag", "unavailable", "RAG");
+        setRuntimeChip("llm", "unavailable", "LLM");
+      }
+    }
+
+    function setRuntimeChip(name, status, label) {
+      $(`#${name}-dot`).className = `health-dot ${statusClass(status)}`;
+      $(`#${name}-status`).textContent = `${label} ${status || "unknown"}`;
+    }
+
+    async function loadSessions() {
+      const list = $("#session-list");
+      try {
+        const params = new URLSearchParams();
+        if (state.userId) params.set("user_id", state.userId);
+        const data = await fetchJSON("/chat/sessions" + (params.toString() ? `?${params}` : ""));
+        list.innerHTML = "";
+        (data.sessions || []).forEach((session) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "nav-item";
+          btn.textContent = session.title || session.id;
+          btn.title = session.id;
+          btn.onclick = () => openSession(session.id);
+          list.appendChild(btn);
+        });
+        if (!list.innerHTML) list.textContent = "暂无会话。";
+      } catch {
+        list.textContent = "会话存储不可用。";
+      }
+    }
+
+    async function openSession(id) {
+      try {
+        const data = await fetchJSON(`/chat/session/${encodeURIComponent(id)}`);
+        state.sessionId = data.id || id;
+        localStorage.setItem("vidwise.session_id", state.sessionId);
+        updateScopeUI();
+        $("#messages").innerHTML = "";
+        (data.messages || []).forEach((msg) => addMessage(msg.role, msg.content));
+        switchTab("chat");
+      } catch (err) {
+        addMessage("assistant", `加载会话失败：${err.message}`);
+      }
+    }
+
+    function newSession() {
+      state.sessionId = "";
+      localStorage.setItem("vidwise.session_id", "");
+      updateScopeUI();
+      $("#messages").innerHTML = "";
+      addMessage("assistant", "新对话已就绪。");
+      switchTab("chat");
+    }
+
+    function addMessage(role, text, metaHTML) {
+      const box = document.createElement("div");
+      box.className = `message ${role === "user" ? "user" : "assistant"}`;
+      box.innerHTML = esc(text || "");
+      if (metaHTML) box.innerHTML += metaHTML;
+      $("#messages").appendChild(box);
+      $("#messages").scrollTop = $("#messages").scrollHeight;
+      return box;
+    }
+
+    function documentFilters() {
+      return $("#document-filter").value.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+
+    async function sendChat() {
+      const input = $("#chat-input");
+      const query = input.value.trim();
+      if (!query) return;
+      addMessage("user", query);
+      input.value = "";
+      const placeholder = addMessage("assistant", "请求中...");
+      $("#send-chat").disabled = true;
+      try {
+        const body = {
+          query,
+          user_id: state.userId,
+          session_id: state.sessionId,
+          source_ids: Array.from(state.selectedSourceIds),
+          document_ids: documentFilters(),
+        };
+        const data = await fetchJSON("/chat/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (data.session_id) {
+          state.sessionId = data.session_id;
+          localStorage.setItem("vidwise.session_id", state.sessionId);
+          updateScopeUI();
+        }
+        placeholder.innerHTML = esc(data.answer || "");
+        placeholder.innerHTML += renderAnswerMeta(data);
+        $("#rag-diagnostics").innerHTML = renderDiagnostics(data);
+        await loadSessions();
+      } catch (err) {
+        placeholder.innerHTML = esc(`请求失败：${err.message}`);
+      } finally {
+        $("#send-chat").disabled = false;
+      }
+    }
+
+    function renderAnswerMeta(data) {
+      const status = data.rag_answer_status || data.rag_status || "not_applicable";
+      const chunks = data.rag_context_chunks || [];
+      let html = `<div class="meta">`;
+      html += `<span class="pill ${statusClass(status)}">answer:${esc(status)}</span>`;
+      html += `<span class="pill">retrieval:${esc(data.rag_status || "-")}</span>`;
+      html += `<span class="pill">used:${data.rag_context_used_chunks || 0}</span>`;
+      html += `</div>`;
+      if (chunks.length) {
+        html += `<details><summary>Prompt 片段 ${chunks.length}</summary>`;
+        chunks.forEach((chunk) => {
+          html += renderChunk(chunk, chunk.snippet_number || "");
+        });
+        html += `</details>`;
+      }
+      if ((data.chunks || []).length) {
+        html += `<details><summary>检索结果 ${(data.chunks || []).length}</summary>`;
+        (data.chunks || []).forEach((chunk, index) => {
+          html += renderChunk(chunk, index + 1);
+        });
+        html += `</details>`;
+      }
+      return html;
+    }
+
+    function renderChunk(chunk, index) {
+      const source = [chunk.source_name, chunk.heading_path, chunk.document_title, chunk.source_url].filter(Boolean).join(" / ");
+      const text = String(chunk.text || "");
+      return `<div class="chunk"><strong>${index ? "#" + esc(index) : "chunk"}</strong> <span class="muted">${esc(source)}</span><br>${esc(text.slice(0, 420))}${text.length > 420 ? "..." : ""}</div>`;
+    }
+
+    function renderDiagnostics(data) {
+      const cited = (data.rag_answer_cited_snippets || []).join(", ") || "-";
+      const invalid = (data.rag_answer_invalid_snippets || []).join(", ") || "-";
+      const queries = (data.rag_queries || []).join(" | ") || data.rag_query || "-";
+      return [
+        `RAG: ${esc(data.rag_status || "-")}`,
+        `answer: ${esc(data.rag_answer_status || "-")}`,
+        `query: ${esc(queries)}`,
+        `chunks: retrieved ${data.rag_chunk_count || 0}, used ${data.rag_context_used_chunks || 0}, duplicates ${data.rag_context_skipped_duplicates || 0}`,
+        `citations: ${esc(cited)}, invalid ${esc(invalid)}`,
+        `trace: ${esc(data.trace_id || "-")}`,
+      ].join("<br>");
+    }
+
+    async function loadSources() {
+      const status = $("#source-status");
+      const table = $("#source-table");
+      table.innerHTML = "";
+      if (!requireScope(status)) return;
+      status.textContent = "加载中...";
+      try {
+        const params = scopeParams();
+        params.set("limit", "50");
+        const data = await fetchJSON(`/rag/sources?${params}`);
+        state.sources = data.sources || [];
+        state.selectedSourceIds.forEach((id) => {
+          if (!state.sources.some((source) => source.source_id === id)) state.selectedSourceIds.delete(id);
+        });
+        persistSelectedSources();
+        renderSources();
+        status.textContent = state.sources.length ? `已加载 ${state.sources.length} 个 source。` : "当前 scope 下暂无 source。";
+        status.style.color = "";
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
+    function renderSources() {
+      const table = $("#source-table");
+      table.innerHTML = "";
+      state.sources.forEach((source) => {
+        const tr = document.createElement("tr");
+        const checked = state.selectedSourceIds.has(source.source_id) ? "checked" : "";
+        tr.innerHTML = `
+          <td><input type="checkbox" data-source-check="${esc(source.source_id)}" ${checked}></td>
+          <td><div>${esc(source.source_name || source.document_title || "source")}</div><div class="id">${esc(compactId(source.source_id))}</div></td>
+          <td>${esc(source.content_type || "-")}</td>
+          <td>${source.chunk_count || 0}</td>
+          <td><div class="id">u:${esc(source.user_id || "-")}</div><div class="id">s:${esc(compactId(source.session_id || "-"))}</div></td>
+          <td><button class="danger" type="button" data-delete-source="${esc(source.source_id)}">删除</button></td>
+        `;
+        table.appendChild(tr);
       });
-      html += `</details></div>`;
+      $$("[data-source-check]").forEach((input) => {
+        input.onchange = () => {
+          if (input.checked) state.selectedSourceIds.add(input.dataset.sourceCheck);
+          else state.selectedSourceIds.delete(input.dataset.sourceCheck);
+          persistSelectedSources();
+          updateScopeUI();
+        };
+      });
+      $$("[data-delete-source]").forEach((btn) => {
+        btn.onclick = () => deleteSource(btn.dataset.deleteSource);
+      });
+      renderSelectedSources();
     }
-    placeholder.innerHTML = html;
-    placeholder.classList.remove("typing");
 
-    // Reload sessions to update title
-    loadSessions();
-  } catch (err) {
-    placeholder.innerHTML = `❌ 网络错误: ${escHtml(err.message)}`;
-    toast(err.message, "error");
-  } finally {
-    sendBtn.disabled = false;
-    messages.scrollTop = messages.scrollHeight;
-  }
-}
-
-// --- RAG Health Check ---
-async function checkRAGHealth() {
-  try {
-    const resp = await fetch("/rag/health");
-    const data = await resp.json();
-    const dot = $$("#rag-status-dot");
-    const text = $$("#rag-status-text");
-    if (data.rag === "available") {
-      dot.className = "status-dot ok";
-      text.textContent = "RAG 可用";
-    } else {
-      dot.className = "status-dot err";
-      text.textContent = "RAG 不可用";
+    function persistSelectedSources() {
+      localStorage.setItem("vidwise.selected_source_ids", JSON.stringify(Array.from(state.selectedSourceIds)));
     }
-  } catch {
-    $$("#rag-status-dot").className = "status-dot err";
-    $$("#rag-status-text").textContent = "RAG 不可用";
-  }
-}
 
-// --- Upload form ---
-$$("#upload-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const file = $$("#upload-file").files[0];
-  const status = $$("#upload-status");
-  if (!file) { status.textContent = "请选择文件"; status.style.color = "#ff8b8b"; return; }
-  status.textContent = "上传索引中...";
-  status.style.color = "";
-  try {
-    const fd = new FormData(); fd.append("file", file);
-    const resp = await fetch("/upload", { method: "POST", body: fd });
-    const data = await resp.json();
-    if (!resp.ok) {
-      status.textContent = data.error || `请求失败 (${resp.status})`;
-      status.style.color = "#ff8b8b";
-      return;
+    function renderSelectedSources() {
+      const box = $("#selected-source-list");
+      if (!box) return;
+      const selected = state.sources.filter((source) => state.selectedSourceIds.has(source.source_id));
+      if (!selected.length) {
+        box.textContent = "未选择 source 时使用当前 scope 下的知识库。";
+      } else {
+        box.innerHTML = selected.map((source) => `<span class="pill ok">${esc(source.source_name || compactId(source.source_id))}</span>`).join(" ");
+      }
+      $("#source-pill").textContent = `${state.selectedSourceIds.size} sources`;
     }
-    status.innerHTML = `✅ 上传成功！<br>文件: ${escHtml(data.filename)}<br>类型: ${escHtml(data.content_type || "plain")}<br>大小: ${data.size_bytes?.toLocaleString()} 字符<br>分块数: ${data.chunk_count}`;
-    status.style.color = "#9ee6a8";
-  } catch (err) {
-    status.textContent = err.message;
-    status.style.color = "#ff8b8b";
-  }
-})
 
-// --- Extract form ---
-$$("#extract-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const url = $$("#extract-url").value.trim();
-  const name = $$("#extract-name").value.trim();
-  const type = $$("#extract-type").value.trim();
-  const status = $$("#extract-status");
-  if (!url || !name) { status.textContent = "URL 和名称必填"; status.style.color = "#ff8b8b"; return; }
-  status.textContent = "提取中...";
-  status.style.color = "";
-  try {
-    const resp = await fetch("/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, name, type }),
-    });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      status.textContent = data.error || `请求失败 (${resp.status})`;
-      status.style.color = "#ff8b8b";
-      return;
+    async function deleteSource(sourceId) {
+      const status = $("#source-status");
+      if (!requireScope(status)) return;
+      try {
+        const params = scopeParams();
+        await fetchJSON(`/rag/source/${encodeURIComponent(sourceId)}?${params}`, { method: "DELETE" });
+        state.selectedSourceIds.delete(sourceId);
+        persistSelectedSources();
+        await loadSources();
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
     }
-    const blob = await resp.blob();
-    const disposition = resp.headers.get("content-disposition") || "";
-    const match = disposition.match(/filename[^;=\n]*=['"]*([^'";\n]*)['"]*/i);
-    const filename = match ? match[1] : name + (type === "video" ? ".mp4" : type === "audio" ? ".mp3" : ".txt");
-    const url_ = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url_; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url_);
-    status.textContent = `✅ 已下载 ${filename}，文本已自动索引入知识库`;
-    status.style.color = "#9ee6a8";
-  } catch (err) {
-    status.textContent = err.message;
-    status.style.color = "#ff8b8b";
-  }
-});
 
-// --- Format form ---
-$$("#format-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const file = $$("#format-file").files[0];
-  const status = $$("#format-status");
-  if (!file) { status.textContent = "请选择文件"; status.style.color = "#ff8b8b"; return; }
-  status.textContent = "格式化中...";
-  status.style.color = "";
-  try {
-    const fd = new FormData(); fd.append("file", file);
-    const resp = await fetch("/format", { method: "POST", body: fd });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      status.textContent = data.error || `请求失败 (${resp.status})`;
-      status.style.color = "#ff8b8b";
-      return;
+    async function uploadSource(event) {
+      event.preventDefault();
+      const status = $("#upload-status");
+      if (!requireScope(status)) return;
+      const file = $("#upload-file").files[0];
+      if (!file) {
+        status.textContent = "请选择文件。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      status.textContent = "上传中...";
+      status.style.color = "";
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        appendScopeToFormData(fd);
+        const data = await fetchJSON("/upload", { method: "POST", body: fd });
+        status.innerHTML = `完成：${esc(data.filename)}<br>chunks: ${data.chunk_count || 0}<br>source_ids: ${esc((data.source_ids || []).join(", "))}`;
+        status.style.color = "#bbf7d0";
+        await loadSources();
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
     }
-    const blob = await resp.blob();
-    const url_ = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url_; a.download = "formatted.txt";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url_);
-    status.textContent = "✅ 已下载 formatted.txt";
-    status.style.color = "#9ee6a8";
-  } catch (err) {
-    status.textContent = err.message;
-    status.style.color = "#ff8b8b";
-  }
-});
 
-// --- Init ---
-checkRAGHealth();
-setInterval(checkRAGHealth, 30000);
-loadSessions();
-</script>
+    async function startVideoTask(event) {
+      event.preventDefault();
+      const status = $("#video-status");
+      const url = $("#video-url").value.trim();
+      const name = $("#video-name").value.trim();
+      if (!state.userId) {
+        status.textContent = "视频任务需要 User ID。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      if (!url || !name) {
+        status.textContent = "URL 和名称必填。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      status.textContent = "任务提交中...";
+      status.style.color = "";
+      try {
+        const data = await fetchJSON("/video/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url,
+            name,
+            user_id: state.userId,
+            session_id: state.sessionId,
+            language: $("#video-language").value,
+          }),
+        });
+        state.activeTaskId = data.task_id;
+        if (data.session_id) {
+          state.sessionId = data.session_id;
+          localStorage.setItem("vidwise.session_id", state.sessionId);
+        }
+        updateScopeUI();
+        status.innerHTML = `已提交 task: <span class="id">${esc(data.task_id)}</span><br>trace: <span class="id">${esc(data.trace_id || "-")}</span>`;
+        pollTask(data.task_id);
+        await loadTasks();
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
+    async function pollTask(taskId) {
+      clearTimeout(state.pollTimer);
+      try {
+        const task = await fetchJSON(`/task/${encodeURIComponent(taskId)}`);
+        $("#active-task").innerHTML = renderTask(task);
+        if (!["done", "failed"].includes(task.status)) {
+          state.pollTimer = setTimeout(() => pollTask(taskId), 1800);
+        } else {
+          await loadTasks();
+          await loadSources();
+        }
+      } catch (err) {
+        $("#active-task").textContent = err.message;
+      }
+    }
+
+    async function loadTasks() {
+      const status = $("#task-status");
+      const list = $("#task-list");
+      list.innerHTML = "";
+      if (!requireScope(status)) return;
+      try {
+        const params = scopeParams();
+        params.set("limit", "20");
+        const data = await fetchJSON(`/tasks?${params}`);
+        const tasks = data.tasks || [];
+        $("#task-pill").textContent = `${tasks.length} tasks`;
+        status.textContent = tasks.length ? `已加载 ${tasks.length} 个任务。` : "当前 scope 下暂无任务。";
+        list.innerHTML = tasks.map(renderTask).join("");
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
+    function renderTask(task) {
+      const steps = (task.steps || []).map((step) => {
+        return `<div class="step"><span>${esc(step.name)}</span><span class="pill ${statusClass(step.status)}">${esc(step.status)}</span>${step.error ? `<div class="id" style="grid-column:1 / -1;">${esc(step.error)}</div>` : ""}</div>`;
+      }).join("");
+      return `<div class="task">
+        <div class="row" style="justify-content:space-between;">
+          <strong>${esc(task.type || "task")}</strong>
+          <span class="pill ${statusClass(task.status)}">${esc(task.status)}</span>
+        </div>
+        <div class="id">${esc(task.task_id || "")}</div>
+        ${task.error ? `<div style="color:var(--danger);margin-top:6px;">${esc(task.error)}</div>` : ""}
+        <div class="steps">${steps}</div>
+      </div>`;
+    }
+
+    async function formatText(event) {
+      event.preventDefault();
+      const status = $("#format-status");
+      const file = $("#format-file").files[0];
+      if (!file) {
+        status.textContent = "请选择文件。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      status.textContent = "格式化中...";
+      status.style.color = "";
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const resp = await fetch("/format", { method: "POST", body: fd });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        downloadBlob(blob, "formatted.txt");
+        status.textContent = "已下载 formatted.txt。";
+        status.style.color = "#bbf7d0";
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
+    function downloadBlob(blob, filename) {
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+    }
+
+    async function refreshScopedData() {
+      await Promise.allSettled([loadSessions(), loadSources(), loadTasks()]);
+    }
+
+    function bindEvents() {
+      $$(".nav-item[data-nav]").forEach((btn) => btn.onclick = () => switchTab(btn.dataset.nav));
+      $("#save-scope").onclick = saveScope;
+      $("#new-session").onclick = newSession;
+      $("#refresh-runtime").onclick = loadRuntime;
+      $("#reload-sources").onclick = loadSources;
+      $("#reload-chat-sources").onclick = loadSources;
+      $("#clear-source-filter").onclick = () => {
+        state.selectedSourceIds.clear();
+        persistSelectedSources();
+        renderSources();
+        updateScopeUI();
+      };
+      $("#reload-tasks").onclick = loadTasks;
+      $("#send-chat").onclick = sendChat;
+      $("#chat-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          sendChat();
+        }
+      });
+      $("#upload-form").addEventListener("submit", uploadSource);
+      $("#video-form").addEventListener("submit", startVideoTask);
+      $("#format-form").addEventListener("submit", formatText);
+    }
+
+    bindEvents();
+    updateScopeUI();
+    loadRuntime();
+    refreshScopedData();
+    setInterval(loadRuntime, 30000);
+  </script>
 </body>
 </html>
