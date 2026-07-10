@@ -428,6 +428,41 @@ func TestRunTurnRecordsPackedRAGContextTruncation(t *testing.T) {
 	}
 }
 
+func TestRunTurnRecordsSkippedDuplicateRAGContext(t *testing.T) {
+	retriever := &fakeRetriever{
+		chunks: []rag.RelevantChunk{
+			{Text: "same retrieved context", Score: 0.93, ContentHash: "hash-1", SourceName: "guide.md"},
+			{Text: "same retrieved context", Score: 0.91, ContentHash: "hash-1", SourceName: "guide.md"},
+			{Text: "unique retrieved context", Score: 0.8, ContentHash: "hash-2", SourceName: "guide.md"},
+		},
+	}
+	agent := NewWithRetriever(disabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, retriever)
+
+	got, err := agent.RunTurn(context.Background(), TurnRequest{
+		Query:     "查一下知识库里的内容",
+		SessionID: "s1",
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+
+	if got.Retrieval.ChunkCount != 3 {
+		t.Fatalf("retrieved chunk count = %d, want 3", got.Retrieval.ChunkCount)
+	}
+	if got.RAGContext.UsedChunks != 2 {
+		t.Fatalf("used context chunks = %d, want 2", got.RAGContext.UsedChunks)
+	}
+	if got.RAGContext.SkippedDuplicates != 1 {
+		t.Fatalf("skipped duplicates = %d, want 1", got.RAGContext.SkippedDuplicates)
+	}
+	if strings.Count(got.Answer, "same retrieved context") != 1 {
+		t.Fatalf("duplicate context leaked into answer: %q", got.Answer)
+	}
+	if !strings.Contains(got.Answer, "unique retrieved context") {
+		t.Fatalf("expected unique context in answer: %q", got.Answer)
+	}
+}
+
 func TestRunTurnRetrievesWithSessionScopeWhenUserMissing(t *testing.T) {
 	retriever := &fakeRetriever{
 		chunks: []rag.RelevantChunk{{Text: "session scoped chunk", Score: 0.9}},

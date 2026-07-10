@@ -181,6 +181,51 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	}
 }
 
+func TestChatQueryReportsSkippedDuplicateRAGContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	llmCfg := testDisabledLLMConfig()
+	retriever := &handlerFakeRetriever{
+		chunks: []rag.RelevantChunk{
+			{Text: "same retrieved context", Score: 0.93, ContentHash: "hash-1", SourceName: "guide.md"},
+			{Text: "same retrieved context", Score: 0.91, ContentHash: "hash-1", SourceName: "guide.md"},
+			{Text: "unique retrieved context", Score: 0.8, ContentHash: "hash-2", SourceName: "guide.md"},
+		},
+	}
+	h := NewChatHandler(nil, nil, nil, llmCfg, testCapabilities(llmCfg))
+	h.answerAgent = chatagent.NewWithRetriever(llmCfg, rag.ContextConfig{MaxRunes: 1024}, retriever)
+
+	router := gin.New()
+	router.POST("/chat/query", h.ChatQuery)
+
+	body := bytes.NewBufferString(`{"query":"查一下知识库里的内容","session_id":"s1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/query", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out ChatQueryResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.RAGChunkCount != 3 {
+		t.Fatalf("rag chunk count = %d, want 3", out.RAGChunkCount)
+	}
+	if out.RAGContextUsedChunks != 2 {
+		t.Fatalf("rag context used chunks = %d, want 2", out.RAGContextUsedChunks)
+	}
+	if out.RAGContextDuplicates != 1 {
+		t.Fatalf("rag context duplicates = %d, want 1", out.RAGContextDuplicates)
+	}
+	if strings.Count(out.Answer, "same retrieved context") != 1 {
+		t.Fatalf("duplicate context leaked into answer: %q", out.Answer)
+	}
+}
+
 func TestSessionEndpointsReturnUnavailableWithoutSessionStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	llmCfg := testDisabledLLMConfig()

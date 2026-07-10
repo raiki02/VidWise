@@ -95,6 +95,7 @@ type ChatQueryResponse struct {
 	RAGDocumentIDs       []string    `json:"rag_document_ids,omitempty"`
 	RAGChunkCount        int         `json:"rag_chunk_count"`
 	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
+	RAGContextDuplicates int         `json:"rag_context_skipped_duplicates"`
 	RAGContextTruncated  bool        `json:"rag_context_truncated"`
 	RAGContextChunks     []ChatChunk `json:"rag_context_chunks,omitempty"`
 	Question             string      `json:"question"`
@@ -233,6 +234,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		RAGDocumentIDs:       normalizedIDs(req.DocumentIDs),
 		RAGChunkCount:        turn.Retrieval.ChunkCount,
 		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
+		RAGContextDuplicates: turn.RAGContext.SkippedDuplicates,
 		RAGContextTruncated:  turn.RAGContext.Truncated,
 		RAGContextChunks:     contextChunks,
 		Question:             req.Query,

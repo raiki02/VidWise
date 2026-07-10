@@ -119,3 +119,61 @@ func TestPackContextSkipsEmptyChunks(t *testing.T) {
 		t.Fatalf("expected useful chunk:\n%s", got.Text)
 	}
 }
+
+func TestPackContextSkipsDuplicateChunks(t *testing.T) {
+	got := PackContext([]RelevantChunk{
+		{
+			Text:        "Install the CLI.",
+			Score:       0.91,
+			ContentHash: "hash-1",
+			ChunkID:     "chunk-1",
+			SourceName:  "guide.md",
+		},
+		{
+			Text:        "Install the CLI.",
+			Score:       0.89,
+			ContentHash: "hash-1",
+			ChunkID:     "chunk-1-duplicate",
+			SourceName:  "guide.md",
+		},
+		{
+			Text:        "Run the command.",
+			Score:       0.73,
+			ContentHash: "hash-2",
+			SourceName:  "guide.md",
+		},
+	}, ContextConfig{MaxRunes: 1000})
+
+	if got.UsedChunks != 2 {
+		t.Fatalf("UsedChunks = %d, want 2", got.UsedChunks)
+	}
+	if got.SkippedDuplicates != 1 {
+		t.Fatalf("SkippedDuplicates = %d, want 1", got.SkippedDuplicates)
+	}
+	if len(got.Citations) != 2 {
+		t.Fatalf("citations = %#v, want 2 entries", got.Citations)
+	}
+	if got.Citations[0].SnippetNumber != 1 || got.Citations[1].SnippetNumber != 2 {
+		t.Fatalf("expected contiguous snippet numbers, got %#v", got.Citations)
+	}
+	if strings.Count(got.Text, "Install the CLI.") != 1 {
+		t.Fatalf("duplicate body leaked into packed context:\n%s", got.Text)
+	}
+	if !strings.Contains(got.Text, "Run the command.") {
+		t.Fatalf("expected unique later chunk:\n%s", got.Text)
+	}
+}
+
+func TestPackContextDeduplicatesByNormalizedTextFallback(t *testing.T) {
+	got := PackContext([]RelevantChunk{
+		{Text: "Same   text\nwith spacing.", Score: 0.9},
+		{Text: "Same text with spacing.", Score: 0.8},
+	}, ContextConfig{MaxRunes: 1000})
+
+	if got.UsedChunks != 1 {
+		t.Fatalf("UsedChunks = %d, want 1", got.UsedChunks)
+	}
+	if got.SkippedDuplicates != 1 {
+		t.Fatalf("SkippedDuplicates = %d, want 1", got.SkippedDuplicates)
+	}
+}

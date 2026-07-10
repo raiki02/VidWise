@@ -20,10 +20,11 @@ func DefaultContextConfig() ContextConfig {
 
 // PackedContext is the prompt-ready representation of retrieved chunks.
 type PackedContext struct {
-	Text       string
-	UsedChunks int
-	Truncated  bool
-	Citations  []ContextCitation
+	Text              string
+	UsedChunks        int
+	SkippedDuplicates int
+	Truncated         bool
+	Citations         []ContextCitation
 }
 
 func (c PackedContext) HasContext() bool {
@@ -50,11 +51,20 @@ func PackContext(chunks []RelevantChunk, cfg ContextConfig) PackedContext {
 	usedRunes := 0
 	snippetNumber := 0
 	separator := "\n---\n"
+	seen := map[string]struct{}{}
 
 	for _, chunk := range chunks {
 		body := strings.TrimSpace(chunk.Text)
 		if body == "" {
 			continue
+		}
+		key := contextDedupKey(chunk, body)
+		if key != "" {
+			if _, ok := seen[key]; ok {
+				out.SkippedDuplicates++
+				continue
+			}
+			seen[key] = struct{}{}
 		}
 
 		snippetNumber++
@@ -128,6 +138,26 @@ func normalizeContextConfig(cfg ContextConfig) ContextConfig {
 		cfg.MaxRunes = defaults.MaxRunes
 	}
 	return cfg
+}
+
+func contextDedupKey(chunk RelevantChunk, body string) string {
+	if chunk.ContentHash != "" {
+		return "content:" + chunk.ContentHash
+	}
+	if chunk.ChunkID != "" {
+		return "chunk:" + chunk.ChunkID
+	}
+	if chunk.DocumentID != "" {
+		return fmt.Sprintf("document:%s:%d", chunk.DocumentID, chunk.ChunkIdx)
+	}
+	if chunk.SourceID != "" {
+		return fmt.Sprintf("source:%s:%d", chunk.SourceID, chunk.ChunkIdx)
+	}
+	text := strings.Join(strings.Fields(body), " ")
+	if text != "" {
+		return "text:" + text
+	}
+	return ""
 }
 
 func formatContextEntry(index int, chunk RelevantChunk, body string) string {
