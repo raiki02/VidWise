@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/healthcheck"
 )
 
 type RerankClient struct {
@@ -47,6 +48,10 @@ func NewRerankClient(cfg appconfig.RerankConfig) (*RerankClient, error) {
 		topK:    cfg.TopK,
 		http:    &http.Client{Timeout: timeout},
 	}, nil
+}
+
+func (c *RerankClient) Health(ctx context.Context) error {
+	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "rerank service")
 }
 
 // Rerank sends query and documents to the Python reranking service.

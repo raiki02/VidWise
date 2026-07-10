@@ -428,7 +428,7 @@ async function sendMessage() {
     if (data.chunks && data.chunks.length > 0) {
       html += `<div class="sources"><details><summary>📎 检索到的知识库片段 (${data.chunks.length})</summary>`;
       data.chunks.forEach((c, i) => {
-        const source = [c.source_name, c.heading_path].filter(Boolean).join(" / ");
+        const source = [c.source_name, c.heading_path, c.source_url, c.task_id ? `task:${c.task_id}` : ""].filter(Boolean).join(" / ");
         const sourceHtml = source ? `<br><span style="color:#98a2b3;">${escHtml(source)}</span>` : "";
         html += `<div class="chunk"><strong>#${i+1}</strong> (相关度 ${c.score?.toFixed(3) || "-"})${sourceHtml}<br>${escHtml(c.text?.substring(0, 200) || "")}${c.text?.length > 200 ? "..." : ""}</div>`;
       });

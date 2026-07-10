@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
@@ -84,8 +85,17 @@ func ExecuteVideoProcess(ctx context.Context, registry *tool.Registry, url, work
 	if ragErr != nil {
 		slog.Warn("agent.pipeline.no_rag_tool", "err", ragErr)
 	} else {
-		ragArgs, _ := tool.ToJSON(map[string]string{
-			"text": formattedText,
+		ragArgs, _ := tool.ToJSON(tool.RAGIndexInput{
+			Text:        formattedText,
+			Filename:    name + ".txt",
+			ContentType: "text/plain",
+			Format:      "plain",
+			UserID:      userID,
+			SessionID:   sessionID,
+			Metadata: map[string]string{
+				qdrantclient.FieldTaskID:    taskID,
+				qdrantclient.FieldSourceURL: url,
+			},
 		})
 		ragResult, err := ragTool.InvokableRun(ctx, ragArgs)
 		if err != nil {

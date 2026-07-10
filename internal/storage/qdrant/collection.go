@@ -6,6 +6,8 @@ import (
 	"log/slog"
 
 	pb "github.com/qdrant/go-client/qdrant"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -14,8 +16,13 @@ const (
 	FieldUserID            = "user_id"
 	FieldSessionID         = "session_id"
 	FieldChunkIdx          = "chunk_index"
+	FieldSourceID          = "source_id"
+	FieldDocumentID        = "document_id"
+	FieldContentHash       = "content_hash"
+	FieldChunkID           = "chunk_id"
 	FieldContentType       = "content_type"
 	FieldSourceName        = "source_name"
+	FieldSourceURL         = "source_url"
 	FieldDocumentTitle     = "document_title"
 	FieldHeadingPath       = "heading_path"
 	FieldHeadingLevel      = "heading_level"
@@ -39,7 +46,7 @@ func EnsureCollection(ctx context.Context, c *Client, name string, vectorDim uin
 	for _, col := range list.Collections {
 		if col.Name == name {
 			slog.Info("qdrant.collection.exists", "name", name)
-			return nil
+			return EnsurePayloadIndexes(ctx, c, name)
 		}
 	}
 
@@ -59,32 +66,53 @@ func EnsureCollection(ctx context.Context, c *Client, name string, vectorDim uin
 		return fmt.Errorf("create collection %s: %w", name, err)
 	}
 
-	// Create payload indexes for metadata filtering
-	indexes := []struct {
-		field     string
-		fieldType pb.FieldType
-	}{
+	return EnsurePayloadIndexes(ctx, c, name)
+}
+
+type payloadIndexSpec struct {
+	field     string
+	fieldType pb.FieldType
+}
+
+func payloadIndexes() []payloadIndexSpec {
+	return []payloadIndexSpec{
 		{FieldTaskID, pb.FieldType_FieldTypeKeyword},
 		{FieldUserID, pb.FieldType_FieldTypeKeyword},
 		{FieldSessionID, pb.FieldType_FieldTypeKeyword},
 		{FieldChunkIdx, pb.FieldType_FieldTypeInteger},
+		{FieldSourceID, pb.FieldType_FieldTypeKeyword},
+		{FieldDocumentID, pb.FieldType_FieldTypeKeyword},
+		{FieldContentHash, pb.FieldType_FieldTypeKeyword},
+		{FieldChunkID, pb.FieldType_FieldTypeKeyword},
 		{FieldContentType, pb.FieldType_FieldTypeKeyword},
 		{FieldSourceName, pb.FieldType_FieldTypeKeyword},
+		{FieldSourceURL, pb.FieldType_FieldTypeKeyword},
 		{FieldDocumentTitle, pb.FieldType_FieldTypeKeyword},
 		{FieldHeadingPath, pb.FieldType_FieldTypeKeyword},
 		{FieldHeadingLevel, pb.FieldType_FieldTypeInteger},
 		{FieldSectionIndex, pb.FieldType_FieldTypeInteger},
 		{FieldSectionChunkIndex, pb.FieldType_FieldTypeInteger},
 		{FieldChunkSource, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader1, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader2, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader3, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader4, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader5, pb.FieldType_FieldTypeKeyword},
+		{FieldHeader6, pb.FieldType_FieldTypeKeyword},
 	}
+}
 
-	for _, idx := range indexes {
+func EnsurePayloadIndexes(ctx context.Context, c *Client, name string) error {
+	for _, idx := range payloadIndexes() {
 		_, err := c.Points.CreateFieldIndex(ctx, &pb.CreateFieldIndexCollection{
 			CollectionName: name,
 			FieldName:      idx.field,
 			FieldType:      &idx.fieldType,
 		})
 		if err != nil {
+			if status.Code(err) == codes.AlreadyExists {
+				continue
+			}
 			slog.Warn("qdrant.index.create_failed", "field", idx.field, "err", err)
 		}
 	}

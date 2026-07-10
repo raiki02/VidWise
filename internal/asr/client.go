@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/raiki02/vidwise/internal/healthcheck"
 )
 
 type Client struct {
@@ -66,6 +68,10 @@ func NewClient(baseURL, language string, timeout time.Duration, options Transcri
 		transcribe: options,
 		http:       &http.Client{Timeout: timeout},
 	}, nil
+}
+
+func (c *Client) Health(ctx context.Context) error {
+	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "asr service")
 }
 
 func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (TranscribeResponse, error) {

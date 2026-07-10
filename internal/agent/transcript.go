@@ -33,13 +33,13 @@ func NewTranscriptAgent(cfg appconfig.Config, registry *tool.Registry) (*Transcr
 		return nil, err
 	}
 
-	inner, asrWrapper, err := tool.NewASRTool(client)
+	_, asrWrapper, err := tool.NewASRTool(client)
 	if err != nil {
 		return nil, fmt.Errorf("create asr tool: %w", err)
 	}
 
 	if registry != nil {
-		registry.Register("transcribe_audio", inner, nil)
+		registry.Register("transcribe_audio", asrWrapper, nil)
 	}
 	return &TranscriptAgent{
 		cfg:     cfg,

@@ -7,16 +7,18 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 	"github.com/sony/gobreaker"
 )
 
 // Wrapper wraps an Eino InvokableTool with retry, circuit breaker,
 // timeout, trace_id propagation, and execution logging.
 type Wrapper struct {
-	inner   tool.InvokableTool
-	name    string
-	cb      *gobreaker.CircuitBreaker
-	timeout time.Duration
+	inner    tool.InvokableTool
+	name     string
+	cb       *gobreaker.CircuitBreaker
+	timeout  time.Duration
+	maxRetry int
 }
 
 type WrapperConfig struct {
@@ -56,10 +58,11 @@ func NewWrapper(inner tool.InvokableTool, cfg WrapperConfig) *Wrapper {
 	})
 
 	return &Wrapper{
-		inner:   inner,
-		name:    cfg.Name,
-		cb:      cb,
-		timeout: cfg.Timeout,
+		inner:    inner,
+		name:     cfg.Name,
+		cb:       cb,
+		timeout:  cfg.Timeout,
+		maxRetry: cfg.MaxRetry,
 	}
 }
 
@@ -69,17 +72,18 @@ func (w *Wrapper) Run(ctx context.Context, args string) (string, error) {
 
 	result, err := w.cb.Execute(func() (interface{}, error) {
 		var lastErr error
-		for attempt := 0; attempt <= 3; attempt++ {
+		for attempt := 0; attempt <= w.maxRetry; attempt++ {
 			toolCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.timeout)
-			defer cancel()
-
 			output, err := w.inner.InvokableRun(toolCtx, args)
+			cancel()
 			if err == nil {
 				return output, nil
 			}
 			lastErr = err
 			slog.Warn("tool.retry", "tool", w.name, "attempt", attempt+1, "err", err)
-			time.Sleep(time.Duration(1<<attempt) * time.Second)
+			if attempt < w.maxRetry {
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+			}
 		}
 		return nil, lastErr
 	})
@@ -98,6 +102,11 @@ func (w *Wrapper) Run(ctx context.Context, args string) (string, error) {
 // so the wrapper itself can be used as an invokable tool.
 func (w *Wrapper) InvokableRun(ctx context.Context, args string, opts ...tool.Option) (string, error) {
 	return w.Run(ctx, args)
+}
+
+// Info delegates tool metadata to the wrapped tool.
+func (w *Wrapper) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return w.inner.Info(ctx)
 }
 
 // Name returns the tool name.

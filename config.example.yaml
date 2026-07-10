@@ -111,6 +111,18 @@ qdrant:
   collection: "transcript_chunks"
   vector_dim: 1024
 
+rag:
+  retrieval:
+    # Vector candidates retrieved before optional reranking.
+    search_top_k: 20
+    # Final chunks sent back to chat/tool callers.
+    top_k: 8
+    # 0 disables score filtering. Raise for stricter vector relevance.
+    min_score: 0
+  context:
+    # Maximum retrieved context runes packed into the LLM prompt.
+    max_runes: 12000
+
 embedding:
   base_url: "http://localhost:8003"
   # Model shortcut (qwen, bge, bge-large) or local path.

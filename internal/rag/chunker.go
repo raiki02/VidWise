@@ -1,6 +1,11 @@
 package rag
 
-import "github.com/raiki02/vidwise/internal/chunk"
+import (
+	"strings"
+
+	"github.com/raiki02/vidwise/internal/chunk"
+	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
+)
 
 // TextChunk represents a segment of text with position metadata.
 type TextChunk struct {
@@ -61,11 +66,23 @@ func ChunkText(text string, maxRunes, overlapRunes int) []TextChunk {
 }
 
 func chunkTextWithConfig(text string, cfg ChunkConfig) []TextChunk {
+	return chunkTextWithFormat(text, cfg, chunk.FormatMarkdown)
+}
+
+func chunkDocumentTextWithConfig(text string, metadata map[string]string, cfg ChunkConfig) []TextChunk {
+	format := chunk.FormatPlain
+	if strings.EqualFold(strings.TrimSpace(metadata[qdrantclient.FieldContentType]), MarkdownContentType) {
+		format = chunk.FormatMarkdown
+	}
+	return chunkTextWithFormat(text, cfg, format)
+}
+
+func chunkTextWithFormat(text string, cfg ChunkConfig, format chunk.Format) []TextChunk {
 	chunks := chunk.SplitText(text, chunk.Config{
 		MaxRunes:     cfg.MaxRunes,
 		MinRunes:     cfg.MinRunes,
 		OverlapRunes: cfg.OverlapRunes,
-		Format:       chunk.FormatMarkdown,
+		Format:       format,
 	})
 
 	out := make([]TextChunk, 0, len(chunks))

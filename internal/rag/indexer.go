@@ -2,10 +2,12 @@ package rag
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
@@ -18,8 +20,8 @@ type Indexer struct {
 	embedClient  *model.EmbedClient
 	qdrantClient *qdrantclient.Client
 	collection   string
-	chunkRunes   int
-	overlapRunes int
+	mu           sync.RWMutex
+	chunkConfig  ChunkConfig
 }
 
 func NewIndexer(embedClient *model.EmbedClient, qdrantClient *qdrantclient.Client, collection string) *Indexer {
@@ -27,18 +29,20 @@ func NewIndexer(embedClient *model.EmbedClient, qdrantClient *qdrantclient.Clien
 		embedClient:  embedClient,
 		qdrantClient: qdrantClient,
 		collection:   collection,
-		chunkRunes:   1024,
-		overlapRunes: 128,
+		chunkConfig:  DefaultChunkConfig(),
 	}
 }
 
 // SetChunkParams overrides the default chunking parameters.
 func (idx *Indexer) SetChunkParams(chunkRunes, overlapRunes int) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
 	if chunkRunes > 0 {
-		idx.chunkRunes = chunkRunes
+		idx.chunkConfig.MaxRunes = chunkRunes
 	}
 	if overlapRunes >= 0 {
-		idx.overlapRunes = overlapRunes
+		idx.chunkConfig.OverlapRunes = overlapRunes
 	}
 }
 
@@ -52,7 +56,7 @@ func (idx *Indexer) EnsureCollection(ctx context.Context) error {
 	for _, col := range listResp.Collections {
 		if col.Name == idx.collection {
 			slog.Info("rag.indexer.collection_exists", "name", idx.collection)
-			return nil
+			return qdrantclient.EnsurePayloadIndexes(ctx, idx.qdrantClient, idx.collection)
 		}
 	}
 
@@ -113,6 +117,27 @@ func (idx *Indexer) IndexMarkdownScoped(ctx context.Context, markdownText string
 	return idx.IndexDocumentsScoped(ctx, docs, userID, sessionID)
 }
 
+// IndexSource detects the source format, parses it into documents, chunks them,
+// embeds the chunks, and stores them in Qdrant.
+func (idx *Indexer) IndexSource(ctx context.Context, source Source, opts IndexOptions) (IndexResult, error) {
+	return idx.IndexSourceScoped(ctx, source, opts, "", "")
+}
+
+// IndexSourceScoped indexes a source with user/session metadata.
+func (idx *Indexer) IndexSourceScoped(ctx context.Context, source Source, opts IndexOptions, userID, sessionID string) (IndexResult, error) {
+	docs, format := DocumentsFromSource(source)
+	indexed, err := idx.indexDocumentsScoped(ctx, docs, userID, sessionID, idx.chunkConfigWithOptions(opts))
+	if err != nil {
+		return IndexResult{}, err
+	}
+	return IndexResult{
+		ChunkCount:  indexed.count,
+		ContentType: string(format),
+		SourceIDs:   indexed.sourceIDs,
+		Sources:     indexed.sources,
+	}, nil
+}
+
 // IndexDocuments indexes pre-parsed documents.
 func (idx *Indexer) IndexDocuments(ctx context.Context, docs []Document) (int, error) {
 	return idx.IndexDocumentsScoped(ctx, docs, "", "")
@@ -121,14 +146,55 @@ func (idx *Indexer) IndexDocuments(ctx context.Context, docs []Document) (int, e
 // IndexDocumentsScoped indexes documents with user and session metadata for
 // multi-tenant isolation.
 func (idx *Indexer) IndexDocumentsScoped(ctx context.Context, docs []Document, userID, sessionID string) (int, error) {
+	indexed, err := idx.indexDocumentsScoped(ctx, docs, userID, sessionID, idx.defaultChunkConfig())
+	return indexed.count, err
+}
+
+// DeleteSource removes all indexed chunks for one stable source_id.
+func (idx *Indexer) DeleteSource(ctx context.Context, sourceID string) (DeleteResult, error) {
+	return idx.DeleteSources(ctx, []string{sourceID})
+}
+
+// DeleteSources removes all indexed chunks for each stable source_id. The
+// operation waits for Qdrant to apply each deletion before returning.
+func (idx *Indexer) DeleteSources(ctx context.Context, sourceIDs []string) (DeleteResult, error) {
+	return idx.DeleteSourcesWithOptions(ctx, DeleteRequest{SourceIDs: sourceIDs})
+}
+
+// DeleteSourcesWithOptions removes indexed chunks for stable source_id values,
+// optionally scoped by user/session metadata.
+func (idx *Indexer) DeleteSourcesWithOptions(ctx context.Context, req DeleteRequest) (DeleteResult, error) {
+	sourceIDs := normalizeSourceIDs(req.SourceIDs)
+	if len(sourceIDs) == 0 {
+		return DeleteResult{}, fmt.Errorf("source_id is required")
+	}
+	if idx == nil || idx.qdrantClient == nil || idx.qdrantClient.Points == nil {
+		return DeleteResult{}, fmt.Errorf("qdrant points client is required")
+	}
+	if req.Filter != nil {
+		req.Filter = NewRetrieveFilter(req.Filter.UserID, req.Filter.SessionID)
+	}
+	if err := idx.deleteSources(ctx, sourceIDs, req.Filter); err != nil {
+		return DeleteResult{}, err
+	}
+	return DeleteResult{SourceIDs: sourceIDs}, nil
+}
+
+type indexedDocuments struct {
+	count     int
+	sourceIDs []string
+	sources   []SourceSummary
+}
+
+func (idx *Indexer) indexDocumentsScoped(ctx context.Context, docs []Document, userID, sessionID string, cfg ChunkConfig) (indexedDocuments, error) {
 	// Ensure collection exists with correct vector dimension
 	if err := idx.EnsureCollection(ctx); err != nil {
-		return 0, fmt.Errorf("ensure collection: %w", err)
+		return indexedDocuments{}, fmt.Errorf("ensure collection: %w", err)
 	}
 
-	chunks := idx.chunkDocuments(docs)
+	chunks := chunkDocumentsWithConfig(docs, cfg)
 	if len(chunks) == 0 {
-		return 0, nil
+		return indexedDocuments{}, nil
 	}
 
 	slog.Info("rag.indexer.chunked", "chunks", len(chunks))
@@ -140,18 +206,25 @@ func (idx *Indexer) IndexDocumentsScoped(ctx context.Context, docs []Document, u
 
 	embeddings, err := idx.embedClient.Embed(ctx, texts)
 	if err != nil {
-		return 0, fmt.Errorf("embed chunks: %w", err)
+		return indexedDocuments{}, fmt.Errorf("embed chunks: %w", err)
 	}
 
 	if len(embeddings) != len(texts) {
-		return 0, fmt.Errorf("embedding count mismatch: got %d, want %d", len(embeddings), len(texts))
+		return indexedDocuments{}, fmt.Errorf("embedding count mismatch: got %d, want %d", len(embeddings), len(texts))
 	}
 
 	points := make([]*pb.PointStruct, len(chunks))
+	identities := make([]chunkIdentity, len(chunks))
 	for i, chunk := range chunks {
+		identity := newChunkIdentity(chunk, userID, sessionID, i)
+		identities[i] = identity
 		payload := map[string]*pb.Value{
-			qdrantclient.FieldChunkIdx: {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
-			qdrantclient.FieldText:     {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+			qdrantclient.FieldChunkIdx:    {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
+			qdrantclient.FieldText:        {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+			qdrantclient.FieldSourceID:    {Kind: &pb.Value_StringValue{StringValue: identity.sourceID}},
+			qdrantclient.FieldDocumentID:  {Kind: &pb.Value_StringValue{StringValue: identity.documentID}},
+			qdrantclient.FieldContentHash: {Kind: &pb.Value_StringValue{StringValue: identity.contentHash}},
+			qdrantclient.FieldChunkID:     {Kind: &pb.Value_StringValue{StringValue: identity.chunkID}},
 		}
 		for key, value := range chunk.Metadata {
 			if key == "" || value == "" {
@@ -167,7 +240,7 @@ func (idx *Indexer) IndexDocumentsScoped(ctx context.Context, docs []Document, u
 		}
 		points[i] = &pb.PointStruct{
 			Id: &pb.PointId{
-				PointIdOptions: &pb.PointId_Uuid{Uuid: uuid.New().String()},
+				PointIdOptions: &pb.PointId_Uuid{Uuid: stablePointUUID(identity.chunkID)},
 			},
 			Vectors: &pb.Vectors{
 				VectorsOptions: &pb.Vectors_Vector{Vector: &pb.Vector{Data: toFloat32Slice(embeddings[i])}},
@@ -176,16 +249,29 @@ func (idx *Indexer) IndexDocumentsScoped(ctx context.Context, docs []Document, u
 		}
 	}
 
+	sourceIDs := sourceIDsFromIdentities(identities)
+	sources := sourceSummariesFromChunks(chunks, identities, userID, sessionID)
+	if err := idx.deleteSources(ctx, sourceIDs, nil); err != nil {
+		return indexedDocuments{}, err
+	}
+
 	_, err = idx.qdrantClient.Points.Upsert(ctx, &pb.UpsertPoints{
 		CollectionName: idx.collection,
 		Points:         points,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("upsert to qdrant: %w", err)
+		return indexedDocuments{}, fmt.Errorf("upsert to qdrant: %w", err)
 	}
 
 	slog.Info("rag.indexer.done", "chunks", len(chunks))
-	return len(chunks), nil
+	return indexedDocuments{count: len(chunks), sourceIDs: sourceIDs, sources: sources}, nil
+}
+
+type chunkIdentity struct {
+	sourceID    string
+	documentID  string
+	contentHash string
+	chunkID     string
 }
 
 type documentChunk struct {
@@ -193,14 +279,35 @@ type documentChunk struct {
 	Metadata map[string]string
 }
 
+func (idx *Indexer) defaultChunkConfig() ChunkConfig {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.chunkConfig
+}
+
+func (idx *Indexer) chunkConfigWithOptions(opts IndexOptions) ChunkConfig {
+	cfg := idx.defaultChunkConfig()
+	if opts.ChunkRunes > 0 {
+		cfg.MaxRunes = opts.ChunkRunes
+	}
+	if opts.OverlapRunes != nil {
+		cfg.OverlapRunes = *opts.OverlapRunes
+	}
+	return cfg
+}
+
 func (idx *Indexer) chunkDocuments(docs []Document) []documentChunk {
+	return chunkDocumentsWithConfig(docs, idx.defaultChunkConfig())
+}
+
+func chunkDocumentsWithConfig(docs []Document, cfg ChunkConfig) []documentChunk {
 	var out []documentChunk
 	for _, doc := range docs {
 		content := strings.TrimSpace(doc.PageContent)
 		if content == "" {
 			continue
 		}
-		chunks := ChunkText(content, idx.chunkRunes, idx.overlapRunes)
+		chunks := chunkDocumentTextWithConfig(content, doc.Metadata, cfg)
 		for _, chunk := range chunks {
 			meta := mergeMetadata(doc.Metadata, map[string]string{
 				qdrantclient.FieldChunkSource:       string(chunk.Source),
@@ -213,6 +320,198 @@ func (idx *Indexer) chunkDocuments(docs []Document) []documentChunk {
 		}
 	}
 	return out
+}
+
+func newChunkIdentity(chunk documentChunk, userID, sessionID string, chunkIndex int) chunkIdentity {
+	contentHash := stableHash("content", normalizeFingerprintText(chunk.Text))
+	sourceKey := stableSourceKey(chunk.Metadata, userID, sessionID, contentHash)
+	sourceID := stableHash("source", sourceKey)
+	documentKey := stableDocumentKey(chunk.Metadata, userID, sessionID, contentHash)
+	documentID := stableHash("document", documentKey)
+	chunkKey := strings.Join([]string{
+		"chunk",
+		documentID,
+		strconv.Itoa(chunkIndex),
+		chunk.Metadata[qdrantclient.FieldSectionChunkIndex],
+		chunk.Metadata[qdrantclient.FieldChunkSource],
+	}, "\x00")
+	return chunkIdentity{
+		sourceID:    sourceID,
+		documentID:  documentID,
+		contentHash: contentHash,
+		chunkID:     stableHash("chunk", chunkKey),
+	}
+}
+
+func sourceIDsFromIdentities(identities []chunkIdentity) []string {
+	sourceIDs := make([]string, 0, 1)
+	for _, identity := range identities {
+		sourceIDs = append(sourceIDs, identity.sourceID)
+	}
+	return normalizeSourceIDs(sourceIDs)
+}
+
+func sourceSummariesFromChunks(chunks []documentChunk, identities []chunkIdentity, userID, sessionID string) []SourceSummary {
+	bySource := map[string]*SourceSummary{}
+	order := make([]string, 0, len(identities))
+	for i, identity := range identities {
+		if identity.sourceID == "" || i >= len(chunks) {
+			continue
+		}
+		source := bySource[identity.sourceID]
+		if source == nil {
+			source = &SourceSummary{
+				SourceID:  identity.sourceID,
+				UserID:    strings.TrimSpace(userID),
+				SessionID: strings.TrimSpace(sessionID),
+			}
+			bySource[identity.sourceID] = source
+			order = append(order, identity.sourceID)
+		}
+		source.ChunkCount++
+		source.SourceName = firstNonEmpty(source.SourceName, chunks[i].Metadata[qdrantclient.FieldSourceName])
+		source.SourceURL = firstNonEmpty(source.SourceURL, chunks[i].Metadata[qdrantclient.FieldSourceURL])
+		source.ContentType = firstNonEmpty(source.ContentType, chunks[i].Metadata[qdrantclient.FieldContentType])
+		source.DocumentTitle = firstNonEmpty(source.DocumentTitle, chunks[i].Metadata[qdrantclient.FieldDocumentTitle])
+	}
+
+	out := make([]SourceSummary, 0, len(order))
+	for _, sourceID := range order {
+		if source := bySource[sourceID]; source != nil {
+			out = append(out, *source)
+		}
+	}
+	return out
+}
+
+func normalizeSourceIDs(sourceIDs []string) []string {
+	out := make([]string, 0, len(sourceIDs))
+	seen := map[string]bool{}
+	for _, sourceID := range sourceIDs {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" || seen[sourceID] {
+			continue
+		}
+		out = append(out, sourceID)
+		seen[sourceID] = true
+	}
+	return out
+}
+
+func (idx *Indexer) deleteSources(ctx context.Context, sourceIDs []string, filter *RetrieveFilter) error {
+	for _, sourceID := range sourceIDs {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" {
+			continue
+		}
+		if _, err := idx.qdrantClient.Points.Delete(ctx, buildSourceDeleteRequest(idx.collection, sourceID, filter)); err != nil {
+			return fmt.Errorf("delete existing source chunks %s: %w", sourceID, err)
+		}
+	}
+	return nil
+}
+
+func buildSourceDeleteRequest(collection, sourceID string, filter *RetrieveFilter) *pb.DeletePoints {
+	wait := true
+	must := []*pb.Condition{
+		keywordCondition(qdrantclient.FieldSourceID, sourceID),
+	}
+	if scopeFilter := buildScopeFilter(filter); scopeFilter != nil {
+		must = append(must, scopeFilter.Must...)
+	}
+	return &pb.DeletePoints{
+		CollectionName: collection,
+		Wait:           &wait,
+		Points: &pb.PointsSelector{
+			PointsSelectorOneOf: &pb.PointsSelector_Filter{
+				Filter: &pb.Filter{
+					Must: must,
+				},
+			},
+		},
+	}
+}
+
+func stableSourceKey(metadata map[string]string, userID, sessionID, fallbackContentHash string) string {
+	fallback := ""
+	if !sourceIdentityHasStableMetadata(metadata) {
+		fallback = fallbackContentHash
+	}
+	parts := []string{
+		"user", strings.TrimSpace(userID),
+		"session", strings.TrimSpace(sessionID),
+		"source_name", strings.TrimSpace(metadata[qdrantclient.FieldSourceName]),
+		"source_url", strings.TrimSpace(metadata[qdrantclient.FieldSourceURL]),
+		"task_id", strings.TrimSpace(metadata[qdrantclient.FieldTaskID]),
+		"content_type", strings.TrimSpace(metadata[qdrantclient.FieldContentType]),
+		"fallback_content", fallback,
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func sourceIdentityHasStableMetadata(metadata map[string]string) bool {
+	sourceFields := []string{
+		strings.TrimSpace(metadata[qdrantclient.FieldSourceName]),
+		strings.TrimSpace(metadata[qdrantclient.FieldSourceURL]),
+		strings.TrimSpace(metadata[qdrantclient.FieldTaskID]),
+	}
+	for _, field := range sourceFields {
+		if field != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func stableDocumentKey(metadata map[string]string, userID, sessionID, fallbackContentHash string) string {
+	sourceFields := []string{
+		strings.TrimSpace(metadata[qdrantclient.FieldSourceName]),
+		strings.TrimSpace(metadata[qdrantclient.FieldSourceURL]),
+		strings.TrimSpace(metadata[qdrantclient.FieldTaskID]),
+		strings.TrimSpace(metadata[qdrantclient.FieldDocumentTitle]),
+		strings.TrimSpace(metadata[qdrantclient.FieldHeadingPath]),
+		strings.TrimSpace(metadata[qdrantclient.FieldSectionIndex]),
+	}
+	hasSourceIdentity := false
+	for _, field := range sourceFields {
+		if field != "" {
+			hasSourceIdentity = true
+			break
+		}
+	}
+	fallback := ""
+	if !hasSourceIdentity {
+		fallback = fallbackContentHash
+	}
+	parts := []string{
+		"user", strings.TrimSpace(userID),
+		"session", strings.TrimSpace(sessionID),
+		"source_name", strings.TrimSpace(metadata[qdrantclient.FieldSourceName]),
+		"source_url", strings.TrimSpace(metadata[qdrantclient.FieldSourceURL]),
+		"task_id", strings.TrimSpace(metadata[qdrantclient.FieldTaskID]),
+		"content_type", strings.TrimSpace(metadata[qdrantclient.FieldContentType]),
+		"document_title", strings.TrimSpace(metadata[qdrantclient.FieldDocumentTitle]),
+		"heading_path", strings.TrimSpace(metadata[qdrantclient.FieldHeadingPath]),
+		"section_index", strings.TrimSpace(metadata[qdrantclient.FieldSectionIndex]),
+		"fallback_content", fallback,
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func normalizeFingerprintText(text string) string {
+	return strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+}
+
+func stableHash(prefix, value string) string {
+	sum := sha256.Sum256([]byte(prefix + "\x00" + value))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func stablePointUUID(chunkID string) string {
+	sum := sha256.Sum256([]byte("point\x00" + chunkID))
+	var id uuid.UUID
+	copy(id[:], sum[:16])
+	return id.String()
 }
 
 func metadataPayloadValue(key, value string) *pb.Value {

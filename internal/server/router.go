@@ -5,15 +5,16 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/background"
+	"github.com/raiki02/vidwise/internal/capability"
 	"github.com/raiki02/vidwise/internal/chat"
 	"github.com/raiki02/vidwise/internal/memory"
-	"github.com/raiki02/vidwise/internal/model"
-	"github.com/raiki02/vidwise/internal/rag"
+	"github.com/raiki02/vidwise/internal/ragruntime"
 	"github.com/raiki02/vidwise/internal/server/handler"
-	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 
 	_ "embed"
@@ -24,7 +25,7 @@ var webFS embed.FS
 
 // Router assembles all HTTP routes for the gateway.
 // Pass nil for optional dependencies if not available.
-func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.Client, embedClient *model.EmbedClient, rerankClient *model.RerankClient, chatRepo *chat.Repo, memRepo *memory.Repo) *gin.Engine {
+func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime.Runtime, chatRepo *chat.Repo, memRepo *memory.Repo, caps capability.Snapshot) *gin.Engine {
 	e := gin.Default()
 
 	e.Use(TraceID())
@@ -39,27 +40,31 @@ func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.
 
 	// Health
 	e.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{
+			"status":       "ok",
+			"capabilities": caps.Map(),
+		})
 	})
 
+	backgroundRunner := background.NewRunner(30 * time.Second)
+
 	// Handlers
-	extractHandler := handler.NewExtractHandler(cfg, registry, nil)
+	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
 	videoHandler := handler.NewVideoHandler(registry)
 	taskHandler := handler.NewTaskHandler()
 
-	// Build RAG indexer and retriever if Qdrant and embedding are available
-	var indexer *rag.Indexer
-	var retriever *rag.Retriever
-	if qdConn != nil && embedClient != nil {
-		indexer = rag.NewIndexer(embedClient, qdConn, cfg.Qdrant.Collection)
-		extractHandler = handler.NewExtractHandler(cfg, registry, indexer)
-		retriever = rag.NewRetriever(embedClient, rerankClient, qdConn, cfg.Qdrant.Collection)
-		slog.Info("gateway.rag_ready")
+	if ragRuntime.Usable() {
+		slog.Info("gateway.rag_ready",
+			"search_top_k", ragRuntime.Retrieval.SearchTopK,
+			"top_k", ragRuntime.Retrieval.TopK,
+			"min_score", ragRuntime.Retrieval.MinScore,
+		)
 	} else {
-		slog.Warn("gateway.rag_unavailable", "qdrant", qdConn != nil, "embedding", embedClient != nil)
+		ragCapability := caps.Get(capability.RAG)
+		slog.Warn("gateway.rag_unavailable", "status", ragCapability.Status, "reason", ragCapability.Reason)
 	}
 
-	chatHandler := handler.NewChatHandler(chatRepo, memRepo, retriever, cfg.LLM)
+	chatHandler := handler.NewChatHandlerWithBackground(chatRepo, memRepo, ragRuntime.Retriever, cfg.LLM, caps, ragRuntime.Context, backgroundRunner)
 
 	// Legacy endpoints (backward compatible)
 	e.GET("/extract", extractHandler.Extract)
@@ -87,6 +92,8 @@ func Router(cfg appconfig.Config, registry *tool.Registry, qdConn *qdrantclient.
 
 	// File upload — index text into knowledge base
 	e.POST("/upload", extractHandler.UploadText)
+	e.GET("/rag/sources", extractHandler.ListRAGSources)
+	e.DELETE("/rag/source/:source_id", extractHandler.DeleteRAGSource)
 
 	// Serve the chat UI at root
 	e.GET("/", func(c *gin.Context) {

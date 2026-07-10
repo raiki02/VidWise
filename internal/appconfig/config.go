@@ -18,6 +18,7 @@ type Config struct {
 	LLM          LLMConfig          `yaml:"llm"`
 	MySQL        MySQLConfig        `yaml:"mysql"`
 	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	RAG          RAGConfig          `yaml:"rag"`
 	Embedding    EmbeddingConfig    `yaml:"embedding"`
 	Rerank       RerankConfig       `yaml:"rerank"`
 	MCP          MCPConfig          `yaml:"mcp"`
@@ -123,6 +124,21 @@ type QdrantConfig struct {
 	UseTLS     bool   `yaml:"use_tls"`
 	Collection string `yaml:"collection"`
 	VectorDim  int    `yaml:"vector_dim"`
+}
+
+type RAGConfig struct {
+	Retrieval RAGRetrievalConfig `yaml:"retrieval"`
+	Context   RAGContextConfig   `yaml:"context"`
+}
+
+type RAGRetrievalConfig struct {
+	SearchTopK int     `yaml:"search_top_k"`
+	TopK       int     `yaml:"top_k"`
+	MinScore   float64 `yaml:"min_score"`
+}
+
+type RAGContextConfig struct {
+	MaxRunes int `yaml:"max_runes"`
 }
 
 type EmbeddingConfig struct {
@@ -292,6 +308,16 @@ func (c *Config) applyDefaults() {
 	if c.Qdrant.VectorDim == 0 {
 		c.Qdrant.VectorDim = 1024
 	}
+	// RAG retrieval defaults
+	if c.RAG.Retrieval.SearchTopK == 0 {
+		c.RAG.Retrieval.SearchTopK = 20
+	}
+	if c.RAG.Retrieval.TopK == 0 {
+		c.RAG.Retrieval.TopK = 8
+	}
+	if c.RAG.Context.MaxRunes == 0 {
+		c.RAG.Context.MaxRunes = 12000
+	}
 	// Embedding defaults
 	if c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "http://localhost:8003"
@@ -365,6 +391,21 @@ func (c Config) validate() error {
 	}
 	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)
+	}
+	if c.RAG.Retrieval.SearchTopK <= 0 {
+		return errors.New("rag.retrieval.search_top_k must be greater than 0")
+	}
+	if c.RAG.Retrieval.TopK <= 0 {
+		return errors.New("rag.retrieval.top_k must be greater than 0")
+	}
+	if c.RAG.Retrieval.TopK > c.RAG.Retrieval.SearchTopK {
+		return errors.New("rag.retrieval.top_k must be less than or equal to rag.retrieval.search_top_k")
+	}
+	if c.RAG.Retrieval.MinScore < 0 {
+		return errors.New("rag.retrieval.min_score must be greater than or equal to 0")
+	}
+	if c.RAG.Context.MaxRunes <= 0 {
+		return errors.New("rag.context.max_runes must be greater than 0")
 	}
 	return nil
 }

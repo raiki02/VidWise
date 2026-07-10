@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/raiki02/vidwise/internal/healthcheck"
 )
 
 type Client struct {
@@ -73,6 +75,10 @@ func NewClient(baseURL string, timeout time.Duration, options SummarizeOptions) 
 		summarize: options,
 		http:      &http.Client{Timeout: timeout},
 	}, nil
+}
+
+func (c *Client) Health(ctx context.Context) error {
+	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "video_summary service")
 }
 
 func (c *Client) Caption(ctx context.Context, videoPath string, options SummarizeOptions) (CaptionResponse, error) {
