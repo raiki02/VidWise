@@ -93,6 +93,9 @@ func TestChatQueryReportsRetrievalStatusWhenRetrieverUnavailable(t *testing.T) {
 	if out.RAGStatus != "unavailable" {
 		t.Fatalf("rag status = %q, want unavailable", out.RAGStatus)
 	}
+	if out.RAGQuery != "视频里讲了什么？" {
+		t.Fatalf("rag query = %q, want original query when retriever is unavailable", out.RAGQuery)
+	}
 	if out.RAGChunkCount != 0 {
 		t.Fatalf("rag chunk count = %d, want 0", out.RAGChunkCount)
 	}
@@ -133,6 +136,9 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	}
 	if out.RAGChunkCount != 2 {
 		t.Fatalf("rag chunk count = %d, want 2", out.RAGChunkCount)
+	}
+	if out.RAGQuery != "查一下知识库里的内容" {
+		t.Fatalf("rag query = %q, want request query", out.RAGQuery)
 	}
 	if len(out.Chunks) != 2 {
 		t.Fatalf("response chunks = %#v, want all retrieved chunks", out.Chunks)

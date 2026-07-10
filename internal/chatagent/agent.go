@@ -37,6 +37,7 @@ type Retriever interface {
 type RetrievalEvaluation struct {
 	ShouldRetrieve bool   `json:"should_retrieve"`
 	Reason         string `json:"reason"`
+	RetrievalQuery string `json:"retrieval_query,omitempty"`
 }
 
 // RetrievalStatus is the retrieval execution outcome for a turn.
@@ -58,6 +59,7 @@ type RetrievalOutcome struct {
 	Status     RetrievalStatus `json:"status"`
 	Reason     string          `json:"reason,omitempty"`
 	Error      string          `json:"error,omitempty"`
+	Query      string          `json:"query,omitempty"`
 	ChunkCount int             `json:"chunk_count"`
 }
 
@@ -195,7 +197,9 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 		Status: RetrievalStatusNotNeeded,
 		Reason: eval.Reason,
 	}
+	retrievalQuery := retrievalQueryForTurn(eval, req.Query)
 	if eval.ShouldRetrieve && a.retriever != nil {
+		retrieval.Query = retrievalQuery
 		filter, ok := retrieveFilterForTurn(req.UserID, req.SessionID)
 		if !ok {
 			slog.Info("chat.agent.retrieve_skipped", "reason", "scope_required")
@@ -203,7 +207,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 			retrieval.Reason = "scope_required"
 		} else {
 			retrievedChunks, err := a.retriever.RetrieveWithOptions(ctx, rag.RetrieveRequest{
-				Query:  req.Query,
+				Query:  retrievalQuery,
 				Filter: filter,
 			})
 			if err != nil {
@@ -226,6 +230,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 	} else if eval.ShouldRetrieve {
 		retrieval.Status = RetrievalStatusUnavailable
 		retrieval.Reason = "retriever_unavailable"
+		retrieval.Query = retrievalQuery
 	}
 
 	answer := a.AnswerWithOutcome(ctx, AnswerRequest{
@@ -252,32 +257,33 @@ func (a *Agent) EvaluateRetrieval(ctx context.Context, req RetrievalEvaluationRe
 	req.Query = strings.TrimSpace(req.Query)
 	if !req.RetrieverAvailable {
 		if isLikelyKnowledgeBaseQuery(req.Query) {
-			return RetrievalEvaluation{ShouldRetrieve: true, Reason: "retriever_unavailable"}
+			return RetrievalEvaluation{ShouldRetrieve: true, Reason: "retriever_unavailable", RetrievalQuery: req.Query}
 		}
 		return RetrievalEvaluation{ShouldRetrieve: false, Reason: "retriever_unavailable"}
 	}
 	if !a.llmEnabled() {
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_unavailable"}
+		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_unavailable", RetrievalQuery: req.Query}
 	}
 
 	cm, err := a.newModel(ctx, a.llmCfg)
 	if err != nil {
 		slog.Warn("chat.agent.rag_eval_llm_failed", "err", err)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_init_failed"}
+		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_init_failed", RetrievalQuery: req.Query}
 	}
 
 	resp, genErr := cm.Generate(ctx, buildRetrievalEvaluationMessages(req))
 	if genErr != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
 		slog.Warn("chat.agent.rag_eval_gen_failed", "err", genErr)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_gen_failed"}
+		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_gen_failed", RetrievalQuery: req.Query}
 	}
 
 	var result RetrievalEvaluation
 	if err := extractJSON(resp.Content, &result); err != nil {
 		slog.Warn("chat.agent.rag_eval_parse_failed", "content", resp.Content, "err", err)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_parse_failed"}
+		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_parse_failed", RetrievalQuery: req.Query}
 	}
 
+	result = normalizeRetrievalEvaluation(result, req.Query)
 	slog.Info("chat.agent.rag_eval", "should_retrieve", result.ShouldRetrieve, "reason", result.Reason)
 	return result
 }
@@ -368,6 +374,32 @@ func retrieveFilterForTurn(userID, sessionID string) (*rag.RetrieveFilter, bool)
 	return filter, true
 }
 
+func normalizeRetrievalEvaluation(eval RetrievalEvaluation, fallbackQuery string) RetrievalEvaluation {
+	eval.Reason = strings.TrimSpace(eval.Reason)
+	eval.RetrievalQuery = strings.TrimSpace(eval.RetrievalQuery)
+	if eval.ShouldRetrieve {
+		if eval.Reason == "" {
+			eval.Reason = "knowledge_base_question"
+		}
+		if eval.RetrievalQuery == "" {
+			eval.RetrievalQuery = strings.TrimSpace(fallbackQuery)
+		}
+	} else {
+		if eval.Reason == "" {
+			eval.Reason = "not_needed"
+		}
+		eval.RetrievalQuery = ""
+	}
+	return eval
+}
+
+func retrievalQueryForTurn(eval RetrievalEvaluation, fallbackQuery string) string {
+	if query := strings.TrimSpace(eval.RetrievalQuery); query != "" {
+		return query
+	}
+	return strings.TrimSpace(fallbackQuery)
+}
+
 func isLikelyKnowledgeBaseQuery(query string) bool {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
@@ -399,7 +431,7 @@ func isLikelyKnowledgeBaseQuery(query string) bool {
 }
 
 func buildRetrievalEvaluationMessages(input RetrievalEvaluationRequest) []*schema.Message {
-	systemPrompt := `你是一个RAG（检索增强生成）系统的查询评估器。你的任务是判断用户的最新问题是否需要从视频知识库中检索相关信息。
+	systemPrompt := `你是一个RAG（检索增强生成）系统的查询评估器。你的任务是判断用户的最新问题是否需要从视频知识库中检索相关信息，并在需要检索时生成一条适合向量检索的独立查询。
 
 需要触发RAG的情况（回答"是"）：
 1. 问题涉及视频的具体内容、转录文本、或之前上传到知识库的文档
@@ -414,9 +446,14 @@ func buildRetrievalEvaluationMessages(input RetrievalEvaluationRequest) []*schem
 4. 用户对AI能力的询问（"你能做什么"、"你怎么工作的"）
 5. 用户要求总结当前对话（不涉及外部知识）
 
+retrieval_query规则：
+1. 只有should_retrieve为true时才填写。
+2. 结合最近对话，把"它"、"这个"、"那具体怎么做"这类追问改写成可以单独检索的查询。
+3. 保留关键实体、视频/文档主题、用户真正要找的信息，不要加入不存在的细节。
+
 重要：用户谈论自己的个人信息（如学习计划、偏好等）不需要触发RAG，因为这些不是对知识库的查询。`
 
-	userPrompt := fmt.Sprintf("用户最新问题：%s\n\n请判断是否需要从视频知识库检索。返回JSON格式：{\"should_retrieve\": true/false, \"reason\": \"判断理由\"}", input.Query)
+	userPrompt := fmt.Sprintf("用户最新问题：%s\n\n请判断是否需要从视频知识库检索。返回JSON格式：{\"should_retrieve\": true/false, \"reason\": \"判断理由\", \"retrieval_query\": \"需要检索时，将用户问题改写成可独立向量检索的查询；不需要检索时留空\"}", input.Query)
 	if strings.TrimSpace(input.History) != "" {
 		userPrompt = fmt.Sprintf("最近对话：\n%s\n\n%s", input.History, userPrompt)
 	}

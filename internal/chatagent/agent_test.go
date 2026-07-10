@@ -13,17 +13,25 @@ import (
 )
 
 type fakeModel struct {
-	response string
-	err      error
-	input    []*schema.Message
+	response  string
+	responses []string
+	err       error
+	input     []*schema.Message
+	inputs    [][]*schema.Message
 }
 
 func (m *fakeModel) Generate(_ context.Context, input []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
 	m.input = input
+	m.inputs = append(m.inputs, input)
 	if m.err != nil {
 		return nil, m.err
 	}
-	return schema.AssistantMessage(m.response, nil), nil
+	response := m.response
+	if len(m.responses) > 0 {
+		response = m.responses[0]
+		m.responses = m.responses[1:]
+	}
+	return schema.AssistantMessage(response, nil), nil
 }
 
 type fakeRetriever struct {
@@ -136,13 +144,45 @@ func TestEvaluateRetrievalParsesModelDecisionAndIncludesContext(t *testing.T) {
 	if got.Reason != "small_talk" {
 		t.Fatalf("reason = %q, want small_talk", got.Reason)
 	}
+	if got.RetrievalQuery != "" {
+		t.Fatalf("retrieval query = %q, want empty for skipped retrieval", got.RetrievalQuery)
+	}
 	if len(model.input) != 2 {
 		t.Fatalf("expected system and user messages, got %#v", model.input)
 	}
 	userPrompt := model.input[1].Content
-	for _, want := range []string{"最近对话", "用户画像信息", "你好"} {
+	for _, want := range []string{"最近对话", "用户画像信息", "retrieval_query", "你好"} {
 		if !strings.Contains(userPrompt, want) {
 			t.Fatalf("retrieval prompt missing %q:\n%s", want, userPrompt)
+		}
+	}
+}
+
+func TestEvaluateRetrievalParsesHistoryAwareRetrievalQuery(t *testing.T) {
+	model := &fakeModel{response: `{"should_retrieve": true, "reason": "follow_up", "retrieval_query": "Markdown RAG 的具体操作步骤"}`}
+	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return model, nil
+	})
+
+	got := agent.EvaluateRetrieval(context.Background(), RetrievalEvaluationRequest{
+		Query:              "那具体怎么操作？",
+		History:            "用户: Markdown RAG 是什么？\n助手: 它会解析 Markdown 并索引到向量库。",
+		RetrieverAvailable: true,
+	})
+
+	if !got.ShouldRetrieve {
+		t.Fatalf("expected retrieval, got %#v", got)
+	}
+	if got.Reason != "follow_up" {
+		t.Fatalf("reason = %q, want follow_up", got.Reason)
+	}
+	if got.RetrievalQuery != "Markdown RAG 的具体操作步骤" {
+		t.Fatalf("retrieval query = %q", got.RetrievalQuery)
+	}
+	systemPrompt := model.input[0].Content
+	for _, want := range []string{"独立查询", "retrieval_query规则"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
 }
@@ -212,6 +252,50 @@ func TestRunTurnRetrievesWithChatScopeAndFallbackAnswer(t *testing.T) {
 	}
 	if !strings.Contains(got.Answer, "视频讲到了 Markdown RAG") {
 		t.Fatalf("expected fallback answer to include retrieved context, got %q", got.Answer)
+	}
+}
+
+func TestRunTurnUsesHistoryAwareRetrievalQuery(t *testing.T) {
+	model := &fakeModel{responses: []string{
+		`{"should_retrieve": true, "reason": "follow_up", "retrieval_query": "Markdown RAG 的具体操作步骤"}`,
+		"根据知识库回答。",
+	}}
+	retriever := &fakeRetriever{
+		chunks: []rag.RelevantChunk{
+			{Text: "Markdown RAG 要先解析标题段落，再切片入库。", Score: 0.93},
+		},
+	}
+	agent := NewWithModelFactoryAndRetriever(enabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return model, nil
+	}, retriever)
+
+	got, err := agent.RunTurn(context.Background(), TurnRequest{
+		Query:     "那具体怎么操作？",
+		History:   "用户: Markdown RAG 怎么做？\n助手: 可以解析 Markdown 后入库。",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+
+	if retriever.calls != 1 {
+		t.Fatalf("retriever calls = %d, want 1", retriever.calls)
+	}
+	if retriever.req.Query != "Markdown RAG 的具体操作步骤" {
+		t.Fatalf("retriever query = %q", retriever.req.Query)
+	}
+	if got.Evaluation.RetrievalQuery != "Markdown RAG 的具体操作步骤" {
+		t.Fatalf("evaluation retrieval query = %q", got.Evaluation.RetrievalQuery)
+	}
+	if got.Retrieval.Query != "Markdown RAG 的具体操作步骤" {
+		t.Fatalf("retrieval outcome query = %q", got.Retrieval.Query)
+	}
+	if got.Answer != "根据知识库回答。" {
+		t.Fatalf("answer = %q", got.Answer)
+	}
+	if len(model.inputs) != 2 {
+		t.Fatalf("model calls = %d, want retrieval evaluation and answer", len(model.inputs))
 	}
 }
 
