@@ -177,6 +177,43 @@ func TestNormalizeRAGQueryInputBuildsStrictRequest(t *testing.T) {
 	}
 }
 
+func TestRAGQueryOutputReportsRetrievedStatusAndCount(t *testing.T) {
+	out := newRAGQueryOutput([]rag.RelevantChunk{
+		{Text: "chunk one", Score: 0.91},
+		{Text: "chunk two", Score: 0.82},
+	})
+
+	if out.Status != "retrieved" {
+		t.Fatalf("status = %q, want retrieved", out.Status)
+	}
+	if out.Count != 2 {
+		t.Fatalf("count = %d, want 2", out.Count)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal output: %v", err)
+	}
+	for _, want := range []string{`"status":"retrieved"`, `"count":2`, `"chunks":[`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("expected %s in output JSON, got %s", want, encoded)
+		}
+	}
+}
+
+func TestRAGQueryOutputReportsNoResults(t *testing.T) {
+	out := newRAGQueryOutput(nil)
+
+	if out.Status != "no_results" {
+		t.Fatalf("status = %q, want no_results", out.Status)
+	}
+	if out.Count != 0 {
+		t.Fatalf("count = %d, want 0", out.Count)
+	}
+	if len(out.Chunks) != 0 {
+		t.Fatalf("chunks = %#v, want empty", out.Chunks)
+	}
+}
+
 func TestNormalizeRAGDeleteInputAcceptsSingleAndBatchSourceIDs(t *testing.T) {
 	got, err := normalizeRAGDeleteInput(RAGDeleteInput{
 		SourceID:  " source-1 ",

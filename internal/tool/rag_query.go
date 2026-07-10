@@ -21,6 +21,8 @@ type RAGQueryInput struct {
 }
 
 type RAGQueryOutput struct {
+	Status string              `json:"status"`
+	Count  int                 `json:"count"`
 	Chunks []rag.RelevantChunk `json:"chunks"`
 }
 
@@ -41,7 +43,7 @@ func NewRAGQueryTool(retriever *rag.Retriever) (tool.InvokableTool, *Wrapper, er
 			if err != nil {
 				return RAGQueryOutput{}, err
 			}
-			return RAGQueryOutput{Chunks: chunks}, nil
+			return newRAGQueryOutput(chunks), nil
 		},
 	)
 	if err != nil {
@@ -49,6 +51,18 @@ func NewRAGQueryTool(retriever *rag.Retriever) (tool.InvokableTool, *Wrapper, er
 	}
 	wrapper := NewWrapper(inner, WrapperConfig{Name: "rag_query", Timeout: 0})
 	return inner, wrapper, nil
+}
+
+func newRAGQueryOutput(chunks []rag.RelevantChunk) RAGQueryOutput {
+	status := "no_results"
+	if len(chunks) > 0 {
+		status = "retrieved"
+	}
+	return RAGQueryOutput{
+		Status: status,
+		Count:  len(chunks),
+		Chunks: chunks,
+	}
 }
 
 func normalizeRAGQueryInput(input RAGQueryInput) (rag.RetrieveRequest, error) {
