@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/raiki02/vidwise/internal/agent"
 	"github.com/raiki02/vidwise/internal/background"
 	taskpkg "github.com/raiki02/vidwise/internal/task"
 	"github.com/raiki02/vidwise/internal/tool"
@@ -20,7 +21,9 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	runner := background.NewRunner(time.Second)
 	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
-	h.process = func(context.Context, *tool.Registry, string, string, string, string, string, string, string) (string, error) {
+	h.processWithObserver = func(_ context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string, observer agent.VideoProcessObserver) (string, error) {
+		observer.StepStarted(agent.VideoProcessStepDownloadAudio)
+		observer.StepDone(agent.VideoProcessStepDownloadAudio)
 		return "formatted text", nil
 	}
 
@@ -64,6 +67,12 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	if task.Output["text_length"] != len("formatted text") {
 		t.Fatalf("task output = %#v, want text_length", task.Output)
 	}
+	if len(task.Steps) != len(agent.VideoProcessStepNames()) {
+		t.Fatalf("task steps = %#v", task.Steps)
+	}
+	if task.Steps[0].Name != agent.VideoProcessStepDownloadAudio || task.Steps[0].Status != taskpkg.StatusDone {
+		t.Fatalf("download step = %#v, want done", task.Steps[0])
+	}
 }
 
 func TestVideoProcessUsesDetachedBackgroundContext(t *testing.T) {
@@ -74,7 +83,7 @@ func TestVideoProcessUsesDetachedBackgroundContext(t *testing.T) {
 	errs := make(chan error, 1)
 
 	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
-	h.process = func(ctx context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string) (string, error) {
+	h.processWithObserver = func(ctx context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string, _ agent.VideoProcessObserver) (string, error) {
 		close(started)
 		<-check
 		errs <- ctx.Err()
@@ -118,7 +127,9 @@ func TestVideoProcessMarksTaskFailedWhenPipelineFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	runner := background.NewRunner(time.Second)
 	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
-	h.process = func(context.Context, *tool.Registry, string, string, string, string, string, string, string) (string, error) {
+	h.processWithObserver = func(_ context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string, observer agent.VideoProcessObserver) (string, error) {
+		observer.StepStarted(agent.VideoProcessStepTranscribeAudio)
+		observer.StepFailed(agent.VideoProcessStepTranscribeAudio, errors.New("pipeline failed"))
 		return "", errors.New("pipeline failed")
 	}
 
@@ -155,5 +166,8 @@ func TestVideoProcessMarksTaskFailedWhenPipelineFails(t *testing.T) {
 	}
 	if task.Error != "pipeline failed" {
 		t.Fatalf("task error = %q, want pipeline failed", task.Error)
+	}
+	if task.Steps[1].Status != taskpkg.StatusFailed {
+		t.Fatalf("transcribe step = %#v, want failed", task.Steps[1])
 	}
 }

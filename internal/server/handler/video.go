@@ -17,12 +17,14 @@ import (
 const videoProcessTimeout = 2 * time.Hour
 
 type videoProcessor func(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string) (string, error)
+type videoProcessorWithObserver func(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string, observer agent.VideoProcessObserver) (string, error)
 
 type VideoHandler struct {
-	registry *tool.Registry
-	runner   *background.Runner
-	process  videoProcessor
-	tasks    *taskpkg.Tracker
+	registry            *tool.Registry
+	runner              *background.Runner
+	process             videoProcessor
+	processWithObserver videoProcessorWithObserver
+	tasks               *taskpkg.Tracker
 }
 
 func NewVideoHandler(registry *tool.Registry) *VideoHandler {
@@ -40,7 +42,13 @@ func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *back
 	if tasks == nil {
 		tasks = taskpkg.NewTracker()
 	}
-	return &VideoHandler{registry: registry, runner: runner, process: agent.ExecuteVideoProcess, tasks: tasks}
+	return &VideoHandler{
+		registry:            registry,
+		runner:              runner,
+		process:             agent.ExecuteVideoProcess,
+		processWithObserver: agent.ExecuteVideoProcessWithObserver,
+		tasks:               tasks,
+	}
 }
 
 type VideoProcessRequest struct {
@@ -90,29 +98,49 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		UserID:    req.UserID,
 		SessionID: req.SessionID,
 		TraceID:   traceID,
+		Steps:     agent.VideoProcessStepNames(),
 	})
 
+	processWithObserver := h.processWithObserver
 	process := h.process
-	if process == nil {
-		process = agent.ExecuteVideoProcess
-	}
 	runner := h.runner
 	if runner == nil {
 		runner = background.NewRunner(videoProcessTimeout)
 	}
 	runner.Go("video.process", func(ctx context.Context) {
 		tasks.Start(taskID)
-		result, err := process(
-			ctx,
-			h.registry,
-			req.URL,
-			req.WorkDir,
-			req.Name,
-			req.UserID,
-			req.SessionID,
-			taskID,
-			req.Language,
-		)
+		observer := taskStepObserver{tasks: tasks, taskID: taskID}
+		var result string
+		var err error
+		if processWithObserver != nil {
+			result, err = processWithObserver(
+				ctx,
+				h.registry,
+				req.URL,
+				req.WorkDir,
+				req.Name,
+				req.UserID,
+				req.SessionID,
+				taskID,
+				req.Language,
+				observer,
+			)
+		} else {
+			if process == nil {
+				process = agent.ExecuteVideoProcess
+			}
+			result, err = process(
+				ctx,
+				h.registry,
+				req.URL,
+				req.WorkDir,
+				req.Name,
+				req.UserID,
+				req.SessionID,
+				taskID,
+				req.Language,
+			)
+		}
 		if err != nil {
 			tasks.Fail(taskID, err.Error())
 			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
@@ -127,4 +155,29 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		Status:    "pending",
 		SessionID: req.SessionID,
 	})
+}
+
+type taskStepObserver struct {
+	tasks  *taskpkg.Tracker
+	taskID string
+}
+
+func (o taskStepObserver) StepStarted(name string) {
+	o.tasks.StartStep(o.taskID, name)
+}
+
+func (o taskStepObserver) StepDone(name string) {
+	o.tasks.CompleteStep(o.taskID, name)
+}
+
+func (o taskStepObserver) StepFailed(name string, err error) {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	o.tasks.FailStep(o.taskID, name, message)
+}
+
+func (o taskStepObserver) StepSkipped(name, reason string) {
+	o.tasks.SkipStep(o.taskID, name, reason)
 }

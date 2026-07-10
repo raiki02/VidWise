@@ -10,6 +10,7 @@ type TrackedTask struct {
 	ID         string         `json:"task_id"`
 	Type       string         `json:"type"`
 	Status     Status         `json:"status"`
+	Steps      []TrackedStep  `json:"steps,omitempty"`
 	UserID     string         `json:"user_id,omitempty"`
 	SessionID  string         `json:"session_id,omitempty"`
 	TraceID    string         `json:"trace_id,omitempty"`
@@ -21,12 +22,24 @@ type TrackedTask struct {
 	FinishedAt *time.Time     `json:"finished_at,omitempty"`
 }
 
+// TrackedStep is the request-facing view of one task pipeline step.
+type TrackedStep struct {
+	Name       string     `json:"name"`
+	Status     Status     `json:"status"`
+	Error      string     `json:"error,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
 type TrackCreateRequest struct {
 	ID        string
 	Type      string
 	UserID    string
 	SessionID string
 	TraceID   string
+	Steps     []string
 }
 
 // Tracker records in-process task state for async work launched by the gateway.
@@ -56,6 +69,7 @@ func (t *Tracker) Create(req TrackCreateRequest) TrackedTask {
 		ID:        id,
 		Type:      req.Type,
 		Status:    StatusPending,
+		Steps:     newTrackedSteps(req.Steps, now),
 		UserID:    req.UserID,
 		SessionID: req.SessionID,
 		TraceID:   req.TraceID,
@@ -101,6 +115,44 @@ func (t *Tracker) Fail(id, message string) (TrackedTask, bool) {
 	})
 }
 
+func (t *Tracker) StartStep(taskID, stepName string) (TrackedTask, bool) {
+	return t.updateStep(taskID, stepName, func(step TrackedStep, now time.Time) TrackedStep {
+		step.Status = StatusRunning
+		step.StartedAt = &now
+		step.UpdatedAt = now
+		return step
+	})
+}
+
+func (t *Tracker) CompleteStep(taskID, stepName string) (TrackedTask, bool) {
+	return t.updateStep(taskID, stepName, func(step TrackedStep, now time.Time) TrackedStep {
+		step.Status = StatusDone
+		step.FinishedAt = &now
+		step.UpdatedAt = now
+		return step
+	})
+}
+
+func (t *Tracker) FailStep(taskID, stepName, message string) (TrackedTask, bool) {
+	return t.updateStep(taskID, stepName, func(step TrackedStep, now time.Time) TrackedStep {
+		step.Status = StatusFailed
+		step.Error = message
+		step.FinishedAt = &now
+		step.UpdatedAt = now
+		return step
+	})
+}
+
+func (t *Tracker) SkipStep(taskID, stepName, reason string) (TrackedTask, bool) {
+	return t.updateStep(taskID, stepName, func(step TrackedStep, now time.Time) TrackedStep {
+		step.Status = StatusSkipped
+		step.Error = reason
+		step.FinishedAt = &now
+		step.UpdatedAt = now
+		return step
+	})
+}
+
 func (t *Tracker) Get(id string) (TrackedTask, bool) {
 	if t == nil {
 		return TrackedTask{}, false
@@ -112,6 +164,28 @@ func (t *Tracker) Get(id string) (TrackedTask, bool) {
 	if !ok {
 		return TrackedTask{}, false
 	}
+	return copyTrackedTask(task), true
+}
+
+func (t *Tracker) updateStep(taskID, stepName string, mutate func(TrackedStep, time.Time) TrackedStep) (TrackedTask, bool) {
+	if t == nil {
+		return TrackedTask{}, false
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	task, ok := t.tasks[taskID]
+	if !ok {
+		return TrackedTask{}, false
+	}
+	idx := findTrackedStep(task.Steps, stepName)
+	if idx < 0 {
+		return TrackedTask{}, false
+	}
+	now := t.currentTime()
+	task.Steps[idx] = mutate(task.Steps[idx], now)
+	task.UpdatedAt = now
+	t.tasks[taskID] = task
 	return copyTrackedTask(task), true
 }
 
@@ -140,7 +214,45 @@ func (t *Tracker) currentTime() time.Time {
 
 func copyTrackedTask(task TrackedTask) TrackedTask {
 	task.Output = copyOutput(task.Output)
+	if len(task.Steps) > 0 {
+		steps := make([]TrackedStep, len(task.Steps))
+		copy(steps, task.Steps)
+		task.Steps = steps
+	}
 	return task
+}
+
+func newTrackedSteps(names []string, now time.Time) []TrackedStep {
+	if len(names) == 0 {
+		return nil
+	}
+	steps := make([]TrackedStep, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		steps = append(steps, TrackedStep{
+			Name:      name,
+			Status:    StatusPending,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+	return steps
+}
+
+func findTrackedStep(steps []TrackedStep, name string) int {
+	for i, step := range steps {
+		if step.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func copyOutput(output map[string]any) map[string]any {
