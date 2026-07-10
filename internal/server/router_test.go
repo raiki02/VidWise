@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/capability"
@@ -191,6 +192,22 @@ func TestRouterMountsTaskListRoute(t *testing.T) {
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected mounted route to return 400 from handler, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestTaskTrackerOptionsFromConfig(t *testing.T) {
+	opts := taskTrackerOptionsFromConfig(appconfig.Config{
+		Task: appconfig.TaskConfig{
+			MaxTracked: 7,
+			RetainFor:  "2h",
+		},
+	})
+
+	if opts.MaxTasks != 7 {
+		t.Fatalf("MaxTasks = %d, want 7", opts.MaxTasks)
+	}
+	if opts.RetainFor != 2*time.Hour {
+		t.Fatalf("RetainFor = %s, want 2h", opts.RetainFor)
 	}
 }
 

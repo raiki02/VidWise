@@ -23,6 +23,7 @@ type Config struct {
 	Rerank       RerankConfig       `yaml:"rerank"`
 	MCP          MCPConfig          `yaml:"mcp"`
 	Upload       UploadConfig       `yaml:"upload"`
+	Task         TaskConfig         `yaml:"task"`
 }
 
 type ServerConfig struct {
@@ -165,6 +166,11 @@ type UploadConfig struct {
 	ChunkRunes   int   `yaml:"chunk_runes"`
 	OverlapRunes int   `yaml:"overlap_runes"`
 	MaxFileBytes int64 `yaml:"max_file_bytes"` // 0 = no limit
+}
+
+type TaskConfig struct {
+	MaxTracked int    `yaml:"max_tracked"`
+	RetainFor  string `yaml:"retain_for"`
 }
 
 func Load(path string) (Config, error) {
@@ -361,6 +367,13 @@ func (c *Config) applyDefaults() {
 	if c.Upload.MaxFileBytes == 0 {
 		c.Upload.MaxFileBytes = 10 * 1024 * 1024 // 10 MB
 	}
+	// Task tracker defaults
+	if c.Task.MaxTracked == 0 {
+		c.Task.MaxTracked = 1000
+	}
+	if c.Task.RetainFor == "" {
+		c.Task.RetainFor = "24h"
+	}
 }
 
 func (c Config) validate() error {
@@ -407,6 +420,12 @@ func (c Config) validate() error {
 	if c.RAG.Context.MaxRunes <= 0 {
 		return errors.New("rag.context.max_runes must be greater than 0")
 	}
+	if c.Task.MaxTracked <= 0 {
+		return errors.New("task.max_tracked must be greater than 0")
+	}
+	if _, err := c.Task.RetentionDuration(); err != nil {
+		return fmt.Errorf("invalid task.retain_for: %w", err)
+	}
 	return nil
 }
 
@@ -449,6 +468,21 @@ func (c EmbeddingConfig) TimeoutDuration() (time.Duration, error) {
 
 func (c RerankConfig) TimeoutDuration() (time.Duration, error) {
 	return time.ParseDuration(c.Timeout)
+}
+
+func (c TaskConfig) RetentionDuration() (time.Duration, error) {
+	retainFor := strings.TrimSpace(c.RetainFor)
+	if retainFor == "" {
+		retainFor = "24h"
+	}
+	d, err := time.ParseDuration(retainFor)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return d, nil
 }
 
 func (c QdrantConfig) Addr() string {

@@ -56,7 +56,7 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
-	taskTracker := taskpkg.NewTracker()
+	taskTracker := newTaskTrackerFromConfig(cfg)
 
 	// Handlers
 	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
@@ -112,4 +112,22 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	})
 
 	return e
+}
+
+func newTaskTrackerFromConfig(cfg appconfig.Config) *taskpkg.Tracker {
+	return taskpkg.NewTrackerWithOptions(taskTrackerOptionsFromConfig(cfg))
+}
+
+func taskTrackerOptionsFromConfig(cfg appconfig.Config) taskpkg.TrackerOptions {
+	retainFor, err := cfg.Task.RetentionDuration()
+	if err != nil {
+		slog.Warn("gateway.task_tracker_config_invalid", "retain_for", cfg.Task.RetainFor, "err", err)
+		return taskpkg.TrackerOptions{
+			MaxTasks: cfg.Task.MaxTracked,
+		}
+	}
+	return taskpkg.TrackerOptions{
+		MaxTasks:  cfg.Task.MaxTracked,
+		RetainFor: retainFor,
+	}
 }
