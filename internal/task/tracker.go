@@ -1,8 +1,14 @@
 package task
 
 import (
+	"sort"
 	"sync"
 	"time"
+)
+
+const (
+	defaultMaxTrackedTasks = 1000
+	defaultTaskRetention   = 24 * time.Hour
 )
 
 // TrackedTask is the request-facing view of an asynchronous task.
@@ -42,17 +48,32 @@ type TrackCreateRequest struct {
 	Steps     []string
 }
 
+type TrackerOptions struct {
+	MaxTasks  int
+	RetainFor time.Duration
+	Now       func() time.Time
+}
+
 // Tracker records in-process task state for async work launched by the gateway.
 type Tracker struct {
-	mu    sync.RWMutex
-	tasks map[string]TrackedTask
-	now   func() time.Time
+	mu        sync.RWMutex
+	tasks     map[string]TrackedTask
+	now       func() time.Time
+	maxTasks  int
+	retainFor time.Duration
 }
 
 func NewTracker() *Tracker {
+	return NewTrackerWithOptions(TrackerOptions{})
+}
+
+func NewTrackerWithOptions(opts TrackerOptions) *Tracker {
+	opts = normalizeTrackerOptions(opts)
 	return &Tracker{
-		tasks: make(map[string]TrackedTask),
-		now:   time.Now,
+		tasks:     make(map[string]TrackedTask),
+		now:       opts.Now,
+		maxTasks:  opts.MaxTasks,
+		retainFor: opts.RetainFor,
 	}
 }
 
@@ -83,6 +104,7 @@ func (t *Tracker) Create(req TrackCreateRequest) TrackedTask {
 		t.tasks = make(map[string]TrackedTask)
 	}
 	t.tasks[id] = task
+	t.pruneLocked(now)
 	return copyTrackedTask(task)
 }
 
@@ -205,11 +227,64 @@ func (t *Tracker) update(id string, mutate func(TrackedTask, time.Time) TrackedT
 	return copyTrackedTask(task), true
 }
 
+func (t *Tracker) Prune() int {
+	if t == nil {
+		return 0
+	}
+
+	now := t.currentTime()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pruneLocked(now)
+}
+
 func (t *Tracker) currentTime() time.Time {
 	if t.now == nil {
 		return time.Now()
 	}
 	return t.now()
+}
+
+func (t *Tracker) pruneLocked(now time.Time) int {
+	if len(t.tasks) == 0 {
+		return 0
+	}
+	t.normalizeOptionsLocked()
+
+	removed := 0
+	if t.retainFor > 0 {
+		for id, task := range t.tasks {
+			if !isTerminalTaskStatus(task.Status) {
+				continue
+			}
+			if now.Sub(taskTerminalTime(task)) >= t.retainFor {
+				delete(t.tasks, id)
+				removed++
+			}
+		}
+	}
+
+	if t.maxTasks > 0 && len(t.tasks) > t.maxTasks {
+		candidates := trackedTaskPruneCandidates(t.tasks)
+		for _, candidate := range candidates {
+			if len(t.tasks) <= t.maxTasks {
+				break
+			}
+			delete(t.tasks, candidate.id)
+			removed++
+		}
+	}
+
+	return removed
+}
+
+func (t *Tracker) normalizeOptionsLocked() {
+	if t.maxTasks <= 0 {
+		t.maxTasks = defaultMaxTrackedTasks
+	}
+	if t.retainFor <= 0 {
+		t.retainFor = defaultTaskRetention
+	}
 }
 
 func copyTrackedTask(task TrackedTask) TrackedTask {
@@ -264,4 +339,58 @@ func copyOutput(output map[string]any) map[string]any {
 		copied[key] = value
 	}
 	return copied
+}
+
+func normalizeTrackerOptions(opts TrackerOptions) TrackerOptions {
+	if opts.MaxTasks <= 0 {
+		opts.MaxTasks = defaultMaxTrackedTasks
+	}
+	if opts.RetainFor <= 0 {
+		opts.RetainFor = defaultTaskRetention
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return opts
+}
+
+type trackedTaskPruneCandidate struct {
+	id   string
+	task TrackedTask
+}
+
+func trackedTaskPruneCandidates(tasks map[string]TrackedTask) []trackedTaskPruneCandidate {
+	candidates := make([]trackedTaskPruneCandidate, 0, len(tasks))
+	for id, task := range tasks {
+		if !isTerminalTaskStatus(task.Status) {
+			continue
+		}
+		candidates = append(candidates, trackedTaskPruneCandidate{
+			id:   id,
+			task: task,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left := taskTerminalTime(candidates[i].task)
+		right := taskTerminalTime(candidates[j].task)
+		if left.Equal(right) {
+			return candidates[i].id < candidates[j].id
+		}
+		return left.Before(right)
+	})
+	return candidates
+}
+
+func isTerminalTaskStatus(status Status) bool {
+	return status == StatusDone || status == StatusFailed
+}
+
+func taskTerminalTime(task TrackedTask) time.Time {
+	if task.FinishedAt != nil {
+		return *task.FinishedAt
+	}
+	if !task.UpdatedAt.IsZero() {
+		return task.UpdatedAt
+	}
+	return task.CreatedAt
 }

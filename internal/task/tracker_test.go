@@ -188,3 +188,60 @@ func TestZeroValueTrackerIsUsable(t *testing.T) {
 		t.Fatalf("status = %q, want pending", got.Status)
 	}
 }
+
+func TestTrackerPrunesExpiredTerminalTasks(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		MaxTasks:  10,
+		RetainFor: time.Minute,
+		Now: func() time.Time {
+			return now
+		},
+	})
+
+	tracker.Create(TrackCreateRequest{ID: "old-done"})
+	tracker.Complete("old-done", nil)
+	tracker.Create(TrackCreateRequest{ID: "old-running"})
+	tracker.Start("old-running")
+
+	now = now.Add(time.Minute + time.Second)
+	removed := tracker.Prune()
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, ok := tracker.Get("old-done"); ok {
+		t.Fatal("expected expired done task to be pruned")
+	}
+	if _, ok := tracker.Get("old-running"); !ok {
+		t.Fatal("expected running task to be retained")
+	}
+}
+
+func TestTrackerPrunesOldestTerminalTasksWhenOverCapacity(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		MaxTasks:  2,
+		RetainFor: time.Hour,
+		Now: func() time.Time {
+			now = now.Add(time.Second)
+			return now
+		},
+	})
+
+	tracker.Create(TrackCreateRequest{ID: "old-done"})
+	tracker.Complete("old-done", nil)
+	tracker.Create(TrackCreateRequest{ID: "running"})
+	tracker.Start("running")
+	tracker.Create(TrackCreateRequest{ID: "new-done"})
+	tracker.Complete("new-done", nil)
+
+	if _, ok := tracker.Get("old-done"); ok {
+		t.Fatal("expected oldest terminal task to be pruned")
+	}
+	if _, ok := tracker.Get("running"); !ok {
+		t.Fatal("expected running task to be retained")
+	}
+	if _, ok := tracker.Get("new-done"); !ok {
+		t.Fatal("expected newest terminal task to be retained")
+	}
+}
