@@ -80,6 +80,7 @@ type ChatChunk struct {
 }
 
 type ChatQueryResponse struct {
+	TraceID              string      `json:"trace_id,omitempty"`
 	SessionID            string      `json:"session_id"`
 	Answer               string      `json:"answer"`
 	Chunks               []ChatChunk `json:"chunks,omitempty"`
@@ -211,6 +212,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ChatQueryResponse{
+		TraceID:              requestTraceID(c),
 		SessionID:            sessionID,
 		Answer:               answer,
 		Chunks:               outChunks,

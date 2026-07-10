@@ -11,8 +11,12 @@ func errorJSONWithFields(c *gin.Context, status int, message string, fields gin.
 	for key, value := range fields {
 		payload[key] = value
 	}
-	if traceID := c.GetString("trace_id"); traceID != "" {
+	if traceID := requestTraceID(c); traceID != "" {
 		payload["trace_id"] = traceID
 	}
 	c.JSON(status, payload)
+}
+
+func requestTraceID(c *gin.Context) string {
+	return c.GetString("trace_id")
 }

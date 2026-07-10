@@ -87,6 +87,9 @@ func TestChatQueryReportsRetrievalStatusWhenRetrieverUnavailable(t *testing.T) {
 	if !out.RAGTriggered {
 		t.Fatalf("expected RAG to be required, got %#v", out)
 	}
+	if out.TraceID != "trace-chat-1" {
+		t.Fatalf("trace id = %q, want trace-chat-1", out.TraceID)
+	}
 	if out.RAGStatus != "unavailable" {
 		t.Fatalf("rag status = %q, want unavailable", out.RAGStatus)
 	}

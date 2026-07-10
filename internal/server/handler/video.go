@@ -42,7 +42,7 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	}
 
 	taskID := uuid.New().String()
-	traceID := uuid.New().String()
+	traceID := requestTraceID(c)
 
 	if req.SessionID == "" {
 		req.SessionID = uuid.New().String()
