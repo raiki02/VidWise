@@ -27,7 +27,12 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr              string `yaml:"addr"`
+	ReadHeaderTimeout string `yaml:"read_header_timeout"`
+	ReadTimeout       string `yaml:"read_timeout"`
+	WriteTimeout      string `yaml:"write_timeout"`
+	IdleTimeout       string `yaml:"idle_timeout"`
+	ShutdownTimeout   string `yaml:"shutdown_timeout"`
 }
 
 type DownloadConfig struct {
@@ -194,6 +199,21 @@ func Load(path string) (Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
+	}
+	if c.Server.ReadHeaderTimeout == "" {
+		c.Server.ReadHeaderTimeout = "5s"
+	}
+	if c.Server.ReadTimeout == "" {
+		c.Server.ReadTimeout = "30s"
+	}
+	if c.Server.WriteTimeout == "" {
+		c.Server.WriteTimeout = "0s"
+	}
+	if c.Server.IdleTimeout == "" {
+		c.Server.IdleTimeout = "120s"
+	}
+	if c.Server.ShutdownTimeout == "" {
+		c.Server.ShutdownTimeout = "10s"
 	}
 	if c.ASR.BaseURL == "" {
 		c.ASR.BaseURL = "http://localhost:8001"
@@ -377,6 +397,22 @@ func (c *Config) applyDefaults() {
 }
 
 func (c Config) validate() error {
+	if _, err := c.Server.ReadHeaderTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.read_header_timeout: %w", err)
+	}
+	if _, err := c.Server.ReadTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.read_timeout: %w", err)
+	}
+	if _, err := c.Server.WriteTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.write_timeout: %w", err)
+	}
+	if _, err := c.Server.IdleTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.idle_timeout: %w", err)
+	}
+	if _, err := c.Server.ShutdownTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.shutdown_timeout: %w", err)
+	}
+
 	llmEnabled := c.LLM.Enabled == nil || *c.LLM.Enabled
 	llmFallback := c.LLM.FallbackToRawOnError == nil || *c.LLM.FallbackToRawOnError
 	if llmEnabled {
@@ -427,6 +463,26 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid task.retain_for: %w", err)
 	}
 	return nil
+}
+
+func (c ServerConfig) ReadHeaderTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ReadHeaderTimeout, "5s", false)
+}
+
+func (c ServerConfig) ReadTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ReadTimeout, "30s", true)
+}
+
+func (c ServerConfig) WriteTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.WriteTimeout, "0s", true)
+}
+
+func (c ServerConfig) IdleTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.IdleTimeout, "120s", false)
+}
+
+func (c ServerConfig) ShutdownTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ShutdownTimeout, "10s", false)
 }
 
 func (c ASRConfig) TimeoutDuration() (time.Duration, error) {
@@ -487,6 +543,24 @@ func (c TaskConfig) RetentionDuration() (time.Duration, error) {
 
 func (c QdrantConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+func serverDuration(raw, fallback string, allowZero bool) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		value = fallback
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if d < 0 {
+		return 0, errors.New("must be greater than or equal to 0")
+	}
+	if !allowZero && d == 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return d, nil
 }
 
 const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。

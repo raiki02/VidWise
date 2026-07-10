@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -198,6 +200,10 @@ func runGateway(cfg appconfig.Config) {
 
 	// Build and start Gin engine
 	e := server.Router(cfg, registry, ragBuild.Runtime, chatRepo, memRepo, caps)
+	httpServer, err := server.NewHTTPServer(cfg.Server, e)
+	if err != nil {
+		panic(fmt.Errorf("build http server: %w", err))
+	}
 	slog.Info("gateway.starting", "addr", cfg.Server.Addr,
 		"qdrant", qdConn != nil,
 		"embedding", embedClient != nil,
@@ -209,19 +215,39 @@ func runGateway(cfg appconfig.Config) {
 		"mcp_enabled", cfg.MCP.Enabled,
 	)
 
+	errCh := make(chan error, 1)
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
-		slog.Info("gateway.shutting_down")
-		if qdConn != nil {
-			_ = qdConn.Close()
-		}
-		os.Exit(0)
+		errCh <- httpServer.ListenAndServe()
 	}()
 
-	if err := e.Run(cfg.Server.Addr); err != nil {
-		panic(err)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			panic(err)
+		}
+	case sig := <-sigCh:
+		shutdownTimeout, err := cfg.Server.ShutdownTimeoutDuration()
+		if err != nil {
+			shutdownTimeout = 10 * time.Second
+		}
+		slog.Info("gateway.shutting_down", "signal", sig.String(), "timeout", shutdownTimeout)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer shutdownCancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("gateway.shutdown_failed", "err", err)
+			_ = httpServer.Close()
+		}
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			panic(err)
+		}
+	}
+
+	if qdConn != nil {
+		_ = qdConn.Close()
 	}
 }
 
