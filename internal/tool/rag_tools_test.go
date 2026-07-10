@@ -157,39 +157,43 @@ func TestNormalizeRAGQueryInputRequiresQueryAndScope(t *testing.T) {
 func TestNormalizeRAGQueryInputBuildsStrictRequest(t *testing.T) {
 	minScore := 0.3
 	req, err := normalizeRAGQueryInput(RAGQueryInput{
-		Query:       " hello ",
-		SessionID:   " session-1 ",
-		SourceIDs:   []string{" source-1 ", "source-2", "source-1", " "},
-		DocumentIDs: []string{" doc-1 ", "doc-1"},
-		TopK:        4,
-		SearchTopK:  12,
-		MinScore:    &minScore,
+		Query:        " hello ",
+		SessionID:    " session-1 ",
+		SourceIDs:    []string{" source-1 ", "source-2", "source-1", " "},
+		DocumentIDs:  []string{" doc-1 ", "doc-1"},
+		TopK:         4,
+		SearchTopK:   12,
+		MinScore:     &minScore,
+		ContextRunes: 90,
 	})
 	if err != nil {
 		t.Fatalf("normalize query input: %v", err)
 	}
-	if req.Query != "hello" {
-		t.Fatalf("query = %q, want hello", req.Query)
+	if req.Retrieve.Query != "hello" {
+		t.Fatalf("query = %q, want hello", req.Retrieve.Query)
 	}
-	if req.Filter == nil || req.Filter.SessionID != "session-1" {
-		t.Fatalf("unexpected filter: %#v", req.Filter)
+	if req.Retrieve.Filter == nil || req.Retrieve.Filter.SessionID != "session-1" {
+		t.Fatalf("unexpected filter: %#v", req.Retrieve.Filter)
 	}
-	if len(req.Filter.SourceIDs) != 2 || req.Filter.SourceIDs[0] != "source-1" || req.Filter.SourceIDs[1] != "source-2" {
-		t.Fatalf("unexpected source ids: %#v", req.Filter.SourceIDs)
+	if len(req.Retrieve.Filter.SourceIDs) != 2 || req.Retrieve.Filter.SourceIDs[0] != "source-1" || req.Retrieve.Filter.SourceIDs[1] != "source-2" {
+		t.Fatalf("unexpected source ids: %#v", req.Retrieve.Filter.SourceIDs)
 	}
-	if len(req.Filter.DocumentIDs) != 1 || req.Filter.DocumentIDs[0] != "doc-1" {
-		t.Fatalf("unexpected document ids: %#v", req.Filter.DocumentIDs)
+	if len(req.Retrieve.Filter.DocumentIDs) != 1 || req.Retrieve.Filter.DocumentIDs[0] != "doc-1" {
+		t.Fatalf("unexpected document ids: %#v", req.Retrieve.Filter.DocumentIDs)
 	}
-	if req.TopK != 4 || req.SearchTopK != 12 || req.MinScore == nil || *req.MinScore != minScore {
+	if req.Retrieve.TopK != 4 || req.Retrieve.SearchTopK != 12 || req.Retrieve.MinScore == nil || *req.Retrieve.MinScore != minScore {
 		t.Fatalf("unexpected retrieval options: %#v", req)
+	}
+	if req.Context.MaxRunes != 90 {
+		t.Fatalf("context max runes = %d, want 90", req.Context.MaxRunes)
 	}
 }
 
 func TestRAGQueryOutputReportsRetrievedStatusAndCount(t *testing.T) {
 	out := newRAGQueryOutput([]rag.RelevantChunk{
-		{Text: "chunk one", Score: 0.91},
-		{Text: "chunk two", Score: 0.82},
-	})
+		{Text: "chunk one", Score: 0.91, SourceName: "guide.md", HeadingPath: "Intro"},
+		{Text: "chunk two", Score: 0.82, SourceName: "guide.md", HeadingPath: "Details"},
+	}, rag.ContextConfig{MaxRunes: 1024})
 
 	if out.Status != "retrieved" {
 		t.Fatalf("status = %q, want retrieved", out.Status)
@@ -197,11 +201,22 @@ func TestRAGQueryOutputReportsRetrievedStatusAndCount(t *testing.T) {
 	if out.Count != 2 {
 		t.Fatalf("count = %d, want 2", out.Count)
 	}
+	if out.ContextUsedChunks != 2 || out.ContextTruncated {
+		t.Fatalf("unexpected context outcome: %#v", out)
+	}
+	if len(out.ContextCitations) != 2 || out.ContextCitations[0].SnippetNumber != 1 || out.ContextCitations[0].Chunk.SourceName != "guide.md" {
+		t.Fatalf("unexpected context citations: %#v", out.ContextCitations)
+	}
+	for _, want := range []string{"[片段 1]", "guide.md / Intro", "chunk two"} {
+		if !strings.Contains(out.Context, want) {
+			t.Fatalf("expected context to contain %q, got %q", want, out.Context)
+		}
+	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal output: %v", err)
 	}
-	for _, want := range []string{`"status":"retrieved"`, `"count":2`, `"chunks":[`} {
+	for _, want := range []string{`"status":"retrieved"`, `"count":2`, `"chunks":[`, `"context":"`, `"context_used_chunks":2`, `"context_citations":[`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("expected %s in output JSON, got %s", want, encoded)
 		}
@@ -209,7 +224,7 @@ func TestRAGQueryOutputReportsRetrievedStatusAndCount(t *testing.T) {
 }
 
 func TestRAGQueryOutputReportsNoResults(t *testing.T) {
-	out := newRAGQueryOutput(nil)
+	out := newRAGQueryOutput(nil, rag.ContextConfig{MaxRunes: 1024})
 
 	if out.Status != "no_results" {
 		t.Fatalf("status = %q, want no_results", out.Status)
@@ -219,6 +234,30 @@ func TestRAGQueryOutputReportsNoResults(t *testing.T) {
 	}
 	if len(out.Chunks) != 0 {
 		t.Fatalf("chunks = %#v, want empty", out.Chunks)
+	}
+	if out.Context != "" || out.ContextUsedChunks != 0 || len(out.ContextCitations) != 0 {
+		t.Fatalf("unexpected context for empty result: %#v", out)
+	}
+}
+
+func TestRAGQueryOutputPacksPromptContextWithBudgetAndDedup(t *testing.T) {
+	out := newRAGQueryOutput([]rag.RelevantChunk{
+		{Text: "same context", Score: 0.91, ContentHash: "hash-1", SourceName: "guide.md"},
+		{Text: "same context", Score: 0.89, ContentHash: "hash-1", SourceName: "guide.md"},
+		{Text: strings.Repeat("界", 200), Score: 0.82, ContentHash: "hash-2", SourceName: "long.md"},
+	}, rag.ContextConfig{MaxRunes: 120})
+
+	if out.ContextUsedChunks != 2 {
+		t.Fatalf("context used chunks = %d, want 2", out.ContextUsedChunks)
+	}
+	if out.ContextSkippedDuplicates != 1 {
+		t.Fatalf("context skipped duplicates = %d, want 1", out.ContextSkippedDuplicates)
+	}
+	if !out.ContextTruncated {
+		t.Fatalf("expected context truncation, got %#v", out)
+	}
+	if strings.Count(out.Context, "same context") != 1 {
+		t.Fatalf("duplicate leaked into packed context: %q", out.Context)
 	}
 }
 
