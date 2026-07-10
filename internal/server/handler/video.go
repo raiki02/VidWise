@@ -1,20 +1,37 @@
 package handler
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/raiki02/vidwise/internal/agent"
+	"github.com/raiki02/vidwise/internal/background"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
+const videoProcessTimeout = 2 * time.Hour
+
+type videoProcessor func(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string) (string, error)
+
 type VideoHandler struct {
 	registry *tool.Registry
+	runner   *background.Runner
+	process  videoProcessor
 }
 
 func NewVideoHandler(registry *tool.Registry) *VideoHandler {
-	return &VideoHandler{registry: registry}
+	return NewVideoHandlerWithBackground(registry, nil)
+}
+
+func NewVideoHandlerWithBackground(registry *tool.Registry, runner *background.Runner) *VideoHandler {
+	if runner == nil {
+		runner = background.NewRunner(videoProcessTimeout)
+	}
+	return &VideoHandler{registry: registry, runner: runner, process: agent.ExecuteVideoProcess}
 }
 
 type VideoProcessRequest struct {
@@ -54,10 +71,17 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		req.Language = "zh"
 	}
 
-	// Execute the pipeline synchronously for now (can be made async with worker pool)
-	go func() {
-		_, err := agent.ExecuteVideoProcess(
-			c.Request.Context(),
+	process := h.process
+	if process == nil {
+		process = agent.ExecuteVideoProcess
+	}
+	runner := h.runner
+	if runner == nil {
+		runner = background.NewRunner(videoProcessTimeout)
+	}
+	runner.Go("video.process", func(ctx context.Context) {
+		_, err := process(
+			ctx,
 			h.registry,
 			req.URL,
 			req.WorkDir,
@@ -68,9 +92,9 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 			req.Language,
 		)
 		if err != nil {
-			_ = err // In production: update task status to failed
+			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
 		}
-	}()
+	})
 
 	c.JSON(http.StatusAccepted, VideoProcessResponse{
 		TaskID:    taskID,
