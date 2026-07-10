@@ -234,9 +234,11 @@ func TestRunTurnRetrievesWithChatScopeAndFallbackAnswer(t *testing.T) {
 	agent := NewWithRetriever(disabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, retriever)
 
 	got, err := agent.RunTurn(context.Background(), TurnRequest{
-		Query:     " 视频里讲了什么？ ",
-		UserID:    " u1 ",
-		SessionID: " s1 ",
+		Query:       " 视频里讲了什么？ ",
+		UserID:      " u1 ",
+		SessionID:   " s1 ",
+		SourceIDs:   []string{"source-1"},
+		DocumentIDs: []string{"doc-1"},
 	})
 	if err != nil {
 		t.Fatalf("RunTurn returned error: %v", err)
@@ -253,6 +255,12 @@ func TestRunTurnRetrievesWithChatScopeAndFallbackAnswer(t *testing.T) {
 	}
 	if retriever.req.Filter == nil || retriever.req.Filter.UserID != "u1" || retriever.req.Filter.SessionID != "" {
 		t.Fatalf("unexpected retrieval filter: %#v", retriever.req.Filter)
+	}
+	if strings.Join(retriever.req.Filter.SourceIDs, ",") != "source-1" {
+		t.Fatalf("unexpected source filter: %#v", retriever.req.Filter)
+	}
+	if strings.Join(retriever.req.Filter.DocumentIDs, ",") != "doc-1" {
+		t.Fatalf("unexpected document filter: %#v", retriever.req.Filter)
 	}
 	if len(got.Chunks) != 1 {
 		t.Fatalf("expected one retrieved chunk, got %#v", got.Chunks)
@@ -766,7 +774,7 @@ func TestExtractMemoryFactsReturnsNilOnModelFailure(t *testing.T) {
 }
 
 func TestRetrieveFilterForTurnScopesByUserBeforeSession(t *testing.T) {
-	got, ok := retrieveFilterForTurn(" u1 ", " s1 ")
+	got, ok := retrieveFilterForTurn(" u1 ", " s1 ", nil, nil)
 	if !ok {
 		t.Fatal("expected scope")
 	}
@@ -782,7 +790,7 @@ func TestRetrieveFilterForTurnScopesByUserBeforeSession(t *testing.T) {
 }
 
 func TestRetrieveFilterForTurnUsesExplicitSessionWhenUserMissing(t *testing.T) {
-	got, ok := retrieveFilterForTurn("", " s1 ")
+	got, ok := retrieveFilterForTurn("", " s1 ", nil, nil)
 	if !ok {
 		t.Fatal("expected scope")
 	}
@@ -798,12 +806,31 @@ func TestRetrieveFilterForTurnUsesExplicitSessionWhenUserMissing(t *testing.T) {
 }
 
 func TestRetrieveFilterForTurnRejectsMissingScope(t *testing.T) {
-	got, ok := retrieveFilterForTurn("", " ")
+	got, ok := retrieveFilterForTurn("", " ", nil, nil)
 	if ok {
 		t.Fatalf("expected missing scope to be rejected, got %#v", got)
 	}
 	if got != nil {
 		t.Fatalf("expected nil filter on rejected scope, got %#v", got)
+	}
+}
+
+func TestRetrieveFilterForTurnAddsSourceAndDocumentFilters(t *testing.T) {
+	got, ok := retrieveFilterForTurn("u1", "s1", []string{"source-1", "source-2"}, []string{"doc-1"})
+	if !ok {
+		t.Fatal("expected scope")
+	}
+	if got == nil {
+		t.Fatal("expected filter")
+	}
+	if got.UserID != "u1" || got.SessionID != "" {
+		t.Fatalf("unexpected user/session scope: %#v", got)
+	}
+	if strings.Join(got.SourceIDs, ",") != "source-1,source-2" {
+		t.Fatalf("SourceIDs = %#v", got.SourceIDs)
+	}
+	if strings.Join(got.DocumentIDs, ",") != "doc-1" {
+		t.Fatalf("DocumentIDs = %#v", got.DocumentIDs)
 	}
 }
 

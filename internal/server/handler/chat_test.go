@@ -122,7 +122,7 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	router := gin.New()
 	router.POST("/chat/query", h.ChatQuery)
 
-	body := bytes.NewBufferString(`{"query":"查一下知识库里的内容","user_id":"u1"}`)
+	body := bytes.NewBufferString(`{"query":"查一下知识库里的内容","user_id":"u1","source_ids":[" source-1 ","source-2","source-1"],"document_ids":["doc-1"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/chat/query", body)
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
@@ -145,6 +145,21 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	}
 	if len(out.RAGQueries) != 1 || out.RAGQueries[0] != "查一下知识库里的内容" {
 		t.Fatalf("rag queries = %#v, want request query", out.RAGQueries)
+	}
+	if strings.Join(out.RAGSourceIDs, ",") != "source-1,source-2" {
+		t.Fatalf("rag source ids = %#v", out.RAGSourceIDs)
+	}
+	if strings.Join(out.RAGDocumentIDs, ",") != "doc-1" {
+		t.Fatalf("rag document ids = %#v", out.RAGDocumentIDs)
+	}
+	if retriever.req.Filter == nil {
+		t.Fatal("expected retrieval filter")
+	}
+	if strings.Join(retriever.req.Filter.SourceIDs, ",") != "source-1,source-2" {
+		t.Fatalf("source filter passed to retriever = %#v", retriever.req.Filter.SourceIDs)
+	}
+	if strings.Join(retriever.req.Filter.DocumentIDs, ",") != "doc-1" {
+		t.Fatalf("document filter passed to retriever = %#v", retriever.req.Filter.DocumentIDs)
 	}
 	if len(out.Chunks) != 2 {
 		t.Fatalf("response chunks = %#v, want all retrieved chunks", out.Chunks)

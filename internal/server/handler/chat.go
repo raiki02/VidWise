@@ -56,9 +56,11 @@ func NewChatHandlerWithBackground(repo *chat.Repo, memRepo *memory.Repo, retriev
 // ---- Request / Response types ----
 
 type ChatQueryRequest struct {
-	SessionID string `json:"session_id"`
-	UserID    string `json:"user_id"` // optional, for cross-session memory
-	Query     string `json:"query" binding:"required"`
+	SessionID   string   `json:"session_id"`
+	UserID      string   `json:"user_id"` // optional, for cross-session memory
+	Query       string   `json:"query" binding:"required"`
+	SourceIDs   []string `json:"source_ids"`
+	DocumentIDs []string `json:"document_ids"`
 }
 
 type ChatChunk struct {
@@ -89,6 +91,8 @@ type ChatQueryResponse struct {
 	RAGStatus            string      `json:"rag_status,omitempty"`
 	RAGQuery             string      `json:"rag_query,omitempty"`
 	RAGQueries           []string    `json:"rag_queries,omitempty"`
+	RAGSourceIDs         []string    `json:"rag_source_ids,omitempty"`
+	RAGDocumentIDs       []string    `json:"rag_document_ids,omitempty"`
 	RAGChunkCount        int         `json:"rag_chunk_count"`
 	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
 	RAGContextTruncated  bool        `json:"rag_context_truncated"`
@@ -177,11 +181,13 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	recentHistory := buildHistoryText(recentMsgs)
 
 	turn, err := h.answerAgent.RunTurn(ctx, chatagent.TurnRequest{
-		Query:     req.Query,
-		History:   recentHistory,
-		UserFacts: userFacts,
-		UserID:    req.UserID,
-		SessionID: sessionID,
+		Query:       req.Query,
+		History:     recentHistory,
+		UserFacts:   userFacts,
+		UserID:      req.UserID,
+		SessionID:   sessionID,
+		SourceIDs:   req.SourceIDs,
+		DocumentIDs: req.DocumentIDs,
 	})
 	if err != nil {
 		errorJSON(c, http.StatusBadRequest, err.Error())
@@ -223,6 +229,8 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		RAGStatus:            string(turn.Retrieval.Status),
 		RAGQuery:             turn.Retrieval.Query,
 		RAGQueries:           turn.Retrieval.Queries,
+		RAGSourceIDs:         normalizedIDs(req.SourceIDs),
+		RAGDocumentIDs:       normalizedIDs(req.DocumentIDs),
 		RAGChunkCount:        turn.Retrieval.ChunkCount,
 		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
 		RAGContextTruncated:  turn.RAGContext.Truncated,
@@ -254,6 +262,26 @@ func chatChunkFromContextCitation(c rag.ContextCitation) ChatChunk {
 	chunk := chatChunkFromRelevant(c.Chunk)
 	chunk.SnippetNumber = c.SnippetNumber
 	return chunk
+}
+
+func normalizedIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // ---- Memory Extraction ----

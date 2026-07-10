@@ -100,11 +100,13 @@ type AnswerOutcome struct {
 // TurnRequest is the stable interface for one user turn. It deliberately keeps
 // HTTP/session persistence out while owning the RAG decision and answer policy.
 type TurnRequest struct {
-	Query     string
-	History   string
-	UserFacts string
-	UserID    string
-	SessionID string
+	Query       string
+	History     string
+	UserFacts   string
+	UserID      string
+	SessionID   string
+	SourceIDs   []string
+	DocumentIDs []string
 }
 
 // TurnResult is the completed answer plus the retrieval trace callers can
@@ -201,7 +203,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 	retrievalQuery := retrievalQueryForTurn(eval, req.Query)
 	if eval.ShouldRetrieve && a.retriever != nil {
 		retrieval.Query = retrievalQuery
-		filter, ok := retrieveFilterForTurn(req.UserID, req.SessionID)
+		filter, ok := retrieveFilterForTurn(req.UserID, req.SessionID, req.SourceIDs, req.DocumentIDs)
 		if !ok {
 			slog.Info("chat.agent.retrieve_skipped", "reason", "scope_required")
 			retrieval.Status = RetrievalStatusScopeRequired
@@ -386,12 +388,16 @@ func (a *Agent) llmEnabled() bool {
 	return a.llmCfg.Enabled != nil && *a.llmCfg.Enabled && strings.TrimSpace(a.llmCfg.Model) != ""
 }
 
-func retrieveFilterForTurn(userID, sessionID string) (*rag.RetrieveFilter, bool) {
+func retrieveFilterForTurn(userID, sessionID string, sourceIDs, documentIDs []string) (*rag.RetrieveFilter, bool) {
 	filter, err := rag.NewRetrieveFilterWithPolicy(userID, sessionID, rag.ChatScopePolicy())
 	if err != nil {
 		return nil, false
 	}
-	return filter, true
+	if filter != nil {
+		filter.SourceIDs = sourceIDs
+		filter.DocumentIDs = documentIDs
+	}
+	return rag.NormalizeRetrieveFilter(filter), true
 }
 
 func normalizeRetrievalEvaluation(eval RetrievalEvaluation, fallbackQuery string) RetrievalEvaluation {

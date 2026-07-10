@@ -33,8 +33,10 @@ type RelevantChunk struct {
 
 // RetrieveFilter scopes retrieval to a specific user or session.
 type RetrieveFilter struct {
-	UserID    string
-	SessionID string
+	UserID      string
+	SessionID   string
+	SourceIDs   []string
+	DocumentIDs []string
 }
 
 // NewRetrieveFilter creates a normalized retrieval scope using the default
@@ -282,7 +284,7 @@ func (r *Retriever) normalizeRetrieveRequest(req RetrieveRequest) RetrieveReques
 	}
 	req.MinScore = &minScore
 	if req.Filter != nil {
-		req.Filter = NewRetrieveFilter(req.Filter.UserID, req.Filter.SessionID)
+		req.Filter = NormalizeRetrieveFilter(req.Filter)
 	}
 	return req
 }
@@ -354,6 +356,14 @@ func buildScopeFilter(f *RetrieveFilter) *pb.Filter {
 		mustClauses = append(mustClauses, keywordCondition(qdrantclient.FieldSessionID, f.SessionID))
 	}
 
+	if len(f.SourceIDs) > 0 {
+		mustClauses = append(mustClauses, keywordsCondition(qdrantclient.FieldSourceID, f.SourceIDs))
+	}
+
+	if len(f.DocumentIDs) > 0 {
+		mustClauses = append(mustClauses, keywordsCondition(qdrantclient.FieldDocumentID, f.DocumentIDs))
+	}
+
 	if len(mustClauses) == 0 {
 		return nil
 	}
@@ -363,12 +373,62 @@ func buildScopeFilter(f *RetrieveFilter) *pb.Filter {
 	}
 }
 
+// NormalizeRetrieveFilter trims and deduplicates all retrieval filter fields.
+func NormalizeRetrieveFilter(f *RetrieveFilter) *RetrieveFilter {
+	if f == nil {
+		return nil
+	}
+	normalized := &RetrieveFilter{
+		UserID:      strings.TrimSpace(f.UserID),
+		SessionID:   strings.TrimSpace(f.SessionID),
+		SourceIDs:   normalizeFilterIDs(f.SourceIDs),
+		DocumentIDs: normalizeFilterIDs(f.DocumentIDs),
+	}
+	if normalized.UserID == "" && normalized.SessionID == "" && len(normalized.SourceIDs) == 0 && len(normalized.DocumentIDs) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func normalizeFilterIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 func keywordCondition(key, value string) *pb.Condition {
 	return &pb.Condition{
 		ConditionOneOf: &pb.Condition_Field{
 			Field: &pb.FieldCondition{
 				Key:   key,
 				Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: value}},
+			},
+		},
+	}
+}
+
+func keywordsCondition(key string, values []string) *pb.Condition {
+	return &pb.Condition{
+		ConditionOneOf: &pb.Condition_Field{
+			Field: &pb.FieldCondition{
+				Key: key,
+				Match: &pb.Match{MatchValue: &pb.Match_Keywords{Keywords: &pb.RepeatedStrings{
+					Strings: values,
+				}}},
 			},
 		},
 	}

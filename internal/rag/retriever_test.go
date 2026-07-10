@@ -54,6 +54,44 @@ func TestBuildScopeFilterIncludesUserAndSession(t *testing.T) {
 	}
 }
 
+func TestBuildScopeFilterIncludesSourceAndDocumentIDs(t *testing.T) {
+	filter := buildScopeFilter(&RetrieveFilter{
+		UserID:      "user-1",
+		SourceIDs:   []string{"source-1", "source-2"},
+		DocumentIDs: []string{"doc-1"},
+	})
+	if filter == nil {
+		t.Fatal("expected qdrant filter")
+	}
+	if len(filter.Must) != 3 {
+		t.Fatalf("expected 3 must clauses, got %#v", filter.Must)
+	}
+
+	gotKeywords := map[string][]string{}
+	gotKeyword := map[string]string{}
+	for _, cond := range filter.Must {
+		field := cond.GetField()
+		if field == nil || field.Match == nil {
+			t.Fatalf("unexpected condition: %#v", cond)
+		}
+		if keywords := field.Match.GetKeywords(); keywords != nil {
+			gotKeywords[field.Key] = keywords.Strings
+			continue
+		}
+		gotKeyword[field.Key] = field.Match.GetKeyword()
+	}
+
+	if gotKeyword[qdrantclient.FieldUserID] != "user-1" {
+		t.Fatalf("user filter missing: %#v", gotKeyword)
+	}
+	if strings.Join(gotKeywords[qdrantclient.FieldSourceID], ",") != "source-1,source-2" {
+		t.Fatalf("source filter missing: %#v", gotKeywords)
+	}
+	if strings.Join(gotKeywords[qdrantclient.FieldDocumentID], ",") != "doc-1" {
+		t.Fatalf("document filter missing: %#v", gotKeywords)
+	}
+}
+
 func TestNormalizeRetrieveRequestAppliesDefaultsAndClamp(t *testing.T) {
 	retriever := &Retriever{
 		searchTopK: 20,
@@ -82,6 +120,36 @@ func TestNormalizeRetrieveRequestAppliesDefaultsAndClamp(t *testing.T) {
 	}
 	if got.MinScore == nil || *got.MinScore != 0.4 {
 		t.Fatalf("MinScore = %v, want default 0.4", got.MinScore)
+	}
+}
+
+func TestNormalizeRetrieveRequestPreservesSourceAndDocumentFilters(t *testing.T) {
+	retriever := &Retriever{
+		searchTopK: 20,
+		topK:       8,
+		minScore:   0.4,
+	}
+
+	got := retriever.normalizeRetrieveRequest(RetrieveRequest{
+		Query: "hello",
+		Filter: &RetrieveFilter{
+			UserID:      " u1 ",
+			SourceIDs:   []string{" source-1 ", "source-2", "source-1", ""},
+			DocumentIDs: []string{" doc-1 ", "doc-1"},
+		},
+	})
+
+	if got.Filter == nil {
+		t.Fatal("expected normalized filter")
+	}
+	if got.Filter.UserID != "u1" {
+		t.Fatalf("UserID = %q, want u1", got.Filter.UserID)
+	}
+	if strings.Join(got.Filter.SourceIDs, ",") != "source-1,source-2" {
+		t.Fatalf("SourceIDs = %#v", got.Filter.SourceIDs)
+	}
+	if strings.Join(got.Filter.DocumentIDs, ",") != "doc-1" {
+		t.Fatalf("DocumentIDs = %#v", got.Filter.DocumentIDs)
 	}
 }
 
