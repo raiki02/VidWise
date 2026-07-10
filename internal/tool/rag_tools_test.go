@@ -157,11 +157,13 @@ func TestNormalizeRAGQueryInputRequiresQueryAndScope(t *testing.T) {
 func TestNormalizeRAGQueryInputBuildsStrictRequest(t *testing.T) {
 	minScore := 0.3
 	req, err := normalizeRAGQueryInput(RAGQueryInput{
-		Query:      " hello ",
-		SessionID:  " session-1 ",
-		TopK:       4,
-		SearchTopK: 12,
-		MinScore:   &minScore,
+		Query:       " hello ",
+		SessionID:   " session-1 ",
+		SourceIDs:   []string{" source-1 ", "source-2", "source-1", " "},
+		DocumentIDs: []string{" doc-1 ", "doc-1"},
+		TopK:        4,
+		SearchTopK:  12,
+		MinScore:    &minScore,
 	})
 	if err != nil {
 		t.Fatalf("normalize query input: %v", err)
@@ -171,6 +173,12 @@ func TestNormalizeRAGQueryInputBuildsStrictRequest(t *testing.T) {
 	}
 	if req.Filter == nil || req.Filter.SessionID != "session-1" {
 		t.Fatalf("unexpected filter: %#v", req.Filter)
+	}
+	if len(req.Filter.SourceIDs) != 2 || req.Filter.SourceIDs[0] != "source-1" || req.Filter.SourceIDs[1] != "source-2" {
+		t.Fatalf("unexpected source ids: %#v", req.Filter.SourceIDs)
+	}
+	if len(req.Filter.DocumentIDs) != 1 || req.Filter.DocumentIDs[0] != "doc-1" {
+		t.Fatalf("unexpected document ids: %#v", req.Filter.DocumentIDs)
 	}
 	if req.TopK != 4 || req.SearchTopK != 12 || req.MinScore == nil || *req.MinScore != minScore {
 		t.Fatalf("unexpected retrieval options: %#v", req)

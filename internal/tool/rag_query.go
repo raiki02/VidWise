@@ -12,12 +12,14 @@ import (
 
 // RAGQueryInput is the input for the RAG retrieval tool.
 type RAGQueryInput struct {
-	Query      string   `json:"query" jsonschema:"required" jsonschema_description:"The user's question for retrieving relevant context."`
-	UserID     string   `json:"user_id,omitempty" jsonschema_description:"User id that scopes retrieval to that user's indexed content. Required unless session_id is provided."`
-	SessionID  string   `json:"session_id,omitempty" jsonschema_description:"Session id that scopes retrieval to one chat/session. Required unless user_id is provided."`
-	TopK       int      `json:"top_k,omitempty" jsonschema_description:"Optional number of final chunks to return."`
-	SearchTopK int      `json:"search_top_k,omitempty" jsonschema_description:"Optional number of vector search candidates before reranking."`
-	MinScore   *float64 `json:"min_score,omitempty" jsonschema_description:"Optional minimum vector relevance score. 0 disables score filtering."`
+	Query       string   `json:"query" jsonschema:"required" jsonschema_description:"The user's question for retrieving relevant context."`
+	UserID      string   `json:"user_id,omitempty" jsonschema_description:"User id that scopes retrieval to that user's indexed content. Required unless session_id is provided."`
+	SessionID   string   `json:"session_id,omitempty" jsonschema_description:"Session id that scopes retrieval to one chat/session. Required unless user_id is provided."`
+	SourceIDs   []string `json:"source_ids,omitempty" jsonschema_description:"Optional stable source_ids to limit retrieval within the scoped knowledge base."`
+	DocumentIDs []string `json:"document_ids,omitempty" jsonschema_description:"Optional document_ids to limit retrieval within the scoped knowledge base."`
+	TopK        int      `json:"top_k,omitempty" jsonschema_description:"Optional number of final chunks to return."`
+	SearchTopK  int      `json:"search_top_k,omitempty" jsonschema_description:"Optional number of vector search candidates before reranking."`
+	MinScore    *float64 `json:"min_score,omitempty" jsonschema_description:"Optional minimum vector relevance score. 0 disables score filtering."`
 }
 
 type RAGQueryOutput struct {
@@ -74,6 +76,9 @@ func normalizeRAGQueryInput(input RAGQueryInput) (rag.RetrieveRequest, error) {
 	if err != nil {
 		return rag.RetrieveRequest{}, err
 	}
+	filter.SourceIDs = input.SourceIDs
+	filter.DocumentIDs = input.DocumentIDs
+	filter = rag.NormalizeRetrieveFilter(filter)
 	return rag.RetrieveRequest{
 		Query:      query,
 		Filter:     filter,
