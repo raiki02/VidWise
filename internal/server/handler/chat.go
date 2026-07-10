@@ -82,23 +82,28 @@ type ChatChunk struct {
 }
 
 type ChatQueryResponse struct {
-	TraceID              string      `json:"trace_id,omitempty"`
-	SessionID            string      `json:"session_id"`
-	Answer               string      `json:"answer"`
-	Chunks               []ChatChunk `json:"chunks,omitempty"`
-	RAGTriggered         bool        `json:"rag_triggered"`
-	RAGReason            string      `json:"rag_reason,omitempty"`
-	RAGStatus            string      `json:"rag_status,omitempty"`
-	RAGQuery             string      `json:"rag_query,omitempty"`
-	RAGQueries           []string    `json:"rag_queries,omitempty"`
-	RAGSourceIDs         []string    `json:"rag_source_ids,omitempty"`
-	RAGDocumentIDs       []string    `json:"rag_document_ids,omitempty"`
-	RAGChunkCount        int         `json:"rag_chunk_count"`
-	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
-	RAGContextDuplicates int         `json:"rag_context_skipped_duplicates"`
-	RAGContextTruncated  bool        `json:"rag_context_truncated"`
-	RAGContextChunks     []ChatChunk `json:"rag_context_chunks,omitempty"`
-	Question             string      `json:"question"`
+	TraceID                   string      `json:"trace_id,omitempty"`
+	SessionID                 string      `json:"session_id"`
+	Answer                    string      `json:"answer"`
+	Chunks                    []ChatChunk `json:"chunks,omitempty"`
+	RAGTriggered              bool        `json:"rag_triggered"`
+	RAGReason                 string      `json:"rag_reason,omitempty"`
+	RAGStatus                 string      `json:"rag_status,omitempty"`
+	RAGQuery                  string      `json:"rag_query,omitempty"`
+	RAGQueries                []string    `json:"rag_queries,omitempty"`
+	RAGSourceIDs              []string    `json:"rag_source_ids,omitempty"`
+	RAGDocumentIDs            []string    `json:"rag_document_ids,omitempty"`
+	RAGChunkCount             int         `json:"rag_chunk_count"`
+	RAGContextUsedChunks      int         `json:"rag_context_used_chunks"`
+	RAGContextDuplicates      int         `json:"rag_context_skipped_duplicates"`
+	RAGContextTruncated       bool        `json:"rag_context_truncated"`
+	RAGContextChunks          []ChatChunk `json:"rag_context_chunks,omitempty"`
+	RAGAnswerStatus           string      `json:"rag_answer_status,omitempty"`
+	RAGAnswerCitationRequired bool        `json:"rag_answer_citation_required"`
+	RAGAnswerHasCitations     bool        `json:"rag_answer_has_citations"`
+	RAGAnswerCitedSnippets    []int       `json:"rag_answer_cited_snippets,omitempty"`
+	RAGAnswerInvalidSnippets  []int       `json:"rag_answer_invalid_snippets,omitempty"`
+	Question                  string      `json:"question"`
 }
 
 type SessionListItem struct {
@@ -221,23 +226,28 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ChatQueryResponse{
-		TraceID:              requestTraceID(c),
-		SessionID:            sessionID,
-		Answer:               answer,
-		Chunks:               outChunks,
-		RAGTriggered:         turn.Evaluation.ShouldRetrieve,
-		RAGReason:            turn.Evaluation.Reason,
-		RAGStatus:            string(turn.Retrieval.Status),
-		RAGQuery:             turn.Retrieval.Query,
-		RAGQueries:           turn.Retrieval.Queries,
-		RAGSourceIDs:         normalizedIDs(req.SourceIDs),
-		RAGDocumentIDs:       normalizedIDs(req.DocumentIDs),
-		RAGChunkCount:        turn.Retrieval.ChunkCount,
-		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
-		RAGContextDuplicates: turn.RAGContext.SkippedDuplicates,
-		RAGContextTruncated:  turn.RAGContext.Truncated,
-		RAGContextChunks:     contextChunks,
-		Question:             req.Query,
+		TraceID:                   requestTraceID(c),
+		SessionID:                 sessionID,
+		Answer:                    answer,
+		Chunks:                    outChunks,
+		RAGTriggered:              turn.Evaluation.ShouldRetrieve,
+		RAGReason:                 turn.Evaluation.Reason,
+		RAGStatus:                 string(turn.Retrieval.Status),
+		RAGQuery:                  turn.Retrieval.Query,
+		RAGQueries:                turn.Retrieval.Queries,
+		RAGSourceIDs:              normalizedIDs(req.SourceIDs),
+		RAGDocumentIDs:            normalizedIDs(req.DocumentIDs),
+		RAGChunkCount:             turn.Retrieval.ChunkCount,
+		RAGContextUsedChunks:      turn.RAGContext.UsedChunks,
+		RAGContextDuplicates:      turn.RAGContext.SkippedDuplicates,
+		RAGContextTruncated:       turn.RAGContext.Truncated,
+		RAGContextChunks:          contextChunks,
+		RAGAnswerStatus:           string(turn.Grounding.Status),
+		RAGAnswerCitationRequired: turn.Grounding.CitationRequired,
+		RAGAnswerHasCitations:     turn.Grounding.HasCitations,
+		RAGAnswerCitedSnippets:    turn.Grounding.CitedSnippets,
+		RAGAnswerInvalidSnippets:  turn.Grounding.InvalidSnippets,
+		Question:                  req.Query,
 	})
 }
 

@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -18,6 +21,8 @@ import (
 )
 
 const insufficientRAGContextAnswer = "我没有在当前知识库范围内检索到足够相关的内容，因此不能可靠回答这个问题。你可以上传相关资料，或换一种更具体的问法。"
+
+var answerSnippetCitationPattern = regexp.MustCompile(`(?i)(?:片段|snippet)\s*#?\s*(\d+)`)
 
 // ChatModel is the LLM interface this agent needs. Keeping it small makes the
 // answer policy testable without constructing provider-specific adapters.
@@ -73,6 +78,27 @@ type RAGContextOutcome struct {
 	Citations         []rag.ContextCitation `json:"citations,omitempty"`
 }
 
+// AnswerGroundingStatus classifies whether a RAG answer visibly cites the
+// prompt snippets it was grounded on.
+type AnswerGroundingStatus string
+
+const (
+	AnswerGroundingNotApplicable       AnswerGroundingStatus = "not_applicable"
+	AnswerGroundingInsufficientContext AnswerGroundingStatus = "insufficient_context"
+	AnswerGroundingGrounded            AnswerGroundingStatus = "grounded"
+	AnswerGroundingMissingCitations    AnswerGroundingStatus = "missing_citations"
+)
+
+// AnswerGroundingOutcome records answer-level citation signals without
+// rejecting or rewriting model output.
+type AnswerGroundingOutcome struct {
+	Status           AnswerGroundingStatus `json:"status"`
+	CitationRequired bool                  `json:"citation_required"`
+	HasCitations     bool                  `json:"has_citations"`
+	CitedSnippets    []int                 `json:"cited_snippets,omitempty"`
+	InvalidSnippets  []int                 `json:"invalid_snippets,omitempty"`
+}
+
 // RetrievalEvaluationRequest contains the inputs needed to decide whether a
 // turn should use knowledge-base retrieval.
 type RetrievalEvaluationRequest struct {
@@ -96,6 +122,7 @@ type AnswerRequest struct {
 type AnswerOutcome struct {
 	Answer     string
 	RAGContext RAGContextOutcome
+	Grounding  AnswerGroundingOutcome
 }
 
 // TurnRequest is the stable interface for one user turn. It deliberately keeps
@@ -118,6 +145,7 @@ type TurnResult struct {
 	Evaluation RetrievalEvaluation
 	Retrieval  RetrievalOutcome
 	RAGContext RAGContextOutcome
+	Grounding  AnswerGroundingOutcome
 }
 
 // MemoryExtractionRequest is the turn-level evidence used to update
@@ -253,6 +281,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 		Evaluation: eval,
 		Retrieval:  retrieval,
 		RAGContext: answer.RAGContext,
+		Grounding:  answer.Grounding,
 	}, nil
 }
 
@@ -355,10 +384,14 @@ func (a *Agent) AnswerWithOutcome(ctx context.Context, req AnswerRequest) Answer
 		},
 	}
 	hasRAGContext := packedContext.HasContext()
+	complete := func(answer string) AnswerOutcome {
+		outcome.Answer = answer
+		outcome.Grounding = evaluateAnswerGrounding(answer, req.Evaluation, packedContext)
+		return outcome
+	}
 
 	if req.Evaluation.ShouldRetrieve && !hasRAGContext {
-		outcome.Answer = insufficientRAGContextAnswer
-		return outcome
+		return complete(insufficientRAGContextAnswer)
 	}
 
 	if a.llmEnabled() {
@@ -373,8 +406,7 @@ func (a *Agent) AnswerWithOutcome(ctx context.Context, req AnswerRequest) Answer
 			})
 			resp, genErr := cm.Generate(ctx, msgs)
 			if genErr == nil && resp != nil && strings.TrimSpace(resp.Content) != "" {
-				outcome.Answer = resp.Content
-				return outcome
+				return complete(resp.Content)
 			}
 			slog.Warn("chat.agent.llm_gen_failed", "err", genErr)
 		} else {
@@ -382,8 +414,7 @@ func (a *Agent) AnswerWithOutcome(ctx context.Context, req AnswerRequest) Answer
 		}
 	}
 
-	outcome.Answer = fallbackAnswer(packedContext)
-	return outcome
+	return complete(fallbackAnswer(packedContext))
 }
 
 func (a *Agent) llmEnabled() bool {
@@ -640,7 +671,7 @@ func buildSystemPrompt(hasRAG bool, userFacts string) string {
 4. 如果上下文信息不足，明确告知用户，不要猜测。
 5. 结合对话历史理解用户的意图和上下文。
 6. 用中文回答，语言清晰易懂。
-7. 当引用了知识库中某段内容时，注明"根据知识库中的内容..."以便用户追溯来源。`)
+7. 当引用了知识库中某段内容时，必须使用 [片段 N] 格式标注对应片段编号。`)
 	} else {
 		sb.WriteString(`
 
@@ -665,6 +696,72 @@ func fallbackAnswer(packedContext rag.PackedContext) string {
 		return sb.String()
 	}
 	return "抱歉，我暂时无法处理你的请求。请稍后再试。"
+}
+
+func evaluateAnswerGrounding(answer string, eval RetrievalEvaluation, packedContext rag.PackedContext) AnswerGroundingOutcome {
+	outcome := AnswerGroundingOutcome{}
+	hasRAGContext := packedContext.HasContext()
+	if eval.ShouldRetrieve && !hasRAGContext {
+		outcome.Status = AnswerGroundingInsufficientContext
+		return outcome
+	}
+	if !hasRAGContext {
+		outcome.Status = AnswerGroundingNotApplicable
+		return outcome
+	}
+
+	outcome.CitationRequired = true
+	available := availableSnippetNumbers(packedContext.Citations)
+	outcome.CitedSnippets, outcome.InvalidSnippets = parseAnswerSnippetCitations(answer, available)
+	outcome.HasCitations = len(outcome.CitedSnippets) > 0
+	if outcome.HasCitations {
+		outcome.Status = AnswerGroundingGrounded
+	} else {
+		outcome.Status = AnswerGroundingMissingCitations
+	}
+	return outcome
+}
+
+func availableSnippetNumbers(citations []rag.ContextCitation) map[int]struct{} {
+	available := make(map[int]struct{}, len(citations))
+	for _, citation := range citations {
+		if citation.SnippetNumber > 0 {
+			available[citation.SnippetNumber] = struct{}{}
+		}
+	}
+	return available
+}
+
+func parseAnswerSnippetCitations(answer string, available map[int]struct{}) ([]int, []int) {
+	valid := map[int]struct{}{}
+	invalid := map[int]struct{}{}
+	for _, match := range answerSnippetCitationPattern.FindAllStringSubmatch(answer, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(match[1])
+		if err != nil || n <= 0 {
+			continue
+		}
+		if _, ok := available[n]; ok {
+			valid[n] = struct{}{}
+		} else {
+			invalid[n] = struct{}{}
+		}
+	}
+	return sortedSnippetNumbers(valid), sortedSnippetNumbers(invalid)
+}
+
+func sortedSnippetNumbers(set map[int]struct{}) []int {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // extractJSON finds and parses the first balanced JSON object or array in an

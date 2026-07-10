@@ -644,6 +644,57 @@ func TestAnswerUsesPackedRAGContextBudgetWhenLLMDisabled(t *testing.T) {
 	}
 }
 
+func TestAnswerReportsGroundedRAGSnippetCitations(t *testing.T) {
+	model := &fakeModel{response: "视频讲到了 Markdown RAG 的流程 [片段 1]，并补充了入库步骤。"}
+	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return model, nil
+	})
+
+	got := agent.AnswerWithOutcome(context.Background(), AnswerRequest{
+		Query: "视频里说了什么？",
+		Chunks: []rag.RelevantChunk{
+			{Text: "视频讲到了 Markdown RAG 的流程。", Score: 0.91},
+			{Text: "先解析 Markdown，再切片入库。", Score: 0.88},
+		},
+		Evaluation: RetrievalEvaluation{ShouldRetrieve: true, Reason: "knowledge_base_question"},
+	})
+
+	if got.Grounding.Status != AnswerGroundingGrounded {
+		t.Fatalf("grounding status = %q, want grounded: %#v", got.Grounding.Status, got.Grounding)
+	}
+	if !got.Grounding.CitationRequired || !got.Grounding.HasCitations {
+		t.Fatalf("expected citations to be required and present, got %#v", got.Grounding)
+	}
+	if len(got.Grounding.CitedSnippets) != 1 || got.Grounding.CitedSnippets[0] != 1 {
+		t.Fatalf("cited snippets = %#v, want [1]", got.Grounding.CitedSnippets)
+	}
+	if len(got.Grounding.InvalidSnippets) != 0 {
+		t.Fatalf("invalid snippets = %#v, want none", got.Grounding.InvalidSnippets)
+	}
+}
+
+func TestAnswerReportsMissingRAGSnippetCitations(t *testing.T) {
+	model := &fakeModel{response: "视频讲到了 Markdown RAG 的流程。"}
+	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return model, nil
+	})
+
+	got := agent.AnswerWithOutcome(context.Background(), AnswerRequest{
+		Query: "视频里说了什么？",
+		Chunks: []rag.RelevantChunk{
+			{Text: "视频讲到了 Markdown RAG 的流程。", Score: 0.91},
+		},
+		Evaluation: RetrievalEvaluation{ShouldRetrieve: true, Reason: "knowledge_base_question"},
+	})
+
+	if got.Grounding.Status != AnswerGroundingMissingCitations {
+		t.Fatalf("grounding status = %q, want missing_citations: %#v", got.Grounding.Status, got.Grounding)
+	}
+	if !got.Grounding.CitationRequired || got.Grounding.HasCitations {
+		t.Fatalf("expected citations to be required and absent, got %#v", got.Grounding)
+	}
+}
+
 func TestAnswerRefusesWhenRetrievalExpectedButNoContext(t *testing.T) {
 	calls := 0
 	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
@@ -651,7 +702,7 @@ func TestAnswerRefusesWhenRetrievalExpectedButNoContext(t *testing.T) {
 		return &fakeModel{response: "hallucinated answer"}, nil
 	})
 
-	answer := agent.Answer(context.Background(), AnswerRequest{
+	got := agent.AnswerWithOutcome(context.Background(), AnswerRequest{
 		Query:      "视频里讲了什么？",
 		Evaluation: RetrievalEvaluation{ShouldRetrieve: true, Reason: "knowledge_base_question"},
 	})
@@ -659,8 +710,11 @@ func TestAnswerRefusesWhenRetrievalExpectedButNoContext(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("model factory calls = %d, want 0", calls)
 	}
-	if !strings.Contains(answer, "没有在当前知识库范围内检索到足够相关的内容") {
-		t.Fatalf("expected insufficient-context answer, got %q", answer)
+	if !strings.Contains(got.Answer, "没有在当前知识库范围内检索到足够相关的内容") {
+		t.Fatalf("expected insufficient-context answer, got %q", got.Answer)
+	}
+	if got.Grounding.Status != AnswerGroundingInsufficientContext {
+		t.Fatalf("grounding status = %q, want insufficient_context", got.Grounding.Status)
 	}
 }
 

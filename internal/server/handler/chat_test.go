@@ -102,6 +102,12 @@ func TestChatQueryReportsRetrievalStatusWhenRetrieverUnavailable(t *testing.T) {
 	if out.RAGChunkCount != 0 {
 		t.Fatalf("rag chunk count = %d, want 0", out.RAGChunkCount)
 	}
+	if out.RAGAnswerStatus != "insufficient_context" {
+		t.Fatalf("rag answer status = %q, want insufficient_context", out.RAGAnswerStatus)
+	}
+	if out.RAGAnswerCitationRequired || out.RAGAnswerHasCitations {
+		t.Fatalf("unexpected answer citation flags: %#v", out)
+	}
 	if !strings.Contains(out.Answer, "没有在当前知识库范围内检索到足够相关的内容") {
 		t.Fatalf("expected insufficient context answer, got %q", out.Answer)
 	}
@@ -175,6 +181,15 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	}
 	if out.RAGContextChunks[0].SnippetNumber != 1 || out.RAGContextChunks[0].SourceName != "long.md" {
 		t.Fatalf("unexpected prompt citation chunk: %#v", out.RAGContextChunks[0])
+	}
+	if out.RAGAnswerStatus != "grounded" {
+		t.Fatalf("rag answer status = %q, want grounded", out.RAGAnswerStatus)
+	}
+	if !out.RAGAnswerCitationRequired || !out.RAGAnswerHasCitations {
+		t.Fatalf("expected answer citations to be required and present, got %#v", out)
+	}
+	if len(out.RAGAnswerCitedSnippets) != 1 || out.RAGAnswerCitedSnippets[0] != 1 {
+		t.Fatalf("rag answer cited snippets = %#v, want [1]", out.RAGAnswerCitedSnippets)
 	}
 	if strings.Contains(out.Answer, "second chunk should not reach prompt") {
 		t.Fatalf("expected omitted chunk not to appear in answer: %q", out.Answer)
