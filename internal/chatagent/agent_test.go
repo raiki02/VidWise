@@ -207,6 +207,9 @@ func TestRunTurnRetrievesWithChatScopeAndFallbackAnswer(t *testing.T) {
 	if got.RAGContext.UsedChunks != 1 || got.RAGContext.Truncated {
 		t.Fatalf("unexpected RAG context outcome: %#v", got.RAGContext)
 	}
+	if len(got.RAGContext.Citations) != 1 || got.RAGContext.Citations[0].SnippetNumber != 1 {
+		t.Fatalf("unexpected RAG context citations: %#v", got.RAGContext.Citations)
+	}
 	if !strings.Contains(got.Answer, "视频讲到了 Markdown RAG") {
 		t.Fatalf("expected fallback answer to include retrieved context, got %q", got.Answer)
 	}
@@ -245,6 +248,9 @@ func TestRunTurnRecordsPackedRAGContextTruncation(t *testing.T) {
 	}
 	if !got.RAGContext.Truncated {
 		t.Fatalf("expected truncated context outcome, got %#v", got.RAGContext)
+	}
+	if len(got.RAGContext.Citations) != 1 || got.RAGContext.Citations[0].Chunk.SourceName != "long.md" {
+		t.Fatalf("unexpected RAG context citations: %#v", got.RAGContext.Citations)
 	}
 	if strings.Contains(got.Answer, "second chunk should not reach prompt") {
 		t.Fatalf("expected omitted chunk not to appear in answer: %q", got.Answer)

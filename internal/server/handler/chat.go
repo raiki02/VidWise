@@ -62,6 +62,7 @@ type ChatQueryRequest struct {
 }
 
 type ChatChunk struct {
+	SnippetNumber int     `json:"snippet_number,omitempty"`
 	Text          string  `json:"text"`
 	Score         float64 `json:"score"`
 	SourceID      string  `json:"source_id,omitempty"`
@@ -88,6 +89,7 @@ type ChatQueryResponse struct {
 	RAGChunkCount        int         `json:"rag_chunk_count"`
 	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
 	RAGContextTruncated  bool        `json:"rag_context_truncated"`
+	RAGContextChunks     []ChatChunk `json:"rag_context_chunks,omitempty"`
 	Question             string      `json:"question"`
 }
 
@@ -203,6 +205,10 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	for _, c := range chunks {
 		outChunks = append(outChunks, chatChunkFromRelevant(c))
 	}
+	contextChunks := make([]ChatChunk, 0, len(turn.RAGContext.Citations))
+	for _, c := range turn.RAGContext.Citations {
+		contextChunks = append(contextChunks, chatChunkFromContextCitation(c))
+	}
 
 	c.JSON(http.StatusOK, ChatQueryResponse{
 		SessionID:            sessionID,
@@ -214,6 +220,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		RAGChunkCount:        turn.Retrieval.ChunkCount,
 		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
 		RAGContextTruncated:  turn.RAGContext.Truncated,
+		RAGContextChunks:     contextChunks,
 		Question:             req.Query,
 	})
 }
@@ -235,6 +242,12 @@ func chatChunkFromRelevant(c rag.RelevantChunk) ChatChunk {
 		DocumentTitle: c.DocumentTitle,
 		HeadingPath:   c.HeadingPath,
 	}
+}
+
+func chatChunkFromContextCitation(c rag.ContextCitation) ChatChunk {
+	chunk := chatChunkFromRelevant(c.Chunk)
+	chunk.SnippetNumber = c.SnippetNumber
+	return chunk
 }
 
 // ---- Memory Extraction ----

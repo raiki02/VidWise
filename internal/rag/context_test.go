@@ -41,6 +41,15 @@ func TestPackContextFormatsNumberedSourceLabelledSnippets(t *testing.T) {
 	if got.UsedChunks != 2 {
 		t.Fatalf("UsedChunks = %d, want 2", got.UsedChunks)
 	}
+	if len(got.Citations) != 2 {
+		t.Fatalf("citations = %#v, want 2 entries", got.Citations)
+	}
+	if got.Citations[0].SnippetNumber != 1 || got.Citations[0].Chunk.SourceName != "guide.md" {
+		t.Fatalf("unexpected first citation: %#v", got.Citations[0])
+	}
+	if got.Citations[1].SnippetNumber != 2 || got.Citations[1].Chunk.DocumentTitle != "Guide" {
+		t.Fatalf("unexpected second citation: %#v", got.Citations[1])
+	}
 	if got.Truncated {
 		t.Fatal("expected untruncated context")
 	}
@@ -73,6 +82,12 @@ func TestPackContextEnforcesRuneBudget(t *testing.T) {
 
 	if got.UsedChunks != 1 {
 		t.Fatalf("UsedChunks = %d, want 1", got.UsedChunks)
+	}
+	if len(got.Citations) != 1 {
+		t.Fatalf("citations = %#v, want only the chunk that reached context", got.Citations)
+	}
+	if got.Citations[0].SnippetNumber != 1 || got.Citations[0].Chunk.SourceName != "long.md" {
+		t.Fatalf("unexpected citation for truncated context: %#v", got.Citations[0])
 	}
 	if !got.Truncated {
 		t.Fatal("expected truncated context")

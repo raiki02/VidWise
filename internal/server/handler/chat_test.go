@@ -131,11 +131,20 @@ func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
 	if out.RAGChunkCount != 2 {
 		t.Fatalf("rag chunk count = %d, want 2", out.RAGChunkCount)
 	}
+	if len(out.Chunks) != 2 {
+		t.Fatalf("response chunks = %#v, want all retrieved chunks", out.Chunks)
+	}
 	if out.RAGContextUsedChunks != 1 {
 		t.Fatalf("rag context used chunks = %d, want 1", out.RAGContextUsedChunks)
 	}
 	if !out.RAGContextTruncated {
 		t.Fatalf("expected truncated RAG context, got %#v", out)
+	}
+	if len(out.RAGContextChunks) != 1 {
+		t.Fatalf("rag context chunks = %#v, want only chunks that reached prompt", out.RAGContextChunks)
+	}
+	if out.RAGContextChunks[0].SnippetNumber != 1 || out.RAGContextChunks[0].SourceName != "long.md" {
+		t.Fatalf("unexpected prompt citation chunk: %#v", out.RAGContextChunks[0])
 	}
 	if strings.Contains(out.Answer, "second chunk should not reach prompt") {
 		t.Fatalf("expected omitted chunk not to appear in answer: %q", out.Answer)
@@ -292,6 +301,24 @@ func TestChatChunkFromRelevantPreservesTraceIdentity(t *testing.T) {
 	}
 	if got.SourceName != "guide.md" || got.SourceURL != "https://example.com/guide" || got.HeadingPath != "Guide > Install" {
 		t.Fatalf("citation metadata missing: %#v", got)
+	}
+}
+
+func TestChatChunkFromContextCitationAddsSnippetNumber(t *testing.T) {
+	got := chatChunkFromContextCitation(rag.ContextCitation{
+		SnippetNumber: 3,
+		Chunk: rag.RelevantChunk{
+			Text:       "chunk text",
+			Score:      0.91,
+			SourceName: "guide.md",
+		},
+	})
+
+	if got.SnippetNumber != 3 {
+		t.Fatalf("snippet number = %d, want 3", got.SnippetNumber)
+	}
+	if got.Text != "chunk text" || got.SourceName != "guide.md" {
+		t.Fatalf("chunk metadata missing: %#v", got)
 	}
 }
 

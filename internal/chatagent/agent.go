@@ -64,8 +64,9 @@ type RetrievalOutcome struct {
 // RAGContextOutcome records how much retrieved context actually reached the
 // answer prompt after packing and budget enforcement.
 type RAGContextOutcome struct {
-	UsedChunks int  `json:"used_chunks"`
-	Truncated  bool `json:"truncated"`
+	UsedChunks int                   `json:"used_chunks"`
+	Truncated  bool                  `json:"truncated"`
+	Citations  []rag.ContextCitation `json:"citations,omitempty"`
 }
 
 // RetrievalEvaluationRequest contains the inputs needed to decide whether a
@@ -320,6 +321,7 @@ func (a *Agent) AnswerWithOutcome(ctx context.Context, req AnswerRequest) Answer
 		RAGContext: RAGContextOutcome{
 			UsedChunks: packedContext.UsedChunks,
 			Truncated:  packedContext.Truncated,
+			Citations:  packedContext.Citations,
 		},
 	}
 	hasRAGContext := packedContext.HasContext()

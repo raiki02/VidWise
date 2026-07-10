@@ -23,10 +23,18 @@ type PackedContext struct {
 	Text       string
 	UsedChunks int
 	Truncated  bool
+	Citations  []ContextCitation
 }
 
 func (c PackedContext) HasContext() bool {
 	return strings.TrimSpace(c.Text) != ""
+}
+
+// ContextCitation links a prompt snippet number back to the source chunk that
+// reached the answer context.
+type ContextCitation struct {
+	SnippetNumber int
+	Chunk         RelevantChunk
 }
 
 // PackContext formats retrieved chunks as numbered, source-labelled snippets
@@ -77,6 +85,10 @@ func PackContext(chunks []RelevantChunk, cfg ContextConfig) PackedContext {
 		b.WriteString(entry)
 		usedRunes += runeLen(prefix) + entryRunes
 		out.UsedChunks++
+		out.Citations = append(out.Citations, ContextCitation{
+			SnippetNumber: snippetNumber,
+			Chunk:         chunk,
+		})
 
 		if out.Truncated {
 			break
