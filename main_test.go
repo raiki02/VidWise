@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/asr"
 	"github.com/raiki02/vidwise/internal/capability"
 	"github.com/raiki02/vidwise/internal/model"
 	"github.com/raiki02/vidwise/internal/rag"
@@ -17,10 +19,12 @@ func TestRegisterToolsDoesNotExposeRAGToolsWhenRAGUnavailable(t *testing.T) {
 	registry := tool.NewRegistry()
 	caps := capability.FromRuntime(capability.RuntimeDeps{LLMConfig: testMainLLMConfig()})
 
-	registerTools(registry, appconfig.Config{LLM: testMainLLMConfig()}, nil, nil, caps, ragruntime.Runtime{})
+	registerTools(registry, appconfig.Config{LLM: testMainLLMConfig()}, nil, nil, testMainASRClient(t), caps, ragruntime.Runtime{})
 
 	assertWrappedTool(t, registry, "download_video")
+	assertWrappedTool(t, registry, "download_audio")
 	assertWrappedTool(t, registry, "extract_audio")
+	assertWrappedTool(t, registry, "transcribe_audio")
 	assertWrappedTool(t, registry, "format_transcript")
 	assertToolMissing(t, registry, "embed_texts")
 	assertToolMissing(t, registry, "rerank_documents")
@@ -46,6 +50,7 @@ func TestRegisterToolsExposesRAGToolsWhenRAGIsDegradedByMissingRerank(t *testing
 		},
 		&model.EmbedClient{},
 		nil,
+		testMainASRClient(t),
 		caps,
 		testMainRAGRuntime(caps, nil),
 	)
@@ -77,6 +82,7 @@ func TestRegisterToolsExposesRerankToolWhenRerankAvailable(t *testing.T) {
 		},
 		&model.EmbedClient{},
 		&model.RerankClient{},
+		testMainASRClient(t),
 		caps,
 		testMainRAGRuntime(caps, &model.RerankClient{}),
 	)
@@ -113,6 +119,15 @@ func assertWrappedTool(t *testing.T, registry *tool.Registry, name string) {
 func testMainLLMConfig() appconfig.LLMConfig {
 	enabled := false
 	return appconfig.LLMConfig{Enabled: &enabled}
+}
+
+func testMainASRClient(t *testing.T) *asr.Client {
+	t.Helper()
+	client, err := asr.NewClient("http://127.0.0.1:8001", "zh", time.Minute, asr.TranscribeOptions{})
+	if err != nil {
+		t.Fatalf("build asr client: %v", err)
+	}
+	return client
 }
 
 func testMainRAGRuntime(caps capability.Snapshot, reranker *model.RerankClient) ragruntime.Runtime {

@@ -49,10 +49,10 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 	// Step 1: Download audio via yt-dlp
 	observer.StepStarted(VideoProcessStepDownloadAudio)
 	slog.Info("agent.pipeline.download", "url", url)
-	downloadTool, err := registry.Get("extract_audio")
+	downloadTool, err := registry.Get(VideoProcessStepDownloadAudio)
 	if err != nil {
 		observer.StepFailed(VideoProcessStepDownloadAudio, err)
-		return "", fmt.Errorf("get extract_audio tool: %w", err)
+		return "", fmt.Errorf("get download_audio tool: %w", err)
 	}
 	audioArgs, _ := tool.ToJSON(map[string]string{
 		"url":         url,

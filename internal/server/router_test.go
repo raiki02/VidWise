@@ -204,6 +204,7 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 	body := string(raw)
 	for _, want := range []string{
 		"/chat/query",
+		"/extract",
 		"/video/process",
 		"/tasks?",
 		"/rag/sources?",
@@ -213,6 +214,7 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"rag_answer_status",
 		"rag_context_chunks",
 		"data-nav=\"sources\"",
+		"id=\"extract-type\"",
 		"id=\"task-list\"",
 	} {
 		if !strings.Contains(body, want) {

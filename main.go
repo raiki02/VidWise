@@ -56,6 +56,7 @@ func runGateway(cfg appconfig.Config) {
 	var qdConn *qdrantclient.Client
 	var embedClient *model.EmbedClient
 	var rerankClient *model.RerankClient
+	var asrClient *asr.Client
 	asrReady := false
 	videoSummaryReady := false
 
@@ -102,8 +103,10 @@ func runGateway(cfg appconfig.Config) {
 		if err != nil {
 			slog.Warn("gateway.asr_unavailable", "err", err)
 		} else if err := client.Health(ctx); err != nil {
+			asrClient = client
 			slog.Warn("gateway.asr_unhealthy", "base_url", cfg.ASR.BaseURL, "err", err)
 		} else {
+			asrClient = client
 			asrReady = true
 		}
 	}
@@ -190,7 +193,7 @@ func runGateway(cfg appconfig.Config) {
 	})
 
 	// Register tools
-	registerTools(registry, cfg, embedClient, rerankClient, caps, ragBuild.Runtime)
+	registerTools(registry, cfg, embedClient, rerankClient, asrClient, caps, ragBuild.Runtime)
 
 	// Start MCP server if enabled
 	if cfg.MCP.Enabled {
@@ -251,13 +254,20 @@ func runGateway(cfg appconfig.Config) {
 	}
 }
 
-func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *model.EmbedClient, rerankClient *model.RerankClient, caps capability.Snapshot, ragRuntime ragruntime.Runtime) {
+func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *model.EmbedClient, rerankClient *model.RerankClient, asrClient *asr.Client, caps capability.Snapshot, ragRuntime ragruntime.Runtime) {
 	// Download & audio extraction tools (no external dependencies)
 	_, dlWrap, err := tool.NewDownloadTool()
 	if err != nil {
 		slog.Warn("gateway.tool_register_failed", "tool", "download_video", "err", err)
 	} else {
 		registry.Register("download_video", dlWrap, nil)
+	}
+
+	_, downloadAudioWrap, err := tool.NewAudioDownloadTool()
+	if err != nil {
+		slog.Warn("gateway.tool_register_failed", "tool", "download_audio", "err", err)
+	} else {
+		registry.Register("download_audio", downloadAudioWrap, nil)
 	}
 
 	_, audioWrap, err := tool.NewAudioExtractTool()
@@ -275,7 +285,14 @@ func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *m
 		registry.Register("format_transcript", formatWrap, nil)
 	}
 
-	// ASR tool is registered on-demand by the transcript agent during extraction flow.
+	if asrClient != nil {
+		_, asrWrap, err := tool.NewASRTool(asrClient)
+		if err != nil {
+			slog.Warn("gateway.tool_register_failed", "tool", "transcribe_audio", "err", err)
+		} else {
+			registry.Register("transcribe_audio", asrWrap, nil)
+		}
+	}
 
 	// RAG tools (require Qdrant + embedding)
 	if caps.Available(capability.Embedding) && embedClient != nil {

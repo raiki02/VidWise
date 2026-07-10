@@ -323,6 +323,30 @@
             <button class="primary" type="submit">启动任务</button>
             <div id="video-status" class="status-box"></div>
           </form>
+          <form id="extract-form" class="panel form-grid">
+            <h3>文件下载</h3>
+            <div>
+              <label for="extract-url">视频 URL</label>
+              <input id="extract-url" placeholder="https://example.com/video" />
+            </div>
+            <div class="split">
+              <div>
+                <label for="extract-name">文件名</label>
+                <input id="extract-name" placeholder="demo" />
+              </div>
+              <div>
+                <label for="extract-type">下载类型</label>
+                <select id="extract-type">
+                  <option value="video">video (mp4)</option>
+                  <option value="audio">audio (mp3)</option>
+                  <option value="text">text (txt)</option>
+                  <option value="summary">summary (txt)</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit">下载文件</button>
+            <div id="extract-status" class="status-box"></div>
+          </form>
           <div class="panel">
             <h3>当前任务</h3>
             <div id="active-task" class="status-box">暂无任务。</div>
@@ -807,6 +831,47 @@
       }
     }
 
+    async function downloadExtract(event) {
+      event.preventDefault();
+      const status = $("#extract-status");
+      const url = $("#extract-url").value.trim();
+      const name = $("#extract-name").value.trim();
+      const type = $("#extract-type").value;
+      if (!url || !name) {
+        status.textContent = "URL 和文件名必填。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      status.textContent = "下载中...";
+      status.style.color = "";
+      try {
+        const params = scopeParams();
+        const endpoint = "/extract" + (params.toString() ? `?${params}` : "");
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, name, type }),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        const disposition = resp.headers.get("content-disposition") || "";
+        const match = disposition.match(/filename[^;=\n]*=['"]*([^'";\n]*)['"]*/i);
+        const filename = match ? match[1] : `${name}.${type === "video" ? "mp4" : type === "audio" ? "mp3" : "txt"}`;
+        downloadBlob(blob, filename);
+        status.textContent = `已下载 ${filename}。`;
+        status.style.color = "#bbf7d0";
+        if (type === "text" || type === "summary") {
+          await loadSources();
+        }
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
     async function pollTask(taskId) {
       clearTimeout(state.pollTimer);
       try {
@@ -924,6 +989,7 @@
       });
       $("#upload-form").addEventListener("submit", uploadSource);
       $("#video-form").addEventListener("submit", startVideoTask);
+      $("#extract-form").addEventListener("submit", downloadExtract);
       $("#format-form").addEventListener("submit", formatText);
     }
 

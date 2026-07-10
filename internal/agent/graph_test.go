@@ -49,7 +49,7 @@ func (o *recordingVideoObserver) StepSkipped(name, reason string) {
 
 func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 	registry := tool.NewRegistry()
-	registerGraphTool(registry, "extract_audio", "")
+	registerGraphTool(registry, "download_audio", "")
 	registerGraphTool(registry, "transcribe_audio", `{"text":"raw transcript","language":"zh","duration":1}`)
 	registerGraphTool(registry, "format_transcript", `{"formatted_text":"formatted transcript"}`)
 	registerGraphTool(registry, "rag_index", `{"status":"ok"}`)
@@ -80,7 +80,7 @@ func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 
 func TestExecuteVideoProcessReportsOptionalStepSkips(t *testing.T) {
 	registry := tool.NewRegistry()
-	registerGraphTool(registry, "extract_audio", "")
+	registerGraphTool(registry, "download_audio", "")
 	registerGraphTool(registry, "transcribe_audio", `{"text":"raw transcript","language":"zh","duration":1}`)
 	observer := &recordingVideoObserver{}
 
@@ -107,7 +107,7 @@ func TestExecuteVideoProcessReportsOptionalStepSkips(t *testing.T) {
 
 func TestExecuteVideoProcessReportsFailedStep(t *testing.T) {
 	registry := tool.NewRegistry()
-	registerGraphTool(registry, "extract_audio", "")
+	registerGraphTool(registry, "download_audio", "")
 	registry.Register("transcribe_audio", fakeGraphTool{name: "transcribe_audio", err: errors.New("asr down")}, nil)
 	observer := &recordingVideoObserver{}
 

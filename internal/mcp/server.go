@@ -90,6 +90,7 @@ func (s *Server) StartAsync() {
 func generateDescription(name string) string {
 	descriptions := map[string]string{
 		"download_video":    "Download a video from a URL using yt-dlp.",
+		"download_audio":    "Download audio from a video URL using yt-dlp.",
 		"extract_audio":     "Extract audio from a video URL using yt-dlp.",
 		"transcribe_audio":  "Transcribe a local audio file to text using the ASR service.",
 		"summarize_video":   "Summarize a local video by calling the video understanding service.",
