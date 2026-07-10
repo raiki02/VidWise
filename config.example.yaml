@@ -27,6 +27,10 @@ asr:
     beam_size: 5
     vad_filter: true
     initial_prompt: ""
+    # Upper bound before Whisper's model-specific decoder length budget is applied.
+    max_new_tokens: 448
+    # Optional domain prompt is trimmed first so generation always has room.
+    max_initial_prompt_tokens: 224
     vad:
       threshold: 0.3
       min_speech_duration_ms: 100

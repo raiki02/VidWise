@@ -4,6 +4,11 @@ from typing import Any, Protocol
 import numpy as np
 
 
+DEFAULT_WHISPER_MAX_NEW_TOKENS = 448
+DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS = 224
+MIN_WHISPER_MAX_NEW_TOKENS = 1
+
+
 @dataclass
 class TranscriptionSegment:
     start: float
@@ -80,6 +85,14 @@ class WhisperBackend:
         self._vad_min_speech_ms = int(vad_cfg.get("min_speech_duration_ms", 100))
         self._vad_min_silence_ms = int(vad_cfg.get("min_silence_duration_ms", 500))
         self._vad_speech_pad_ms = int(vad_cfg.get("speech_pad_ms", 600))
+        self._max_new_tokens = _positive_int(
+            (transcribe_config or {}).get("max_new_tokens"),
+            DEFAULT_WHISPER_MAX_NEW_TOKENS,
+        )
+        self._max_initial_prompt_tokens = _positive_int(
+            (transcribe_config or {}).get("max_initial_prompt_tokens"),
+            DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS,
+        )
 
     def transcribe(
         self,
@@ -163,26 +176,15 @@ class WhisperBackend:
         else:
             input_features = input_features.to(device=device)
 
-        gen_kwargs: dict[str, Any] = {
-            "return_timestamps": True,
-            # Suppress repeated n-grams to break hallucination loops.
-            "no_repeat_ngram_size": 4,
-            # Prevent the model from running away (Whisper generates ~1 token per
-            # 20ms of audio, so max 448 tokens covers the full 25s chunk with
-            # generous headroom).
-            "max_new_tokens": 448,
-        }
-        if beam_size > 1:
-            gen_kwargs["num_beams"] = beam_size
-
-        if language and language.lower() != "auto":
-            gen_kwargs["forced_decoder_ids"] = self.processor.get_decoder_prompt_ids(
-                language=language, task="transcribe"
-            )
-
-        if initial_prompt:
-            prompt_ids = self.processor.tokenizer.encode(initial_prompt, add_special_tokens=False)
-            gen_kwargs["prompt_ids"] = prompt_ids[:224]
+        gen_kwargs = _build_whisper_generation_kwargs(
+            self.model,
+            self.processor,
+            language=language,
+            beam_size=beam_size,
+            initial_prompt=initial_prompt,
+            requested_max_new_tokens=self._max_new_tokens,
+            max_initial_prompt_tokens=self._max_initial_prompt_tokens,
+        )
 
         with torch.no_grad():
             generated_ids = self.model.generate(input_features, **gen_kwargs)
@@ -247,6 +249,79 @@ class WhisperBackend:
 
         text = self.processor.decode(generated_ids, skip_special_tokens=True).strip()
         return [TranscriptionSegment(start=0.0, end=duration, text=text)] if text else []
+
+
+def _build_whisper_generation_kwargs(
+    model: Any,
+    processor: Any,
+    *,
+    language: str,
+    beam_size: int,
+    initial_prompt: str,
+    requested_max_new_tokens: int = DEFAULT_WHISPER_MAX_NEW_TOKENS,
+    max_initial_prompt_tokens: int = DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS,
+) -> dict[str, Any]:
+    forced_decoder_ids = None
+    gen_kwargs: dict[str, Any] = {
+        "return_timestamps": True,
+        # Suppress repeated n-grams to break hallucination loops.
+        "no_repeat_ngram_size": 4,
+    }
+    if beam_size > 1:
+        gen_kwargs["num_beams"] = beam_size
+
+    if language and language.lower() != "auto":
+        forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task="transcribe")
+        gen_kwargs["forced_decoder_ids"] = forced_decoder_ids
+
+    max_target_positions = _whisper_max_target_positions(model)
+    decoder_prefix_tokens = _decoder_prefix_token_count(forced_decoder_ids)
+    requested_max_new_tokens = _positive_int(
+        requested_max_new_tokens,
+        DEFAULT_WHISPER_MAX_NEW_TOKENS,
+    )
+    max_initial_prompt_tokens = _positive_int(
+        max_initial_prompt_tokens,
+        DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS,
+    )
+
+    prompt_ids: list[int] = []
+    if initial_prompt:
+        encoded_prompt = processor.tokenizer.encode(initial_prompt, add_special_tokens=False)
+        prompt_budget = max(0, max_target_positions - decoder_prefix_tokens - MIN_WHISPER_MAX_NEW_TOKENS)
+        prompt_ids = encoded_prompt[:min(max_initial_prompt_tokens, prompt_budget)]
+        if prompt_ids:
+            gen_kwargs["prompt_ids"] = prompt_ids
+
+    max_new_budget = max(
+        MIN_WHISPER_MAX_NEW_TOKENS,
+        max_target_positions - decoder_prefix_tokens - len(prompt_ids),
+    )
+    gen_kwargs["max_new_tokens"] = min(requested_max_new_tokens, max_new_budget)
+    return gen_kwargs
+
+
+def _whisper_max_target_positions(model: Any) -> int:
+    for owner in (getattr(model, "config", None), getattr(model, "generation_config", None)):
+        for attr in ("max_target_positions", "max_length"):
+            value = getattr(owner, attr, None)
+            if isinstance(value, int) and value > 0:
+                return value
+    return DEFAULT_WHISPER_MAX_NEW_TOKENS
+
+
+def _decoder_prefix_token_count(forced_decoder_ids: Any) -> int:
+    # Whisper generation starts with <|startoftranscript|>; language/task forced
+    # decoder ids are already present when transformers validates max length.
+    return 1 + len(forced_decoder_ids or [])
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 class FasterWhisperBackend:

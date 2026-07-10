@@ -37,6 +37,8 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "beam_size": 5,
         "vad_filter": True,
         "initial_prompt": "",
+        "max_new_tokens": 448,
+        "max_initial_prompt_tokens": 224,
         "vad": {
             "threshold": 0.3,
             "min_speech_duration_ms": 100,
@@ -515,6 +517,8 @@ def load_asr_config() -> dict[str, Any]:
     transcribe_config["beam_size"] = int(transcribe_config["beam_size"])
     transcribe_config["vad_filter"] = bool(transcribe_config["vad_filter"])
     transcribe_config["initial_prompt"] = transcribe_config["initial_prompt"] or ""
+    transcribe_config["max_new_tokens"] = int(transcribe_config.get("max_new_tokens", 448))
+    transcribe_config["max_initial_prompt_tokens"] = int(transcribe_config.get("max_initial_prompt_tokens", 224))
 
     stream_config["enabled"] = bool(stream_config.get("enabled", True))
     stream_config["sample_rate"] = int(stream_config["sample_rate"])
