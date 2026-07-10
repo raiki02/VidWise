@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/capability"
+	"github.com/raiki02/vidwise/internal/chatagent"
 	"github.com/raiki02/vidwise/internal/rag"
 )
+
+type handlerFakeRetriever struct {
+	chunks []rag.RelevantChunk
+	req    rag.RetrieveRequest
+}
+
+func (r *handlerFakeRetriever) RetrieveWithOptions(_ context.Context, req rag.RetrieveRequest) ([]rag.RelevantChunk, error) {
+	r.req = req
+	return r.chunks, nil
+}
 
 func TestChatQueryWithoutSessionStoreFallsBackToStatelessAnswer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -83,6 +95,50 @@ func TestChatQueryReportsRetrievalStatusWhenRetrieverUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(out.Answer, "没有在当前知识库范围内检索到足够相关的内容") {
 		t.Fatalf("expected insufficient context answer, got %q", out.Answer)
+	}
+}
+
+func TestChatQueryReportsPackedRAGContextOutcome(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	llmCfg := testDisabledLLMConfig()
+	retriever := &handlerFakeRetriever{
+		chunks: []rag.RelevantChunk{
+			{Text: strings.Repeat("界", 200), Score: 0.93, SourceName: "long.md"},
+			{Text: "second chunk should not reach prompt", Score: 0.8, SourceName: "later.md"},
+		},
+	}
+	h := NewChatHandler(nil, nil, nil, llmCfg, testCapabilities(llmCfg))
+	h.answerAgent = chatagent.NewWithRetriever(llmCfg, rag.ContextConfig{MaxRunes: 90}, retriever)
+
+	router := gin.New()
+	router.POST("/chat/query", h.ChatQuery)
+
+	body := bytes.NewBufferString(`{"query":"查一下知识库里的内容","user_id":"u1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/query", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out ChatQueryResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.RAGChunkCount != 2 {
+		t.Fatalf("rag chunk count = %d, want 2", out.RAGChunkCount)
+	}
+	if out.RAGContextUsedChunks != 1 {
+		t.Fatalf("rag context used chunks = %d, want 1", out.RAGContextUsedChunks)
+	}
+	if !out.RAGContextTruncated {
+		t.Fatalf("expected truncated RAG context, got %#v", out)
+	}
+	if strings.Contains(out.Answer, "second chunk should not reach prompt") {
+		t.Fatalf("expected omitted chunk not to appear in answer: %q", out.Answer)
 	}
 }
 

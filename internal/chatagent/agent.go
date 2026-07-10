@@ -61,6 +61,13 @@ type RetrievalOutcome struct {
 	ChunkCount int             `json:"chunk_count"`
 }
 
+// RAGContextOutcome records how much retrieved context actually reached the
+// answer prompt after packing and budget enforcement.
+type RAGContextOutcome struct {
+	UsedChunks int  `json:"used_chunks"`
+	Truncated  bool `json:"truncated"`
+}
+
 // RetrievalEvaluationRequest contains the inputs needed to decide whether a
 // turn should use knowledge-base retrieval.
 type RetrievalEvaluationRequest struct {
@@ -80,6 +87,12 @@ type AnswerRequest struct {
 	Evaluation RetrievalEvaluation
 }
 
+// AnswerOutcome is the answer text plus prompt-context packing metadata.
+type AnswerOutcome struct {
+	Answer     string
+	RAGContext RAGContextOutcome
+}
+
 // TurnRequest is the stable interface for one user turn. It deliberately keeps
 // HTTP/session persistence out while owning the RAG decision and answer policy.
 type TurnRequest struct {
@@ -97,6 +110,7 @@ type TurnResult struct {
 	Chunks     []rag.RelevantChunk
 	Evaluation RetrievalEvaluation
 	Retrieval  RetrievalOutcome
+	RAGContext RAGContextOutcome
 }
 
 // MemoryExtractionRequest is the turn-level evidence used to update
@@ -213,7 +227,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 		retrieval.Reason = "retriever_unavailable"
 	}
 
-	answer := a.Answer(ctx, AnswerRequest{
+	answer := a.AnswerWithOutcome(ctx, AnswerRequest{
 		Query:      req.Query,
 		History:    req.History,
 		UserFacts:  req.UserFacts,
@@ -222,10 +236,11 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 	})
 
 	return TurnResult{
-		Answer:     answer,
+		Answer:     answer.Answer,
 		Chunks:     chunks,
 		Evaluation: eval,
 		Retrieval:  retrieval,
+		RAGContext: answer.RAGContext,
 	}, nil
 }
 
@@ -295,12 +310,23 @@ func (a *Agent) ExtractMemoryFacts(ctx context.Context, req MemoryExtractionRequ
 }
 
 func (a *Agent) Answer(ctx context.Context, req AnswerRequest) string {
+	return a.AnswerWithOutcome(ctx, req).Answer
+}
+
+func (a *Agent) AnswerWithOutcome(ctx context.Context, req AnswerRequest) AnswerOutcome {
 	req.Query = strings.TrimSpace(req.Query)
 	packedContext := rag.PackContext(req.Chunks, a.ragContext)
+	outcome := AnswerOutcome{
+		RAGContext: RAGContextOutcome{
+			UsedChunks: packedContext.UsedChunks,
+			Truncated:  packedContext.Truncated,
+		},
+	}
 	hasRAGContext := packedContext.HasContext()
 
 	if req.Evaluation.ShouldRetrieve && !hasRAGContext {
-		return insufficientRAGContextAnswer
+		outcome.Answer = insufficientRAGContextAnswer
+		return outcome
 	}
 
 	if a.llmEnabled() {
@@ -315,7 +341,8 @@ func (a *Agent) Answer(ctx context.Context, req AnswerRequest) string {
 			})
 			resp, genErr := cm.Generate(ctx, msgs)
 			if genErr == nil && resp != nil && strings.TrimSpace(resp.Content) != "" {
-				return resp.Content
+				outcome.Answer = resp.Content
+				return outcome
 			}
 			slog.Warn("chat.agent.llm_gen_failed", "err", genErr)
 		} else {
@@ -323,7 +350,8 @@ func (a *Agent) Answer(ctx context.Context, req AnswerRequest) string {
 		}
 	}
 
-	return fallbackAnswer(packedContext)
+	outcome.Answer = fallbackAnswer(packedContext)
+	return outcome
 }
 
 func (a *Agent) llmEnabled() bool {

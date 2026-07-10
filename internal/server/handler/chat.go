@@ -79,14 +79,16 @@ type ChatChunk struct {
 }
 
 type ChatQueryResponse struct {
-	SessionID     string      `json:"session_id"`
-	Answer        string      `json:"answer"`
-	Chunks        []ChatChunk `json:"chunks,omitempty"`
-	RAGTriggered  bool        `json:"rag_triggered"`
-	RAGReason     string      `json:"rag_reason,omitempty"`
-	RAGStatus     string      `json:"rag_status,omitempty"`
-	RAGChunkCount int         `json:"rag_chunk_count"`
-	Question      string      `json:"question"`
+	SessionID            string      `json:"session_id"`
+	Answer               string      `json:"answer"`
+	Chunks               []ChatChunk `json:"chunks,omitempty"`
+	RAGTriggered         bool        `json:"rag_triggered"`
+	RAGReason            string      `json:"rag_reason,omitempty"`
+	RAGStatus            string      `json:"rag_status,omitempty"`
+	RAGChunkCount        int         `json:"rag_chunk_count"`
+	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
+	RAGContextTruncated  bool        `json:"rag_context_truncated"`
+	Question             string      `json:"question"`
 }
 
 type SessionListItem struct {
@@ -203,14 +205,16 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ChatQueryResponse{
-		SessionID:     sessionID,
-		Answer:        answer,
-		Chunks:        outChunks,
-		RAGTriggered:  turn.Evaluation.ShouldRetrieve,
-		RAGReason:     turn.Evaluation.Reason,
-		RAGStatus:     string(turn.Retrieval.Status),
-		RAGChunkCount: turn.Retrieval.ChunkCount,
-		Question:      req.Query,
+		SessionID:            sessionID,
+		Answer:               answer,
+		Chunks:               outChunks,
+		RAGTriggered:         turn.Evaluation.ShouldRetrieve,
+		RAGReason:            turn.Evaluation.Reason,
+		RAGStatus:            string(turn.Retrieval.Status),
+		RAGChunkCount:        turn.Retrieval.ChunkCount,
+		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
+		RAGContextTruncated:  turn.RAGContext.Truncated,
+		Question:             req.Query,
 	})
 }
 

@@ -204,8 +204,50 @@ func TestRunTurnRetrievesWithChatScopeAndFallbackAnswer(t *testing.T) {
 	if got.Retrieval.Status != RetrievalStatusRetrieved || got.Retrieval.ChunkCount != 1 {
 		t.Fatalf("unexpected retrieval outcome: %#v", got.Retrieval)
 	}
+	if got.RAGContext.UsedChunks != 1 || got.RAGContext.Truncated {
+		t.Fatalf("unexpected RAG context outcome: %#v", got.RAGContext)
+	}
 	if !strings.Contains(got.Answer, "视频讲到了 Markdown RAG") {
 		t.Fatalf("expected fallback answer to include retrieved context, got %q", got.Answer)
+	}
+}
+
+func TestRunTurnRecordsPackedRAGContextTruncation(t *testing.T) {
+	retriever := &fakeRetriever{
+		chunks: []rag.RelevantChunk{
+			{
+				Text:       strings.Repeat("界", 200),
+				Score:      0.93,
+				SourceName: "long.md",
+			},
+			{
+				Text:       "second chunk should not reach prompt",
+				Score:      0.8,
+				SourceName: "later.md",
+			},
+		},
+	}
+	agent := NewWithRetriever(disabledLLMConfig(), rag.ContextConfig{MaxRunes: 90}, retriever)
+
+	got, err := agent.RunTurn(context.Background(), TurnRequest{
+		Query:     "查一下知识库里的内容",
+		SessionID: "s1",
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+
+	if got.Retrieval.ChunkCount != 2 {
+		t.Fatalf("retrieved chunk count = %d, want 2", got.Retrieval.ChunkCount)
+	}
+	if got.RAGContext.UsedChunks != 1 {
+		t.Fatalf("used context chunks = %d, want 1", got.RAGContext.UsedChunks)
+	}
+	if !got.RAGContext.Truncated {
+		t.Fatalf("expected truncated context outcome, got %#v", got.RAGContext)
+	}
+	if strings.Contains(got.Answer, "second chunk should not reach prompt") {
+		t.Fatalf("expected omitted chunk not to appear in answer: %q", got.Answer)
 	}
 }
 
