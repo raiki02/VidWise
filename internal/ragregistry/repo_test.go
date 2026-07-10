@@ -15,6 +15,9 @@ func TestSourceRecordFromSummaryNormalizesMetadata(t *testing.T) {
 		SourceURL:     " https://example.com/guide ",
 		ContentType:   " markdown ",
 		DocumentTitle: " Guide ",
+		DocumentIDs:   []string{" doc-1 ", "doc-1", "doc-2"},
+		TaskIDs:       []string{" task-1 "},
+		HeadingPaths:  []string{" Guide > Install "},
 		ChunkCount:    3,
 	})
 	if !ok {
@@ -29,6 +32,9 @@ func TestSourceRecordFromSummaryNormalizesMetadata(t *testing.T) {
 	}
 	if got.ContentType != "markdown" || got.ChunkCount != 3 || got.Status != StatusActive || got.DeletedAt != nil {
 		t.Fatalf("lifecycle metadata unexpected: %#v", got)
+	}
+	if got.DocumentIDs != `["doc-1","doc-2"]` || got.TaskIDs != `["task-1"]` || got.HeadingPaths != `["Guide \u003e Install"]` {
+		t.Fatalf("structured metadata not encoded: %#v", got)
 	}
 }
 
@@ -47,6 +53,9 @@ func TestSourceSummaryFromRecordKeepsOperationalFields(t *testing.T) {
 		SourceURL:     "https://example.com/guide",
 		ContentType:   "markdown",
 		DocumentTitle: "Guide",
+		DocumentIDs:   `["doc-1","doc-2"]`,
+		TaskIDs:       `["task-1"]`,
+		HeadingPaths:  `["Guide > Install"]`,
 		ChunkCount:    2,
 	})
 
@@ -58,6 +67,15 @@ func TestSourceSummaryFromRecordKeepsOperationalFields(t *testing.T) {
 	}
 	if got.DocumentTitle != "Guide" || got.ChunkCount != 2 {
 		t.Fatalf("summary metadata missing: %#v", got)
+	}
+	if len(got.DocumentIDs) != 2 || got.DocumentIDs[0] != "doc-1" || got.DocumentIDs[1] != "doc-2" {
+		t.Fatalf("document ids missing: %#v", got)
+	}
+	if len(got.TaskIDs) != 1 || got.TaskIDs[0] != "task-1" {
+		t.Fatalf("task ids missing: %#v", got)
+	}
+	if len(got.HeadingPaths) != 1 || got.HeadingPaths[0] != "Guide > Install" {
+		t.Fatalf("heading paths missing: %#v", got)
 	}
 }
 

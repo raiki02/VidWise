@@ -373,6 +373,9 @@ func sourceSummariesFromChunks(chunks []documentChunk, identities []chunkIdentit
 		source.SourceURL = firstNonEmpty(source.SourceURL, chunks[i].Metadata[qdrantclient.FieldSourceURL])
 		source.ContentType = firstNonEmpty(source.ContentType, chunks[i].Metadata[qdrantclient.FieldContentType])
 		source.DocumentTitle = firstNonEmpty(source.DocumentTitle, chunks[i].Metadata[qdrantclient.FieldDocumentTitle])
+		source.DocumentIDs = appendUniqueTrimmed(source.DocumentIDs, firstNonEmpty(identity.documentID, chunks[i].Metadata[qdrantclient.FieldDocumentID]), 0)
+		source.TaskIDs = appendUniqueTrimmed(source.TaskIDs, chunks[i].Metadata[qdrantclient.FieldTaskID], 0)
+		source.HeadingPaths = appendUniqueTrimmed(source.HeadingPaths, chunks[i].Metadata[qdrantclient.FieldHeadingPath], 12)
 	}
 
 	out := make([]SourceSummary, 0, len(order))

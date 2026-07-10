@@ -2,6 +2,7 @@ package ragregistry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -49,6 +50,9 @@ func (r *Repo) RecordIndexed(ctx context.Context, sources []rag.SourceSummary) e
 			"source_url",
 			"content_type",
 			"document_title",
+			"document_ids",
+			"task_ids",
+			"heading_paths",
 			"chunk_count",
 			"status",
 			"deleted_at",
@@ -134,6 +138,9 @@ func sourceRecordFromSummary(source rag.SourceSummary) (SourceRecord, bool) {
 		SourceURL:     strings.TrimSpace(source.SourceURL),
 		ContentType:   strings.TrimSpace(source.ContentType),
 		DocumentTitle: strings.TrimSpace(source.DocumentTitle),
+		DocumentIDs:   encodeStringList(source.DocumentIDs),
+		TaskIDs:       encodeStringList(source.TaskIDs),
+		HeadingPaths:  encodeStringList(source.HeadingPaths),
 		ChunkCount:    source.ChunkCount,
 		Status:        StatusActive,
 		DeletedAt:     nil,
@@ -147,10 +154,51 @@ func sourceSummaryFromRecord(record SourceRecord) rag.SourceSummary {
 		SourceURL:     record.SourceURL,
 		ContentType:   record.ContentType,
 		DocumentTitle: record.DocumentTitle,
+		DocumentIDs:   decodeStringList(record.DocumentIDs),
+		TaskIDs:       decodeStringList(record.TaskIDs),
+		HeadingPaths:  decodeStringList(record.HeadingPaths),
 		UserID:        record.UserID,
 		SessionID:     record.SessionID,
 		ChunkCount:    record.ChunkCount,
 	}
+}
+
+func encodeStringList(values []string) string {
+	normalized := normalizeStringList(values)
+	if len(normalized) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func decodeStringList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return normalizeStringList(values)
+}
+
+func normalizeStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		out = append(out, value)
+		seen[value] = true
+	}
+	return out
 }
 
 func normalizeSourceIDs(sourceIDs []string) []string {

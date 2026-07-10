@@ -22,6 +22,9 @@ type SourceRecord struct {
 	SourceURL     string     `gorm:"type:text" json:"source_url,omitempty"`
 	ContentType   string     `gorm:"type:varchar(64);index" json:"content_type,omitempty"`
 	DocumentTitle string     `gorm:"type:varchar(512)" json:"document_title,omitempty"`
+	DocumentIDs   string     `gorm:"type:text" json:"document_ids,omitempty"`
+	TaskIDs       string     `gorm:"type:text" json:"task_ids,omitempty"`
+	HeadingPaths  string     `gorm:"type:text" json:"heading_paths,omitempty"`
 	ChunkCount    int        `gorm:"not null;default:0" json:"chunk_count"`
 	Status        string     `gorm:"type:varchar(16);not null;default:active;index:idx_rag_sources_user_status;index:idx_rag_sources_session_status" json:"status"`
 	DeletedAt     *time.Time `json:"deleted_at,omitempty"`

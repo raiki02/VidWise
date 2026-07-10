@@ -274,6 +274,8 @@ func TestSourceSummariesFromChunksAggregatesSourceMetadata(t *testing.T) {
 				qdrantclient.FieldSourceURL:     "https://example.com/guide",
 				qdrantclient.FieldContentType:   MarkdownContentType,
 				qdrantclient.FieldDocumentTitle: "Guide",
+				qdrantclient.FieldTaskID:        "task-1",
+				qdrantclient.FieldHeadingPath:   "Guide > Install",
 			},
 		},
 		{
@@ -286,8 +288,8 @@ func TestSourceSummariesFromChunksAggregatesSourceMetadata(t *testing.T) {
 	}
 
 	got := sourceSummariesFromChunks(chunks, []chunkIdentity{
-		{sourceID: "source-1"},
-		{sourceID: "source-1"},
+		{sourceID: "source-1", documentID: "doc-1"},
+		{sourceID: "source-1", documentID: "doc-1"},
 	}, " user-1 ", " session-1 ")
 
 	if len(got) != 1 {
@@ -301,6 +303,15 @@ func TestSourceSummariesFromChunksAggregatesSourceMetadata(t *testing.T) {
 	}
 	if got[0].SourceName != "guide.md" || got[0].SourceURL != "https://example.com/guide" || got[0].DocumentTitle != "Guide" {
 		t.Fatalf("source metadata missing: %#v", got[0])
+	}
+	if len(got[0].DocumentIDs) != 1 || got[0].DocumentIDs[0] != "doc-1" {
+		t.Fatalf("document ids missing: %#v", got[0])
+	}
+	if len(got[0].TaskIDs) != 1 || got[0].TaskIDs[0] != "task-1" {
+		t.Fatalf("task ids missing: %#v", got[0])
+	}
+	if len(got[0].HeadingPaths) != 1 || got[0].HeadingPaths[0] != "Guide > Install" {
+		t.Fatalf("heading paths missing: %#v", got[0])
 	}
 }
 

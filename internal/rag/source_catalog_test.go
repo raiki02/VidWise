@@ -77,6 +77,12 @@ func TestSourceCatalogListSourcesAggregatesChunks(t *testing.T) {
 	if got[0].SourceID != "source-1" || got[0].ChunkCount != 2 || got[0].DocumentTitle != "Guide" {
 		t.Fatalf("unexpected first source: %#v", got[0])
 	}
+	if !equalStrings(got[0].DocumentIDs, []string{"doc-source-1"}) || !equalStrings(got[0].TaskIDs, []string{"task-source-1"}) {
+		t.Fatalf("source metadata ids missing: %#v", got[0])
+	}
+	if !equalStrings(got[0].HeadingPaths, []string{"Guide"}) {
+		t.Fatalf("heading metadata missing: %#v", got[0])
+	}
 	if got[1].SourceID != "source-2" || got[1].ChunkCount != 1 {
 		t.Fatalf("unexpected second source: %#v", got[1])
 	}
@@ -133,7 +139,11 @@ func TestBuildSourceCatalogScrollRequestUsesScopeAndPayloadOnly(t *testing.T) {
 		t.Fatalf("expected user/session filter, got %#v", filter)
 	}
 	fields := req.GetWithPayload().GetInclude().GetFields()
-	if !contains(fields, qdrantclient.FieldSourceID) || !contains(fields, qdrantclient.FieldDocumentTitle) {
+	if !contains(fields, qdrantclient.FieldSourceID) ||
+		!contains(fields, qdrantclient.FieldDocumentTitle) ||
+		!contains(fields, qdrantclient.FieldDocumentID) ||
+		!contains(fields, qdrantclient.FieldTaskID) ||
+		!contains(fields, qdrantclient.FieldHeadingPath) {
 		t.Fatalf("expected source payload fields, got %#v", fields)
 	}
 	if req.GetWithVectors().GetEnable() {
@@ -143,7 +153,14 @@ func TestBuildSourceCatalogScrollRequestUsesScopeAndPayloadOnly(t *testing.T) {
 
 func TestSourceCatalogUsesRegistryWhenAvailable(t *testing.T) {
 	registry := &fakeSourceRegistry{
-		sources: []SourceSummary{{SourceID: "source-1", SourceName: "guide.md", ChunkCount: 2}},
+		sources: []SourceSummary{{
+			SourceID:     "source-1",
+			SourceName:   "guide.md",
+			DocumentIDs:  []string{"doc-source-1"},
+			TaskIDs:      []string{"task-source-1"},
+			HeadingPaths: []string{"Guide"},
+			ChunkCount:   2,
+		}},
 	}
 	scroller := &fakeSourceScroller{}
 	catalog := newSourceCatalogWithAdapters(scroller, registry, "rag_docs", 1)
@@ -160,6 +177,36 @@ func TestSourceCatalogUsesRegistryWhenAvailable(t *testing.T) {
 	}
 	if len(scroller.requests) != 0 {
 		t.Fatalf("expected registry result to avoid Qdrant scan, got %d requests", len(scroller.requests))
+	}
+}
+
+func TestSourceCatalogEnrichesRegistrySourcesWithoutMetadata(t *testing.T) {
+	registry := &fakeSourceRegistry{
+		sources: []SourceSummary{{SourceID: "source-1", SourceName: "guide.md", ChunkCount: 2}},
+	}
+	scroller := &fakeSourceScroller{
+		responses: []*pb.ScrollResponse{{
+			Result: []*pb.RetrievedPoint{
+				{Payload: sourcePayload("source-1", "Guide", "guide.md", "markdown", "u1", "s1")},
+			},
+		}},
+	}
+	catalog := newSourceCatalogWithAdapters(scroller, registry, "rag_docs", 100)
+
+	got, err := catalog.ListSources(context.Background(), SourceListRequest{Filter: &RetrieveFilter{UserID: "u1"}})
+	if err != nil {
+		t.Fatalf("ListSources: %v", err)
+	}
+	if len(got) != 1 || got[0].SourceID != "source-1" {
+		t.Fatalf("unexpected sources: %#v", got)
+	}
+	if !equalStrings(got[0].DocumentIDs, []string{"doc-source-1"}) ||
+		!equalStrings(got[0].TaskIDs, []string{"task-source-1"}) ||
+		!equalStrings(got[0].HeadingPaths, []string{"Guide"}) {
+		t.Fatalf("registry source was not enriched from Qdrant: %#v", got[0])
+	}
+	if len(scroller.requests) != 1 {
+		t.Fatalf("expected Qdrant enrichment scan, got %d requests", len(scroller.requests))
 	}
 }
 
@@ -207,9 +254,24 @@ func sourcePayload(sourceID, title, sourceName, contentType, userID, sessionID s
 		qdrantclient.FieldDocumentTitle: stringPayload(title),
 		qdrantclient.FieldSourceName:    stringPayload(sourceName),
 		qdrantclient.FieldContentType:   stringPayload(contentType),
+		qdrantclient.FieldDocumentID:    stringPayload("doc-" + sourceID),
+		qdrantclient.FieldTaskID:        stringPayload("task-" + sourceID),
+		qdrantclient.FieldHeadingPath:   stringPayload(title),
 		qdrantclient.FieldUserID:        stringPayload(userID),
 		qdrantclient.FieldSessionID:     stringPayload(sessionID),
 	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func contains(values []string, want string) bool {

@@ -101,6 +101,42 @@
     .pill.ok { color: #bbf7d0; border-color: rgba(34, 197, 94, .45); }
     .pill.warn { color: #fde68a; border-color: rgba(245, 158, 11, .45); }
     .pill.err { color: #fecaca; border-color: rgba(248, 113, 113, .45); }
+    .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #111116;
+      color: var(--muted);
+      padding: 2px 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    button.chip { cursor: pointer; }
+    button.chip.active { color: #bbf7d0; border-color: rgba(34, 197, 94, .45); }
+    .source-picker { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
+    .source-option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      margin: 0;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111116;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .source-option input { width: 16px; min-height: 16px; margin-top: 2px; }
+    .source-title { font-weight: 700; overflow-wrap: anywhere; }
+    .source-meta { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 3px; overflow-wrap: anywhere; }
+    .source-cell { min-width: 220px; }
+    .metadata-cell { min-width: 280px; }
     .main {
       min-width: 0;
       min-height: 100vh;
@@ -282,9 +318,14 @@
               <h3>检索范围</h3>
               <div id="selected-source-list" class="status-box">未选择 source 时使用当前 scope 下的知识库。</div>
               <div style="margin-top:12px;">
+                <label for="source-filter">Source IDs</label>
+                <input id="source-filter" placeholder="source-1, source-2" />
+              </div>
+              <div style="margin-top:12px;">
                 <label for="document-filter">Document IDs</label>
                 <input id="document-filter" placeholder="doc-1, doc-2" />
               </div>
+              <div id="chat-source-picker" class="source-picker" style="margin-top:12px;"></div>
               <div class="row" style="margin-top:12px;">
                 <button id="reload-chat-sources" type="button">刷新 sources</button>
                 <button id="clear-source-filter" type="button">清空选择</button>
@@ -368,6 +409,7 @@
                   <th>选择</th>
                   <th>Source</th>
                   <th>类型</th>
+                  <th>Metadata</th>
                   <th>Chunks</th>
                   <th>Scope</th>
                   <th>操作</th>
@@ -448,6 +490,65 @@
     function compactId(value) {
       value = String(value || "");
       return value.length > 18 ? value.slice(0, 8) + "..." + value.slice(-6) : value;
+    }
+
+    function normalizeList(values) {
+      const out = [];
+      const seen = new Set();
+      values.forEach((value) => {
+        value = String(value || "").trim();
+        if (!value || seen.has(value)) return;
+        out.push(value);
+        seen.add(value);
+      });
+      return out;
+    }
+
+    function splitCSV(value) {
+      return normalizeList(String(value || "").split(","));
+    }
+
+    function sourceValues(source, field) {
+      return normalizeList(Array.isArray(source[field]) ? source[field] : []);
+    }
+
+    function sourceLabel(source) {
+      return source.source_name || source.document_title || compactId(source.source_id) || "source";
+    }
+
+    function sourceMetaLine(source) {
+      const parts = [];
+      if (source.source_url) parts.push(source.source_url);
+      if (source.document_title && source.document_title !== source.source_name) parts.push(source.document_title);
+      parts.push(`${source.chunk_count || 0} chunks`);
+      return parts.filter(Boolean).join(" | ");
+    }
+
+    function renderMetadataGroup(label, values, options = {}) {
+      values = normalizeList(values);
+      if (!values.length) return "";
+      const limit = options.limit || 4;
+      const shown = values.slice(0, limit);
+      const activeDocs = options.document ? new Set(documentFilters()) : new Set();
+      const chips = shown.map((value) => {
+        const text = compactId(value);
+        if (options.document) {
+          const active = activeDocs.has(value) ? " active" : "";
+          return `<button class="chip${active}" type="button" title="${esc(value)}" data-doc-filter="${esc(value)}">${esc(text)}</button>`;
+        }
+        return `<span class="chip" title="${esc(value)}">${esc(text)}</span>`;
+      }).join("");
+      const more = values.length > limit ? `<span class="chip">+${values.length - limit}</span>` : "";
+      return `<div class="source-meta">${esc(label)}</div><div class="chip-list">${chips}${more}</div>`;
+    }
+
+    function renderSourceMetadata(source, compact = false) {
+      const limit = compact ? 2 : 4;
+      return [
+        renderMetadataGroup("Document IDs", sourceValues(source, "document_ids"), { limit, document: true }),
+        renderMetadataGroup("Task IDs", sourceValues(source, "task_ids"), { limit }),
+        renderMetadataGroup("Heading Paths", sourceValues(source, "heading_paths"), { limit }),
+      ].filter(Boolean).join("");
     }
 
     function statusClass(status) {
@@ -591,7 +692,17 @@
     }
 
     function documentFilters() {
-      return $("#document-filter").value.split(",").map((item) => item.trim()).filter(Boolean);
+      const input = $("#document-filter");
+      return splitCSV(input ? input.value : "");
+    }
+
+    function manualSourceIDs() {
+      const input = $("#source-filter");
+      return splitCSV(input ? input.value : "");
+    }
+
+    function chatSourceIDs() {
+      return normalizeList([...Array.from(state.selectedSourceIds), ...manualSourceIDs()]);
     }
 
     async function sendChat() {
@@ -607,7 +718,7 @@
           query,
           user_id: state.userId,
           session_id: state.sessionId,
-          source_ids: Array.from(state.selectedSourceIds),
+          source_ids: chatSourceIDs(),
           document_ids: documentFilters(),
         };
         const data = await fetchJSON("/chat/query", {
@@ -708,26 +819,91 @@
         const checked = state.selectedSourceIds.has(source.source_id) ? "checked" : "";
         tr.innerHTML = `
           <td><input type="checkbox" data-source-check="${esc(source.source_id)}" ${checked}></td>
-          <td><div>${esc(source.source_name || source.document_title || "source")}</div><div class="id">${esc(compactId(source.source_id))}</div></td>
+          <td class="source-cell">
+            <div class="source-title">${esc(sourceLabel(source))}</div>
+            <div class="id">${esc(source.source_id)}</div>
+            <div class="source-meta">${esc(sourceMetaLine(source))}</div>
+          </td>
           <td>${esc(source.content_type || "-")}</td>
+          <td class="metadata-cell">${renderSourceMetadata(source)}</td>
           <td>${source.chunk_count || 0}</td>
           <td><div class="id">u:${esc(source.user_id || "-")}</div><div class="id">s:${esc(compactId(source.session_id || "-"))}</div></td>
           <td><button class="danger" type="button" data-delete-source="${esc(source.source_id)}">删除</button></td>
         `;
         table.appendChild(tr);
       });
-      $$("[data-source-check]").forEach((input) => {
+      renderChatSourcePicker();
+      renderSelectedSources();
+      bindSourceSelectionInputs();
+      bindSourceActionButtons();
+    }
+
+    function renderChatSourcePicker() {
+      const picker = $("#chat-source-picker");
+      if (!picker) return;
+      if (!state.sources.length) {
+        picker.innerHTML = `<div class="status-box">当前 scope 下暂无 source。</div>`;
+        return;
+      }
+      picker.innerHTML = state.sources.map((source) => {
+        const checked = state.selectedSourceIds.has(source.source_id) ? "checked" : "";
+        return `
+          <label class="source-option">
+            <input type="checkbox" data-chat-source-check="${esc(source.source_id)}" ${checked}>
+            <span>
+              <span class="source-title">${esc(sourceLabel(source))}</span>
+              <span class="id">${esc(compactId(source.source_id))}</span>
+              <span class="source-meta">${esc(sourceMetaLine(source))}</span>
+              ${renderSourceMetadata(source, true)}
+            </span>
+          </label>
+        `;
+      }).join("");
+    }
+
+    function bindSourceSelectionInputs() {
+      $$("[data-source-check], [data-chat-source-check]").forEach((input) => {
         input.onchange = () => {
-          if (input.checked) state.selectedSourceIds.add(input.dataset.sourceCheck);
-          else state.selectedSourceIds.delete(input.dataset.sourceCheck);
+          const sourceId = input.dataset.sourceCheck || input.dataset.chatSourceCheck;
+          if (input.checked) state.selectedSourceIds.add(sourceId);
+          else state.selectedSourceIds.delete(sourceId);
           persistSelectedSources();
+          syncSourceCheckboxes();
           updateScopeUI();
         };
       });
+    }
+
+    function bindSourceActionButtons() {
       $$("[data-delete-source]").forEach((btn) => {
         btn.onclick = () => deleteSource(btn.dataset.deleteSource);
       });
-      renderSelectedSources();
+      $$("[data-doc-filter]").forEach((btn) => {
+        btn.onclick = () => toggleDocumentFilter(btn.dataset.docFilter);
+      });
+    }
+
+    function syncSourceCheckboxes() {
+      $$("[data-source-check], [data-chat-source-check]").forEach((input) => {
+        const sourceId = input.dataset.sourceCheck || input.dataset.chatSourceCheck;
+        input.checked = state.selectedSourceIds.has(sourceId);
+      });
+    }
+
+    function syncDocumentChips() {
+      const activeDocs = new Set(documentFilters());
+      $$("[data-doc-filter]").forEach((btn) => {
+        btn.classList.toggle("active", activeDocs.has(btn.dataset.docFilter));
+      });
+    }
+
+    function toggleDocumentFilter(documentId) {
+      const input = $("#document-filter");
+      if (!input) return;
+      const values = documentFilters();
+      const next = values.includes(documentId) ? values.filter((value) => value !== documentId) : [...values, documentId];
+      input.value = next.join(", ");
+      updateScopeUI();
     }
 
     function persistSelectedSources() {
@@ -738,12 +914,30 @@
       const box = $("#selected-source-list");
       if (!box) return;
       const selected = state.sources.filter((source) => state.selectedSourceIds.has(source.source_id));
-      if (!selected.length) {
+      const selectedKnownIDs = new Set(selected.map((source) => source.source_id));
+      const manualOnly = manualSourceIDs().filter((sourceID) => !selectedKnownIDs.has(sourceID));
+      const docs = documentFilters();
+      if (!selected.length && !manualOnly.length && !docs.length) {
         box.textContent = "未选择 source 时使用当前 scope 下的知识库。";
       } else {
-        box.innerHTML = selected.map((source) => `<span class="pill ok">${esc(source.source_name || compactId(source.source_id))}</span>`).join(" ");
+        const knownHTML = selected.map((source) => `
+          <div style="margin-bottom:10px;">
+            <span class="pill ok">${esc(sourceLabel(source))}</span>
+            <span class="id">${esc(source.source_id)}</span>
+            ${renderSourceMetadata(source, true)}
+          </div>
+        `).join("");
+        const manualHTML = manualOnly.length
+          ? `<div class="chip-list">${manualOnly.map((sourceID) => `<span class="chip" title="${esc(sourceID)}">source:${esc(compactId(sourceID))}</span>`).join("")}</div>`
+          : "";
+        const docHTML = docs.length
+          ? `<div class="source-meta">Document Filters</div><div class="chip-list">${docs.map((docID) => `<button class="chip active" type="button" title="${esc(docID)}" data-doc-filter="${esc(docID)}">doc:${esc(compactId(docID))}</button>`).join("")}</div>`
+          : "";
+        box.innerHTML = `${knownHTML}${manualHTML}${docHTML}`;
       }
-      $("#source-pill").textContent = `${state.selectedSourceIds.size} sources`;
+      $("#source-pill").textContent = `${chatSourceIDs().length} sources`;
+      syncDocumentChips();
+      bindSourceActionButtons();
     }
 
     async function deleteSource(sourceId) {
@@ -975,10 +1169,14 @@
       $("#reload-chat-sources").onclick = loadSources;
       $("#clear-source-filter").onclick = () => {
         state.selectedSourceIds.clear();
+        $("#source-filter").value = "";
+        $("#document-filter").value = "";
         persistSelectedSources();
         renderSources();
         updateScopeUI();
       };
+      $("#source-filter").addEventListener("input", updateScopeUI);
+      $("#document-filter").addEventListener("input", updateScopeUI);
       $("#reload-tasks").onclick = loadTasks;
       $("#send-chat").onclick = sendChat;
       $("#chat-input").addEventListener("keydown", (event) => {

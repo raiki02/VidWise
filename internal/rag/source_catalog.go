@@ -19,14 +19,17 @@ const (
 
 // SourceSummary is the operational view of one indexed RAG source.
 type SourceSummary struct {
-	SourceID      string `json:"source_id"`
-	SourceName    string `json:"source_name,omitempty"`
-	SourceURL     string `json:"source_url,omitempty"`
-	ContentType   string `json:"content_type,omitempty"`
-	DocumentTitle string `json:"document_title,omitempty"`
-	UserID        string `json:"user_id,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
-	ChunkCount    int    `json:"chunk_count"`
+	SourceID      string   `json:"source_id"`
+	SourceName    string   `json:"source_name,omitempty"`
+	SourceURL     string   `json:"source_url,omitempty"`
+	ContentType   string   `json:"content_type,omitempty"`
+	DocumentTitle string   `json:"document_title,omitempty"`
+	DocumentIDs   []string `json:"document_ids,omitempty"`
+	TaskIDs       []string `json:"task_ids,omitempty"`
+	HeadingPaths  []string `json:"heading_paths,omitempty"`
+	UserID        string   `json:"user_id,omitempty"`
+	SessionID     string   `json:"session_id,omitempty"`
+	ChunkCount    int      `json:"chunk_count"`
 }
 
 // SourceListRequest describes source catalog listing. Filter is required by
@@ -86,7 +89,17 @@ func (c *SourceCatalog) ListSources(ctx context.Context, req SourceListRequest) 
 		if err != nil {
 			return nil, err
 		}
-		if len(sources) > 0 || c.scroller == nil {
+		if len(sources) > 0 && (c.scroller == nil || sourceSummariesHaveCatalogMetadata(sources)) {
+			return sources, nil
+		}
+		if len(sources) > 0 {
+			scanned, err := c.listSourcesFromQdrant(ctx, req, limit)
+			if err != nil {
+				return sources, nil
+			}
+			return mergeSourceSummaryMetadata(sources, scanned), nil
+		}
+		if c.scroller == nil {
 			return sources, nil
 		}
 	}
@@ -95,6 +108,10 @@ func (c *SourceCatalog) ListSources(ctx context.Context, req SourceListRequest) 
 		return nil, nil
 	}
 
+	return c.listSourcesFromQdrant(ctx, req, limit)
+}
+
+func (c *SourceCatalog) listSourcesFromQdrant(ctx context.Context, req SourceListRequest, limit int) ([]SourceSummary, error) {
 	filter := buildScopeFilter(req.Filter)
 	bySource := map[string]*SourceSummary{}
 	var offset *pb.PointId
@@ -132,13 +149,62 @@ func (c *SourceCatalog) ListSources(ctx context.Context, req SourceListRequest) 
 	return out, nil
 }
 
+func sourceSummariesHaveCatalogMetadata(sources []SourceSummary) bool {
+	for _, source := range sources {
+		if len(source.DocumentIDs) == 0 && len(source.TaskIDs) == 0 && len(source.HeadingPaths) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func mergeSourceSummaryMetadata(primary, scanned []SourceSummary) []SourceSummary {
+	bySource := make(map[string]SourceSummary, len(scanned))
+	for _, source := range scanned {
+		bySource[source.SourceID] = source
+	}
+	out := make([]SourceSummary, 0, len(primary))
+	for _, source := range primary {
+		if scannedSource, ok := bySource[source.SourceID]; ok {
+			source.SourceName = firstNonEmpty(source.SourceName, scannedSource.SourceName)
+			source.SourceURL = firstNonEmpty(source.SourceURL, scannedSource.SourceURL)
+			source.ContentType = firstNonEmpty(source.ContentType, scannedSource.ContentType)
+			source.DocumentTitle = firstNonEmpty(source.DocumentTitle, scannedSource.DocumentTitle)
+			source.UserID = firstNonEmpty(source.UserID, scannedSource.UserID)
+			source.SessionID = firstNonEmpty(source.SessionID, scannedSource.SessionID)
+			if source.ChunkCount == 0 {
+				source.ChunkCount = scannedSource.ChunkCount
+			}
+			source.DocumentIDs = mergeStringLists(source.DocumentIDs, scannedSource.DocumentIDs, 0)
+			source.TaskIDs = mergeStringLists(source.TaskIDs, scannedSource.TaskIDs, 0)
+			source.HeadingPaths = mergeStringLists(source.HeadingPaths, scannedSource.HeadingPaths, 12)
+		}
+		out = append(out, source)
+	}
+	return out
+}
+
+func mergeStringLists(left, right []string, limit int) []string {
+	out := make([]string, 0, len(left)+len(right))
+	for _, value := range left {
+		out = appendUniqueTrimmed(out, value, limit)
+	}
+	for _, value := range right {
+		out = appendUniqueTrimmed(out, value, limit)
+	}
+	return out
+}
+
 func buildSourceCatalogScrollRequest(collection string, pageSize uint32, offset *pb.PointId, filter *pb.Filter) *pb.ScrollPoints {
 	fields := []string{
 		qdrantclient.FieldSourceID,
 		qdrantclient.FieldSourceName,
 		qdrantclient.FieldSourceURL,
 		qdrantclient.FieldContentType,
+		qdrantclient.FieldDocumentID,
 		qdrantclient.FieldDocumentTitle,
+		qdrantclient.FieldTaskID,
+		qdrantclient.FieldHeadingPath,
 		qdrantclient.FieldUserID,
 		qdrantclient.FieldSessionID,
 	}
@@ -181,6 +247,25 @@ func addPointToSourceCatalog(bySource map[string]*SourceSummary, payload map[str
 	source.SourceURL = firstNonEmpty(source.SourceURL, getPayloadString(payload, qdrantclient.FieldSourceURL))
 	source.ContentType = firstNonEmpty(source.ContentType, getPayloadString(payload, qdrantclient.FieldContentType))
 	source.DocumentTitle = firstNonEmpty(source.DocumentTitle, getPayloadString(payload, qdrantclient.FieldDocumentTitle))
+	source.DocumentIDs = appendUniqueTrimmed(source.DocumentIDs, getPayloadString(payload, qdrantclient.FieldDocumentID), 0)
+	source.TaskIDs = appendUniqueTrimmed(source.TaskIDs, getPayloadString(payload, qdrantclient.FieldTaskID), 0)
+	source.HeadingPaths = appendUniqueTrimmed(source.HeadingPaths, getPayloadString(payload, qdrantclient.FieldHeadingPath), 12)
 	source.UserID = firstNonEmpty(source.UserID, getPayloadString(payload, qdrantclient.FieldUserID))
 	source.SessionID = firstNonEmpty(source.SessionID, getPayloadString(payload, qdrantclient.FieldSessionID))
+}
+
+func appendUniqueTrimmed(values []string, value string, limit int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	if limit > 0 && len(values) >= limit {
+		return values
+	}
+	return append(values, value)
 }
