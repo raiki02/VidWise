@@ -60,6 +60,7 @@ type RetrievalOutcome struct {
 	Reason     string          `json:"reason,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	Query      string          `json:"query,omitempty"`
+	Queries    []string        `json:"queries,omitempty"`
 	ChunkCount int             `json:"chunk_count"`
 }
 
@@ -206,10 +207,11 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 			retrieval.Status = RetrievalStatusScopeRequired
 			retrieval.Reason = "scope_required"
 		} else {
-			retrievedChunks, err := a.retriever.RetrieveWithOptions(ctx, rag.RetrieveRequest{
-				Query:  retrievalQuery,
-				Filter: filter,
-			})
+			retrievedChunks, queries, err := a.retrieveWithFallbackQueries(ctx, retrievalQuery, req.Query, filter)
+			retrieval.Queries = queries
+			if len(queries) > 0 {
+				retrieval.Query = queries[len(queries)-1]
+			}
 			if err != nil {
 				slog.Error("chat.agent.retrieve_failed", "err", err)
 				retrieval.Status = RetrievalStatusFailed
@@ -231,6 +233,7 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 		retrieval.Status = RetrievalStatusUnavailable
 		retrieval.Reason = "retriever_unavailable"
 		retrieval.Query = retrievalQuery
+		retrieval.Queries = []string{retrievalQuery}
 	}
 
 	answer := a.AnswerWithOutcome(ctx, AnswerRequest{
@@ -248,6 +251,23 @@ func (a *Agent) RunTurn(ctx context.Context, req TurnRequest) (TurnResult, error
 		Retrieval:  retrieval,
 		RAGContext: answer.RAGContext,
 	}, nil
+}
+
+func (a *Agent) retrieveWithFallbackQueries(ctx context.Context, retrievalQuery, originalQuery string, filter *rag.RetrieveFilter) ([]rag.RelevantChunk, []string, error) {
+	queries := retrievalQueriesForTurn(retrievalQuery, originalQuery)
+	for i, query := range queries {
+		chunks, err := a.retriever.RetrieveWithOptions(ctx, rag.RetrieveRequest{
+			Query:  query,
+			Filter: filter,
+		})
+		if err != nil {
+			return nil, queries[:i+1], err
+		}
+		if len(chunks) > 0 {
+			return chunks, queries[:i+1], nil
+		}
+	}
+	return nil, queries, nil
 }
 
 // EvaluateRetrieval decides whether the agent should query the knowledge base
@@ -398,6 +418,24 @@ func retrievalQueryForTurn(eval RetrievalEvaluation, fallbackQuery string) strin
 		return query
 	}
 	return strings.TrimSpace(fallbackQuery)
+}
+
+func retrievalQueriesForTurn(retrievalQuery, originalQuery string) []string {
+	queries := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	for _, query := range []string{retrievalQuery, originalQuery} {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+		key := strings.ToLower(query)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		queries = append(queries, query)
+	}
+	return queries
 }
 
 func isLikelyKnowledgeBaseQuery(query string) bool {

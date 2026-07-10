@@ -88,6 +88,7 @@ type ChatQueryResponse struct {
 	RAGReason            string      `json:"rag_reason,omitempty"`
 	RAGStatus            string      `json:"rag_status,omitempty"`
 	RAGQuery             string      `json:"rag_query,omitempty"`
+	RAGQueries           []string    `json:"rag_queries,omitempty"`
 	RAGChunkCount        int         `json:"rag_chunk_count"`
 	RAGContextUsedChunks int         `json:"rag_context_used_chunks"`
 	RAGContextTruncated  bool        `json:"rag_context_truncated"`
@@ -221,6 +222,7 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		RAGReason:            turn.Evaluation.Reason,
 		RAGStatus:            string(turn.Retrieval.Status),
 		RAGQuery:             turn.Retrieval.Query,
+		RAGQueries:           turn.Retrieval.Queries,
 		RAGChunkCount:        turn.Retrieval.ChunkCount,
 		RAGContextUsedChunks: turn.RAGContext.UsedChunks,
 		RAGContextTruncated:  turn.RAGContext.Truncated,

@@ -35,15 +35,31 @@ func (m *fakeModel) Generate(_ context.Context, input []*schema.Message, _ ...ei
 }
 
 type fakeRetriever struct {
+	chunks    []rag.RelevantChunk
+	responses []fakeRetrieveResponse
+	err       error
+	req       rag.RetrieveRequest
+	reqs      []rag.RetrieveRequest
+	calls     int
+}
+
+type fakeRetrieveResponse struct {
 	chunks []rag.RelevantChunk
 	err    error
-	req    rag.RetrieveRequest
-	calls  int
 }
 
 func (r *fakeRetriever) RetrieveWithOptions(_ context.Context, req rag.RetrieveRequest) ([]rag.RelevantChunk, error) {
 	r.calls++
 	r.req = req
+	r.reqs = append(r.reqs, req)
+	if len(r.responses) > 0 {
+		response := r.responses[0]
+		r.responses = r.responses[1:]
+		if response.err != nil {
+			return nil, response.err
+		}
+		return response.chunks, nil
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -291,11 +307,74 @@ func TestRunTurnUsesHistoryAwareRetrievalQuery(t *testing.T) {
 	if got.Retrieval.Query != "Markdown RAG 的具体操作步骤" {
 		t.Fatalf("retrieval outcome query = %q", got.Retrieval.Query)
 	}
+	if len(got.Retrieval.Queries) != 1 || got.Retrieval.Queries[0] != "Markdown RAG 的具体操作步骤" {
+		t.Fatalf("retrieval queries = %#v", got.Retrieval.Queries)
+	}
 	if got.Answer != "根据知识库回答。" {
 		t.Fatalf("answer = %q", got.Answer)
 	}
 	if len(model.inputs) != 2 {
 		t.Fatalf("model calls = %d, want retrieval evaluation and answer", len(model.inputs))
+	}
+}
+
+func TestRunTurnFallsBackToOriginalQueryWhenRewriteHasNoResults(t *testing.T) {
+	model := &fakeModel{responses: []string{
+		`{"should_retrieve": true, "reason": "follow_up", "retrieval_query": "改写后没有结果的查询"}`,
+		"根据原问题召回的内容回答。",
+	}}
+	retriever := &fakeRetriever{
+		responses: []fakeRetrieveResponse{
+			{},
+			{chunks: []rag.RelevantChunk{{Text: "原始问题能召回这个 Markdown RAG 片段。", Score: 0.91}}},
+		},
+	}
+	agent := NewWithModelFactoryAndRetriever(enabledLLMConfig(), rag.ContextConfig{MaxRunes: 1024}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return model, nil
+	}, retriever)
+
+	got, err := agent.RunTurn(context.Background(), TurnRequest{
+		Query:     "Markdown RAG 具体怎么操作？",
+		History:   "用户: 我想了解 Markdown RAG",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+
+	if retriever.calls != 2 {
+		t.Fatalf("retriever calls = %d, want 2", retriever.calls)
+	}
+	if len(retriever.reqs) != 2 {
+		t.Fatalf("retriever reqs = %#v, want 2", retriever.reqs)
+	}
+	if retriever.reqs[0].Query != "改写后没有结果的查询" {
+		t.Fatalf("first query = %q", retriever.reqs[0].Query)
+	}
+	if retriever.reqs[1].Query != "Markdown RAG 具体怎么操作？" {
+		t.Fatalf("fallback query = %q", retriever.reqs[1].Query)
+	}
+	if got.Retrieval.Status != RetrievalStatusRetrieved {
+		t.Fatalf("retrieval status = %q, want retrieved", got.Retrieval.Status)
+	}
+	if got.Retrieval.Query != "Markdown RAG 具体怎么操作？" {
+		t.Fatalf("final retrieval query = %q", got.Retrieval.Query)
+	}
+	wantQueries := []string{"改写后没有结果的查询", "Markdown RAG 具体怎么操作？"}
+	if len(got.Retrieval.Queries) != len(wantQueries) {
+		t.Fatalf("retrieval queries = %#v, want %#v", got.Retrieval.Queries, wantQueries)
+	}
+	for i, want := range wantQueries {
+		if got.Retrieval.Queries[i] != want {
+			t.Fatalf("retrieval queries = %#v, want %#v", got.Retrieval.Queries, wantQueries)
+		}
+	}
+	if got.Retrieval.ChunkCount != 1 {
+		t.Fatalf("chunk count = %d, want 1", got.Retrieval.ChunkCount)
+	}
+	if got.Answer != "根据原问题召回的内容回答。" {
+		t.Fatalf("answer = %q", got.Answer)
 	}
 }
 
