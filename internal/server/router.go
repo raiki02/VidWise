@@ -15,6 +15,7 @@ import (
 	"github.com/raiki02/vidwise/internal/memory"
 	"github.com/raiki02/vidwise/internal/ragruntime"
 	"github.com/raiki02/vidwise/internal/server/handler"
+	taskpkg "github.com/raiki02/vidwise/internal/task"
 	"github.com/raiki02/vidwise/internal/tool"
 
 	_ "embed"
@@ -55,11 +56,12 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
+	taskTracker := taskpkg.NewTracker()
 
 	// Handlers
 	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
-	videoHandler := handler.NewVideoHandler(registry)
-	taskHandler := handler.NewTaskHandler()
+	videoHandler := handler.NewVideoHandlerWithBackgroundAndTasks(registry, nil, taskTracker)
+	taskHandler := handler.NewTaskHandlerWithTracker(taskTracker)
 
 	if ragRuntime.Usable() {
 		slog.Info("gateway.rag_ready",

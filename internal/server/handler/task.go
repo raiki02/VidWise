@@ -4,12 +4,22 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	taskpkg "github.com/raiki02/vidwise/internal/task"
 )
 
-type TaskHandler struct{}
+type TaskHandler struct {
+	tasks *taskpkg.Tracker
+}
 
 func NewTaskHandler() *TaskHandler {
-	return &TaskHandler{}
+	return NewTaskHandlerWithTracker(taskpkg.NewTracker())
+}
+
+func NewTaskHandlerWithTracker(tasks *taskpkg.Tracker) *TaskHandler {
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+	}
+	return &TaskHandler{tasks: tasks}
 }
 
 // GetTask handles GET /task/:id — returns task status and steps.
@@ -20,11 +30,16 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		return
 	}
 
-	// In production: query MySQL task table
-	// For now return a stub indicating the task system is active
-	c.JSON(http.StatusOK, gin.H{
-		"task_id": taskID,
-		"status":  "pending",
-		"message": "Task system is active. Connect MySQL for full task tracking.",
-	})
+	tasks := h.tasks
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+		h.tasks = tasks
+	}
+	task, ok := tasks.Get(taskID)
+	if !ok {
+		errorJSON(c, http.StatusNotFound, "task not found")
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }

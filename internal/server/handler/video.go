@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/raiki02/vidwise/internal/agent"
 	"github.com/raiki02/vidwise/internal/background"
+	taskpkg "github.com/raiki02/vidwise/internal/task"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
@@ -21,6 +22,7 @@ type VideoHandler struct {
 	registry *tool.Registry
 	runner   *background.Runner
 	process  videoProcessor
+	tasks    *taskpkg.Tracker
 }
 
 func NewVideoHandler(registry *tool.Registry) *VideoHandler {
@@ -28,10 +30,17 @@ func NewVideoHandler(registry *tool.Registry) *VideoHandler {
 }
 
 func NewVideoHandlerWithBackground(registry *tool.Registry, runner *background.Runner) *VideoHandler {
+	return NewVideoHandlerWithBackgroundAndTasks(registry, runner, taskpkg.NewTracker())
+}
+
+func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *background.Runner, tasks *taskpkg.Tracker) *VideoHandler {
 	if runner == nil {
 		runner = background.NewRunner(videoProcessTimeout)
 	}
-	return &VideoHandler{registry: registry, runner: runner, process: agent.ExecuteVideoProcess}
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+	}
+	return &VideoHandler{registry: registry, runner: runner, process: agent.ExecuteVideoProcess, tasks: tasks}
 }
 
 type VideoProcessRequest struct {
@@ -70,6 +79,18 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	if req.Language == "" {
 		req.Language = "zh"
 	}
+	tasks := h.tasks
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+		h.tasks = tasks
+	}
+	tasks.Create(taskpkg.TrackCreateRequest{
+		ID:        taskID,
+		Type:      "video_process",
+		UserID:    req.UserID,
+		SessionID: req.SessionID,
+		TraceID:   traceID,
+	})
 
 	process := h.process
 	if process == nil {
@@ -80,7 +101,8 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		runner = background.NewRunner(videoProcessTimeout)
 	}
 	runner.Go("video.process", func(ctx context.Context) {
-		_, err := process(
+		tasks.Start(taskID)
+		result, err := process(
 			ctx,
 			h.registry,
 			req.URL,
@@ -92,8 +114,11 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 			req.Language,
 		)
 		if err != nil {
+			tasks.Fail(taskID, err.Error())
 			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
+			return
 		}
+		tasks.Complete(taskID, map[string]any{"text_length": len(result)})
 	})
 
 	c.JSON(http.StatusAccepted, VideoProcessResponse{
