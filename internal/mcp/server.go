@@ -90,14 +90,17 @@ func (s *Server) StartAsync() {
 func generateDescription(name string) string {
 	descriptions := map[string]string{
 		"download_video":    "Download a video from a URL using yt-dlp.",
+		"download_audio":    "Download audio from a video URL using yt-dlp.",
 		"extract_audio":     "Extract audio from a video URL using yt-dlp.",
 		"transcribe_audio":  "Transcribe a local audio file to text using the ASR service.",
 		"summarize_video":   "Summarize a local video by calling the video understanding service.",
 		"format_transcript": "Format raw ASR transcript text using an LLM with typo fixing and paragraph organization.",
 		"embed_texts":       "Generate vector embeddings for text strings using the configured embedding model.",
 		"rerank_documents":  "Rerank a list of documents by relevance to a query.",
-		"rag_index":         "Index text into the RAG knowledge base (Qdrant vector database).",
-		"rag_query":         "Search the RAG knowledge base for relevant context chunks.",
+		"rag_index":         "Index text into the RAG knowledge base within an explicit user or session scope.",
+		"rag_query":         "Search the RAG knowledge base within an explicit user or session scope.",
+		"rag_list_sources":  "List indexed RAG sources within an explicit user or session scope.",
+		"rag_delete":        "Delete indexed RAG chunks by stable source_id within an explicit user or session scope.",
 	}
 	if desc, ok := descriptions[name]; ok {
 		return desc

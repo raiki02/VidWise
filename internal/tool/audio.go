@@ -22,9 +22,17 @@ type AudioExtractOutput struct {
 }
 
 func NewAudioExtractTool() (tool.InvokableTool, *Wrapper, error) {
+	return newAudioDownloadTool("extract_audio", "Extract audio from a video URL using yt-dlp. Returns the path to the extracted audio file.")
+}
+
+func NewAudioDownloadTool() (tool.InvokableTool, *Wrapper, error) {
+	return newAudioDownloadTool("download_audio", "Download audio from a video URL using yt-dlp. Returns the path to the downloaded audio file.")
+}
+
+func newAudioDownloadTool(name, description string) (tool.InvokableTool, *Wrapper, error) {
 	inner, err := utils.InferTool(
-		"extract_audio",
-		"Extract audio from a video URL using yt-dlp. Returns the path to the extracted audio file.",
+		name,
+		description,
 		func(ctx context.Context, input AudioExtractInput) (AudioExtractOutput, error) {
 			outputBase := filepath.Clean(input.OutputBase)
 			audioPath, stdout, err := downloadcmd.Audio(input.URL, outputBase)
@@ -37,6 +45,6 @@ func NewAudioExtractTool() (tool.InvokableTool, *Wrapper, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	wrapper := NewWrapper(inner, WrapperConfig{Name: "extract_audio"})
+	wrapper := NewWrapper(inner, WrapperConfig{Name: name})
 	return inner, wrapper, nil
 }

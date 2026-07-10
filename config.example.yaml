@@ -1,5 +1,11 @@
 server:
   addr: ":8080"
+  read_header_timeout: "5s"
+  read_timeout: "30s"
+  # 0 keeps long-running download/transcription responses backward compatible.
+  write_timeout: "0s"
+  idle_timeout: "120s"
+  shutdown_timeout: "10s"
 
 download:
   # Optional path to yt-dlp cookies.txt file.
@@ -21,6 +27,10 @@ asr:
     beam_size: 5
     vad_filter: true
     initial_prompt: ""
+    # Upper bound before Whisper's model-specific decoder length budget is applied.
+    max_new_tokens: 448
+    # Optional domain prompt is trimmed first so generation always has room.
+    max_initial_prompt_tokens: 224
     vad:
       threshold: 0.3
       min_speech_duration_ms: 100
@@ -111,6 +121,18 @@ qdrant:
   collection: "transcript_chunks"
   vector_dim: 1024
 
+rag:
+  retrieval:
+    # Vector candidates retrieved before optional reranking.
+    search_top_k: 20
+    # Final chunks sent back to chat/tool callers.
+    top_k: 8
+    # 0 disables score filtering. Raise for stricter vector relevance.
+    min_score: 0
+  context:
+    # Maximum retrieved context runes packed into the LLM prompt.
+    max_runes: 12000
+
 embedding:
   base_url: "http://localhost:8003"
   # Model shortcut (qwen, bge, bge-large) or local path.
@@ -136,3 +158,9 @@ upload:
   chunk_runes: 1024
   overlap_runes: 128
   max_file_bytes: 10485760 # 10 MB
+
+task:
+  # Maximum in-memory async task records retained by the gateway.
+  max_tracked: 1000
+  # Terminal task statuses are retained for this duration before pruning.
+  retain_for: "24h"

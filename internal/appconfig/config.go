@@ -18,14 +18,21 @@ type Config struct {
 	LLM          LLMConfig          `yaml:"llm"`
 	MySQL        MySQLConfig        `yaml:"mysql"`
 	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	RAG          RAGConfig          `yaml:"rag"`
 	Embedding    EmbeddingConfig    `yaml:"embedding"`
 	Rerank       RerankConfig       `yaml:"rerank"`
 	MCP          MCPConfig          `yaml:"mcp"`
 	Upload       UploadConfig       `yaml:"upload"`
+	Task         TaskConfig         `yaml:"task"`
 }
 
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr              string `yaml:"addr"`
+	ReadHeaderTimeout string `yaml:"read_header_timeout"`
+	ReadTimeout       string `yaml:"read_timeout"`
+	WriteTimeout      string `yaml:"write_timeout"`
+	IdleTimeout       string `yaml:"idle_timeout"`
+	ShutdownTimeout   string `yaml:"shutdown_timeout"`
 }
 
 type DownloadConfig struct {
@@ -125,6 +132,21 @@ type QdrantConfig struct {
 	VectorDim  int    `yaml:"vector_dim"`
 }
 
+type RAGConfig struct {
+	Retrieval RAGRetrievalConfig `yaml:"retrieval"`
+	Context   RAGContextConfig   `yaml:"context"`
+}
+
+type RAGRetrievalConfig struct {
+	SearchTopK int     `yaml:"search_top_k"`
+	TopK       int     `yaml:"top_k"`
+	MinScore   float64 `yaml:"min_score"`
+}
+
+type RAGContextConfig struct {
+	MaxRunes int `yaml:"max_runes"`
+}
+
 type EmbeddingConfig struct {
 	BaseURL string `yaml:"base_url"`
 	Model   string `yaml:"model"`
@@ -151,6 +173,11 @@ type UploadConfig struct {
 	MaxFileBytes int64 `yaml:"max_file_bytes"` // 0 = no limit
 }
 
+type TaskConfig struct {
+	MaxTracked int    `yaml:"max_tracked"`
+	RetainFor  string `yaml:"retain_for"`
+}
+
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -172,6 +199,21 @@ func Load(path string) (Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
+	}
+	if c.Server.ReadHeaderTimeout == "" {
+		c.Server.ReadHeaderTimeout = "5s"
+	}
+	if c.Server.ReadTimeout == "" {
+		c.Server.ReadTimeout = "30s"
+	}
+	if c.Server.WriteTimeout == "" {
+		c.Server.WriteTimeout = "0s"
+	}
+	if c.Server.IdleTimeout == "" {
+		c.Server.IdleTimeout = "120s"
+	}
+	if c.Server.ShutdownTimeout == "" {
+		c.Server.ShutdownTimeout = "10s"
 	}
 	if c.ASR.BaseURL == "" {
 		c.ASR.BaseURL = "http://localhost:8001"
@@ -292,6 +334,16 @@ func (c *Config) applyDefaults() {
 	if c.Qdrant.VectorDim == 0 {
 		c.Qdrant.VectorDim = 1024
 	}
+	// RAG retrieval defaults
+	if c.RAG.Retrieval.SearchTopK == 0 {
+		c.RAG.Retrieval.SearchTopK = 20
+	}
+	if c.RAG.Retrieval.TopK == 0 {
+		c.RAG.Retrieval.TopK = 8
+	}
+	if c.RAG.Context.MaxRunes == 0 {
+		c.RAG.Context.MaxRunes = 12000
+	}
 	// Embedding defaults
 	if c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "http://localhost:8003"
@@ -335,9 +387,32 @@ func (c *Config) applyDefaults() {
 	if c.Upload.MaxFileBytes == 0 {
 		c.Upload.MaxFileBytes = 10 * 1024 * 1024 // 10 MB
 	}
+	// Task tracker defaults
+	if c.Task.MaxTracked == 0 {
+		c.Task.MaxTracked = 1000
+	}
+	if c.Task.RetainFor == "" {
+		c.Task.RetainFor = "24h"
+	}
 }
 
 func (c Config) validate() error {
+	if _, err := c.Server.ReadHeaderTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.read_header_timeout: %w", err)
+	}
+	if _, err := c.Server.ReadTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.read_timeout: %w", err)
+	}
+	if _, err := c.Server.WriteTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.write_timeout: %w", err)
+	}
+	if _, err := c.Server.IdleTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.idle_timeout: %w", err)
+	}
+	if _, err := c.Server.ShutdownTimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid server.shutdown_timeout: %w", err)
+	}
+
 	llmEnabled := c.LLM.Enabled == nil || *c.LLM.Enabled
 	llmFallback := c.LLM.FallbackToRawOnError == nil || *c.LLM.FallbackToRawOnError
 	if llmEnabled {
@@ -366,7 +441,48 @@ func (c Config) validate() error {
 	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)
 	}
+	if c.RAG.Retrieval.SearchTopK <= 0 {
+		return errors.New("rag.retrieval.search_top_k must be greater than 0")
+	}
+	if c.RAG.Retrieval.TopK <= 0 {
+		return errors.New("rag.retrieval.top_k must be greater than 0")
+	}
+	if c.RAG.Retrieval.TopK > c.RAG.Retrieval.SearchTopK {
+		return errors.New("rag.retrieval.top_k must be less than or equal to rag.retrieval.search_top_k")
+	}
+	if c.RAG.Retrieval.MinScore < 0 {
+		return errors.New("rag.retrieval.min_score must be greater than or equal to 0")
+	}
+	if c.RAG.Context.MaxRunes <= 0 {
+		return errors.New("rag.context.max_runes must be greater than 0")
+	}
+	if c.Task.MaxTracked <= 0 {
+		return errors.New("task.max_tracked must be greater than 0")
+	}
+	if _, err := c.Task.RetentionDuration(); err != nil {
+		return fmt.Errorf("invalid task.retain_for: %w", err)
+	}
 	return nil
+}
+
+func (c ServerConfig) ReadHeaderTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ReadHeaderTimeout, "5s", false)
+}
+
+func (c ServerConfig) ReadTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ReadTimeout, "30s", true)
+}
+
+func (c ServerConfig) WriteTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.WriteTimeout, "0s", true)
+}
+
+func (c ServerConfig) IdleTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.IdleTimeout, "120s", false)
+}
+
+func (c ServerConfig) ShutdownTimeoutDuration() (time.Duration, error) {
+	return serverDuration(c.ShutdownTimeout, "10s", false)
 }
 
 func (c ASRConfig) TimeoutDuration() (time.Duration, error) {
@@ -410,8 +526,41 @@ func (c RerankConfig) TimeoutDuration() (time.Duration, error) {
 	return time.ParseDuration(c.Timeout)
 }
 
+func (c TaskConfig) RetentionDuration() (time.Duration, error) {
+	retainFor := strings.TrimSpace(c.RetainFor)
+	if retainFor == "" {
+		retainFor = "24h"
+	}
+	d, err := time.ParseDuration(retainFor)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return d, nil
+}
+
 func (c QdrantConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+func serverDuration(raw, fallback string, allowZero bool) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		value = fallback
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	if d < 0 {
+		return 0, errors.New("must be greater than or equal to 0")
+	}
+	if !allowZero && d == 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return d, nil
 }
 
 const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。

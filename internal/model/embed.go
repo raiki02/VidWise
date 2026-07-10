@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/healthcheck"
 )
 
 type EmbedClient struct {
@@ -37,6 +38,10 @@ func NewEmbedClient(cfg appconfig.EmbeddingConfig) (*EmbedClient, error) {
 		model:   cfg.Model,
 		http:    &http.Client{Timeout: timeout},
 	}, nil
+}
+
+func (c *EmbedClient) Health(ctx context.Context) error {
+	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "embedding service")
 }
 
 // Embed sends texts to the Python embedding service and returns vectors.

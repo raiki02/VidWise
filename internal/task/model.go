@@ -15,6 +15,7 @@ const (
 	StatusRunning Status = "running"
 	StatusDone    Status = "done"
 	StatusFailed  Status = "failed"
+	StatusSkipped Status = "skipped"
 )
 
 // Task represents an asynchronous video processing or chat task.

@@ -110,9 +110,9 @@ func (r *Repo) SupersedeFact(ctx context.Context, userID, oldID, newID, reason s
 	return r.db.WithContext(ctx).Model(&MemoryFact{}).
 		Where("id = ? AND user_id = ?", oldID, userID).
 		Updates(map[string]any{
-			"superseded_by":  newID,
-			"superseded_at":  now,
-			"revision_note":  reason,
+			"superseded_by": newID,
+			"superseded_at": now,
+			"revision_note": reason,
 		}).Error
 }
 
@@ -125,6 +125,88 @@ func (r *Repo) ConfirmFact(ctx context.Context, userID, factID string) error {
 			"mention_count":     gorm.Expr("mention_count + 1"),
 			"last_mentioned_at": time.Now(),
 		}).Error
+}
+
+// ApplyResult summarizes how many extracted memory operations were applied.
+type ApplyResult struct {
+	Applied int
+	Skipped int
+}
+
+// ApplyExtractedFacts applies LLM-produced memory operations for a completed
+// turn. Unknown actions and incomplete target-dependent actions are skipped so
+// a single bad extraction cannot fail the whole background task.
+func (r *Repo) ApplyExtractedFacts(ctx context.Context, userID, sessionID string, facts []ExtractedFact) (ApplyResult, error) {
+	return applyExtractedFacts(ctx, repoFactApplier{repo: r}, userID, sessionID, facts)
+}
+
+type factApplier interface {
+	UpsertFact(ctx context.Context, userID string, ef ExtractedFact, sessionID string) (*MemoryFact, error)
+	SupersedeFact(ctx context.Context, userID, oldID, newID, reason string) error
+	ConfirmFact(ctx context.Context, userID, factID string) error
+}
+
+type repoFactApplier struct {
+	repo *Repo
+}
+
+func (a repoFactApplier) UpsertFact(ctx context.Context, userID string, ef ExtractedFact, sessionID string) (*MemoryFact, error) {
+	return a.repo.UpsertFact(ctx, userID, ef, sessionID)
+}
+
+func (a repoFactApplier) SupersedeFact(ctx context.Context, userID, oldID, newID, reason string) error {
+	return a.repo.SupersedeFact(ctx, userID, oldID, newID, reason)
+}
+
+func (a repoFactApplier) ConfirmFact(ctx context.Context, userID, factID string) error {
+	return a.repo.ConfirmFact(ctx, userID, factID)
+}
+
+func applyExtractedFacts(ctx context.Context, applier factApplier, userID, sessionID string, facts []ExtractedFact) (ApplyResult, error) {
+	var result ApplyResult
+	for _, f := range facts {
+		switch f.Action {
+		case "create":
+			if _, err := applier.UpsertFact(ctx, userID, f, sessionID); err != nil {
+				return result, fmt.Errorf("create memory fact: %w", err)
+			}
+			result.Applied++
+		case "update":
+			if _, err := applier.UpsertFact(ctx, userID, f, sessionID); err != nil {
+				return result, fmt.Errorf("update memory fact: %w", err)
+			}
+			result.Applied++
+		case "supersede":
+			if f.TargetID == "" {
+				result.Skipped++
+				continue
+			}
+			newFact, err := applier.UpsertFact(ctx, userID, f, sessionID)
+			if err != nil {
+				return result, fmt.Errorf("create superseding memory fact: %w", err)
+			}
+			if newFact == nil || newFact.ID == "" {
+				return result, fmt.Errorf("create superseding memory fact: empty id")
+			}
+			if err := applier.SupersedeFact(ctx, userID, f.TargetID, newFact.ID, f.Reason); err != nil {
+				return result, fmt.Errorf("supersede memory fact: %w", err)
+			}
+			result.Applied++
+		case "confirm":
+			if f.TargetID == "" {
+				result.Skipped++
+				continue
+			}
+			if err := applier.ConfirmFact(ctx, userID, f.TargetID); err != nil {
+				return result, fmt.Errorf("confirm memory fact: %w", err)
+			}
+			result.Applied++
+		default:
+			result.Skipped++
+			slog.Warn("memory.unknown_action", "action", f.Action)
+		}
+	}
+	return result, nil
 }
 
 // FormatForPrompt returns a formatted string of user facts for inclusion in the system prompt.

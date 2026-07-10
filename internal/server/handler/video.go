@@ -1,20 +1,54 @@
 package handler
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/raiki02/vidwise/internal/agent"
+	"github.com/raiki02/vidwise/internal/background"
+	taskpkg "github.com/raiki02/vidwise/internal/task"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
+const videoProcessTimeout = 2 * time.Hour
+
+type videoProcessor func(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string) (string, error)
+type videoProcessorWithObserver func(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string, observer agent.VideoProcessObserver) (string, error)
+
 type VideoHandler struct {
-	registry *tool.Registry
+	registry            *tool.Registry
+	runner              *background.Runner
+	process             videoProcessor
+	processWithObserver videoProcessorWithObserver
+	tasks               *taskpkg.Tracker
 }
 
 func NewVideoHandler(registry *tool.Registry) *VideoHandler {
-	return &VideoHandler{registry: registry}
+	return NewVideoHandlerWithBackground(registry, nil)
+}
+
+func NewVideoHandlerWithBackground(registry *tool.Registry, runner *background.Runner) *VideoHandler {
+	return NewVideoHandlerWithBackgroundAndTasks(registry, runner, taskpkg.NewTracker())
+}
+
+func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *background.Runner, tasks *taskpkg.Tracker) *VideoHandler {
+	if runner == nil {
+		runner = background.NewRunner(videoProcessTimeout)
+	}
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+	}
+	return &VideoHandler{
+		registry:            registry,
+		runner:              runner,
+		process:             agent.ExecuteVideoProcess,
+		processWithObserver: agent.ExecuteVideoProcessWithObserver,
+		tasks:               tasks,
+	}
 }
 
 type VideoProcessRequest struct {
@@ -37,12 +71,12 @@ type VideoProcessResponse struct {
 func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	var req VideoProcessRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "url, name, and user_id are required"})
+		errorJSON(c, http.StatusBadRequest, "url, name, and user_id are required")
 		return
 	}
 
 	taskID := uuid.New().String()
-	traceID := uuid.New().String()
+	traceID := requestTraceID(c)
 
 	if req.SessionID == "" {
 		req.SessionID = uuid.New().String()
@@ -53,24 +87,67 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	if req.Language == "" {
 		req.Language = "zh"
 	}
+	tasks := h.tasks
+	if tasks == nil {
+		tasks = taskpkg.NewTracker()
+		h.tasks = tasks
+	}
+	tasks.Create(taskpkg.TrackCreateRequest{
+		ID:        taskID,
+		Type:      "video_process",
+		UserID:    req.UserID,
+		SessionID: req.SessionID,
+		TraceID:   traceID,
+		Steps:     agent.VideoProcessStepNames(),
+	})
 
-	// Execute the pipeline synchronously for now (can be made async with worker pool)
-	go func() {
-		_, err := agent.ExecuteVideoProcess(
-			c.Request.Context(),
-			h.registry,
-			req.URL,
-			req.WorkDir,
-			req.Name,
-			req.UserID,
-			req.SessionID,
-			taskID,
-			req.Language,
-		)
-		if err != nil {
-			_ = err // In production: update task status to failed
+	processWithObserver := h.processWithObserver
+	process := h.process
+	runner := h.runner
+	if runner == nil {
+		runner = background.NewRunner(videoProcessTimeout)
+	}
+	runner.Go("video.process", func(ctx context.Context) {
+		tasks.Start(taskID)
+		observer := taskStepObserver{tasks: tasks, taskID: taskID}
+		var result string
+		var err error
+		if processWithObserver != nil {
+			result, err = processWithObserver(
+				ctx,
+				h.registry,
+				req.URL,
+				req.WorkDir,
+				req.Name,
+				req.UserID,
+				req.SessionID,
+				taskID,
+				req.Language,
+				observer,
+			)
+		} else {
+			if process == nil {
+				process = agent.ExecuteVideoProcess
+			}
+			result, err = process(
+				ctx,
+				h.registry,
+				req.URL,
+				req.WorkDir,
+				req.Name,
+				req.UserID,
+				req.SessionID,
+				taskID,
+				req.Language,
+			)
 		}
-	}()
+		if err != nil {
+			tasks.Fail(taskID, err.Error())
+			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
+			return
+		}
+		tasks.Complete(taskID, map[string]any{"text_length": len(result)})
+	})
 
 	c.JSON(http.StatusAccepted, VideoProcessResponse{
 		TaskID:    taskID,
@@ -78,4 +155,29 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		Status:    "pending",
 		SessionID: req.SessionID,
 	})
+}
+
+type taskStepObserver struct {
+	tasks  *taskpkg.Tracker
+	taskID string
+}
+
+func (o taskStepObserver) StepStarted(name string) {
+	o.tasks.StartStep(o.taskID, name)
+}
+
+func (o taskStepObserver) StepDone(name string) {
+	o.tasks.CompleteStep(o.taskID, name)
+}
+
+func (o taskStepObserver) StepFailed(name string, err error) {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	o.tasks.FailStep(o.taskID, name, message)
+}
+
+func (o taskStepObserver) StepSkipped(name, reason string) {
+	o.tasks.SkipStep(o.taskID, name, reason)
 }

@@ -8,33 +8,58 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/raiki02/vidwise/internal/background"
+	"github.com/raiki02/vidwise/internal/capability"
 	"github.com/raiki02/vidwise/internal/extractor"
 	"github.com/raiki02/vidwise/internal/paragraph"
 	"github.com/raiki02/vidwise/internal/rag"
-	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
 // ExtractHandler retains backward compatibility with the legacy /extract and /format endpoints.
 type ExtractHandler struct {
-	cfg       appconfig.Config
-	extractor *extractor.Service
-	indexer   *rag.Indexer
-	registry  *tool.Registry
+	cfg        appconfig.Config
+	extractor  *extractor.Service
+	sources    *rag.SourceManager
+	registry   *tool.Registry
+	caps       capability.Snapshot
+	background *background.Runner
 }
 
-func NewExtractHandler(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer) *ExtractHandler {
+func NewExtractHandler(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer, caps capability.Snapshot) *ExtractHandler {
+	return NewExtractHandlerWithBackground(cfg, registry, indexer, caps, nil)
+}
+
+func NewExtractHandlerWithBackground(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer, caps capability.Snapshot, runner *background.Runner) *ExtractHandler {
+	return NewExtractHandlerWithCatalogAndBackground(cfg, registry, indexer, nil, caps, runner)
+}
+
+func NewExtractHandlerWithCatalogAndBackground(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer, catalog *rag.SourceCatalog, caps capability.Snapshot, runner *background.Runner) *ExtractHandler {
+	return NewExtractHandlerWithRAGAndBackground(cfg, registry, indexer, catalog, nil, caps, runner)
+}
+
+func NewExtractHandlerWithRAGAndBackground(cfg appconfig.Config, registry *tool.Registry, indexer *rag.Indexer, catalog *rag.SourceCatalog, sourceRepo rag.SourceRegistry, caps capability.Snapshot, runner *background.Runner) *ExtractHandler {
+	return NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, rag.NewSourceManager(indexer, catalog, sourceRepo), caps, runner)
+}
+
+func NewExtractHandlerWithSourceManagerAndBackground(cfg appconfig.Config, registry *tool.Registry, sources *rag.SourceManager, caps capability.Snapshot, runner *background.Runner) *ExtractHandler {
+	if runner == nil {
+		runner = background.NewRunner(30 * time.Second)
+	}
 	return &ExtractHandler{
-		cfg:       cfg,
-		extractor: extractor.NewService(cfg),
-		indexer:   indexer,
-		registry:  registry,
+		cfg:        cfg,
+		extractor:  extractor.NewService(cfg),
+		sources:    sources,
+		registry:   registry,
+		caps:       caps,
+		background: runner,
 	}
 }
 
@@ -42,7 +67,12 @@ func NewExtractHandler(cfg appconfig.Config, registry *tool.Registry, indexer *r
 func (h *ExtractHandler) Extract(c *gin.Context) {
 	req, err := bindExtractRequest(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if cap, ok := h.unavailableExtractCapability(req.Type); ok {
+		errorJSONWithFields(c, http.StatusServiceUnavailable, extractCapabilityError(cap.Name), gin.H{"capability": cap})
 		return
 	}
 
@@ -51,63 +81,105 @@ func (h *ExtractHandler) Extract(c *gin.Context) {
 		defer cleanup()
 	}
 	if err != nil {
-		c.JSON(statusForExtractError(err), gin.H{"error": err.Error()})
+		errorJSON(c, statusForExtractError(err), err.Error())
 		return
 	}
 
 	// For text/transcript extractions, also index into RAG knowledge base.
-	if (req.Type == "text" || req.Type == "transcript") && h.indexer != nil {
+	if (req.Type == "text" || req.Type == "transcript") && h.ragIndexingAvailable() {
 		raw, readErr := readTextFile(result.Path)
 		if readErr == nil && raw != "" {
-			go func() {
-				count, idxErr := h.indexer.IndexText(context.Background(), raw)
-				if idxErr != nil {
-					slog.Warn("extract.rag_index_failed", "name", req.Name, "err", idxErr)
-				} else {
-					slog.Info("extract.rag_index_done", "name", req.Name, "chunks", count)
-				}
-			}()
+			scope, scopeErr := strictRAGScopeFromRequest(c)
+			if scopeErr != nil {
+				slog.Info("extract.rag_index_skipped", "name", req.Name, "reason", scopeErr)
+			} else {
+				filename := result.Filename
+				name := req.Name
+				h.background.Go("extract.rag_index", func(ctx context.Context) {
+					result, idxErr := h.sources.IndexSourceScoped(ctx, rag.Source{
+						Text:     raw,
+						Filename: filename,
+						Format:   rag.ContentFormatPlain,
+					}, h.indexOptions(), scope.UserID, scope.SessionID)
+					if idxErr != nil {
+						slog.Warn("extract.rag_index_failed", "name", name, "err", idxErr)
+					} else {
+						slog.Info("extract.rag_index_done", "name", name, "content_type", result.ContentType, "chunks", result.ChunkCount)
+					}
+				})
+			}
 		}
 	}
 
 	c.FileAttachment(result.Path, result.Filename)
 }
 
+func (h *ExtractHandler) unavailableExtractCapability(extractType string) (capability.Capability, bool) {
+	name, required := requiredExtractCapability(extractType)
+	if !required {
+		return capability.Capability{}, false
+	}
+	cap := h.caps.Get(name)
+	return cap, !h.caps.Usable(name)
+}
+
+func requiredExtractCapability(extractType string) (capability.Name, bool) {
+	switch strings.ToLower(strings.TrimSpace(extractType)) {
+	case "text", "transcript":
+		return capability.ASR, true
+	case "summary", "video_summary":
+		return capability.VideoSummary, true
+	default:
+		return "", false
+	}
+}
+
+func extractCapabilityError(name capability.Name) string {
+	switch name {
+	case capability.ASR:
+		return "ASR service is not available"
+	case capability.VideoSummary:
+		return "video summary service is not available"
+	default:
+		return "required service is not available"
+	}
+}
+
 // FormatText handles POST /format (legacy, synchronous text formatting).
 func (h *ExtractHandler) FormatText(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		errorJSON(c, http.StatusBadRequest, "file is required")
 		return
 	}
 
 	f, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot open uploaded file")
 		return
 	}
 	defer f.Close()
 
 	raw, err := io.ReadAll(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot read uploaded file")
 		return
 	}
 
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		errorJSON(c, http.StatusBadRequest, "file is empty")
 		return
 	}
 
 	sourceFormat := paragraph.TextFormatPlain
-	if isMarkdownUpload(file.Filename, file.Header.Get("Content-Type")) {
+	if rag.DetectContentFormat(rag.ContentFormatAuto, file.Filename, file.Header.Get("Content-Type")) == rag.ContentFormatMarkdown {
 		sourceFormat = paragraph.TextFormatMarkdown
 	}
 
 	formatted, err := paragraph.FormatTextWithFormat(c.Request.Context(), text, sourceFormat, h.cfg.LLM)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		errorJSON(c, http.StatusBadGateway, err.Error())
 		return
 	}
 
@@ -119,76 +191,217 @@ func (h *ExtractHandler) FormatText(c *gin.Context) {
 // the vector database for later retrieval.
 func (h *ExtractHandler) UploadText(c *gin.Context) {
 	// Check that RAG indexing is available
-	if h.indexer == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "RAG indexing is not available (Qdrant or embedding service not connected)"})
+	if !h.ragIndexingAvailable() {
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG indexing is not available", gin.H{"capability": h.ragIndexingCapability()})
+		return
+	}
+
+	scope, err := strictRAGScopeFromRequest(c)
+	if err != nil {
+		errorJSON(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		errorJSON(c, http.StatusBadRequest, "file is required")
 		return
 	}
 
 	// Check file size limit
 	if h.cfg.Upload.MaxFileBytes > 0 && file.Size > h.cfg.Upload.MaxFileBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-			"error": fmt.Sprintf("file too large: %d bytes, max %d bytes", file.Size, h.cfg.Upload.MaxFileBytes),
-		})
+		errorJSON(c, http.StatusRequestEntityTooLarge, fmt.Sprintf("file too large: %d bytes, max %d bytes", file.Size, h.cfg.Upload.MaxFileBytes))
 		return
 	}
 
 	f, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot open uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot open uploaded file")
 		return
 	}
 	defer f.Close()
 
 	raw, err := io.ReadAll(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read uploaded file"})
+		errorJSON(c, http.StatusInternalServerError, "cannot read uploaded file")
 		return
 	}
 
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is empty"})
+		errorJSON(c, http.StatusBadRequest, "file is empty")
 		return
 	}
 
-	// Override indexer chunk parameters from upload config
-	h.indexer.SetChunkParams(h.cfg.Upload.ChunkRunes, h.cfg.Upload.OverlapRunes)
-
-	metadata := map[string]string{
-		qdrantclient.FieldSourceName: file.Filename,
-	}
-	contentType := rag.PlainContentType
-	var count int
-	if isMarkdownUpload(file.Filename, file.Header.Get("Content-Type")) {
-		contentType = rag.MarkdownContentType
-		count, err = h.indexer.IndexMarkdown(c.Request.Context(), text, metadata)
-	} else {
-		metadata[qdrantclient.FieldContentType] = rag.PlainContentType
-		count, err = h.indexer.IndexDocuments(c.Request.Context(), []rag.Document{{
-			PageContent: text,
-			Metadata:    metadata,
-		}})
-	}
+	result, err := h.sources.IndexSourceScoped(c.Request.Context(), rag.Source{
+		Text:        text,
+		Filename:    file.Filename,
+		ContentType: file.Header.Get("Content-Type"),
+	}, h.indexOptions(), scope.UserID, scope.SessionID)
 	if err != nil {
 		slog.Error("upload.index_failed", "filename", file.Filename, "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("indexing failed: %v", err)})
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("indexing failed: %v", err))
 		return
 	}
 
-	slog.Info("upload.done", "filename", file.Filename, "content_type", contentType, "bytes", len(text), "chunks", count)
+	slog.Info("upload.done", "filename", file.Filename, "content_type", result.ContentType, "bytes", len(text), "chunks", result.ChunkCount)
 	c.JSON(http.StatusOK, gin.H{
 		"status":       "ok",
 		"filename":     file.Filename,
-		"content_type": contentType,
+		"content_type": result.ContentType,
 		"size_bytes":   len(text),
-		"chunk_count":  count,
+		"chunk_count":  result.ChunkCount,
+		"source_ids":   result.SourceIDs,
 	})
+}
+
+func (h *ExtractHandler) DeleteRAGSource(c *gin.Context) {
+	if !h.ragIndexingAvailable() {
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG indexing is not available", gin.H{"capability": h.ragIndexingCapability()})
+		return
+	}
+
+	sourceID := strings.TrimSpace(c.Param("source_id"))
+	if sourceID == "" {
+		errorJSON(c, http.StatusBadRequest, "source_id is required")
+		return
+	}
+
+	filter, err := deleteFilterFromRequest(c)
+	if err != nil {
+		errorJSON(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	deleteReq := rag.DeleteRequest{
+		SourceIDs: []string{sourceID},
+		Filter:    filter,
+	}
+	result, err := h.sources.DeleteSourcesWithOptions(c.Request.Context(), deleteReq)
+	if err != nil {
+		slog.Error("rag.delete_source_failed", "source_id", sourceID, "err", err)
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("delete source failed: %v", err))
+		return
+	}
+
+	slog.Info("rag.delete_source_done", "source_id", sourceID)
+	c.JSON(http.StatusOK, gin.H{
+		"status":     "ok",
+		"source_ids": result.SourceIDs,
+	})
+}
+
+func (h *ExtractHandler) ListRAGSources(c *gin.Context) {
+	if !h.ragCatalogAvailable() {
+		errorJSONWithFields(c, http.StatusServiceUnavailable, "RAG source catalog is not available", gin.H{"capability": h.ragCatalogCapability()})
+		return
+	}
+
+	filter, err := strictRAGFilterFromRequest(c)
+	if err != nil {
+		errorJSON(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	limit, err := sourceListLimitFromRequest(c)
+	if err != nil {
+		errorJSON(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sources, err := h.sources.ListSources(c.Request.Context(), rag.SourceListRequest{
+		Filter: filter,
+		Limit:  limit,
+	})
+	if err != nil {
+		slog.Error("rag.list_sources_failed", "err", err)
+		errorJSON(c, http.StatusBadGateway, fmt.Sprintf("list sources failed: %v", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"sources": sources,
+	})
+}
+
+func deleteFilterFromRequest(c *gin.Context) (*rag.RetrieveFilter, error) {
+	return strictRAGFilterFromRequest(c)
+}
+
+func strictRAGFilterFromRequest(c *gin.Context) (*rag.RetrieveFilter, error) {
+	scope, err := strictRAGScopeFromRequest(c)
+	if err != nil {
+		return nil, err
+	}
+	return scope.RetrieveFilter(), nil
+}
+
+func strictRAGScopeFromRequest(c *gin.Context) (rag.Scope, error) {
+	return rag.ResolveScope(ragScopeValueFromRequest(c, "user_id", "X-User-ID"), ragScopeValueFromRequest(c, "session_id", "X-Session-ID"), rag.StrictScopePolicy())
+}
+
+func ragScopeValueFromRequest(c *gin.Context, field, header string) string {
+	for _, value := range []string{
+		c.GetHeader(header),
+		c.Query(field),
+		c.PostForm(field),
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sourceListLimitFromRequest(c *gin.Context) (int, error) {
+	raw := strings.TrimSpace(c.Query("limit"))
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("limit must be a positive integer")
+	}
+	return limit, nil
+}
+
+func (h *ExtractHandler) ragIndexingAvailable() bool {
+	return h.sources != nil && h.sources.CanIndex() && h.caps.Usable(capability.RAG)
+}
+
+func (h *ExtractHandler) ragIndexingCapability() capability.Capability {
+	c := h.caps.Get(capability.RAG)
+	if (h.sources == nil || !h.sources.CanIndex()) && c.Status != capability.Unavailable {
+		return capability.Capability{
+			Name:   capability.RAG,
+			Status: capability.Unavailable,
+			Reason: "rag indexer unavailable",
+		}
+	}
+	return c
+}
+
+func (h *ExtractHandler) ragCatalogAvailable() bool {
+	return h.sources != nil && h.sources.CanList() && h.caps.Usable(capability.RAG)
+}
+
+func (h *ExtractHandler) ragCatalogCapability() capability.Capability {
+	c := h.caps.Get(capability.RAG)
+	if (h.sources == nil || !h.sources.CanList()) && c.Status != capability.Unavailable {
+		return capability.Capability{
+			Name:   capability.RAG,
+			Status: capability.Unavailable,
+			Reason: "rag source catalog unavailable",
+		}
+	}
+	return c
+}
+
+func (h *ExtractHandler) indexOptions() rag.IndexOptions {
+	overlapRunes := h.cfg.Upload.OverlapRunes
+	return rag.IndexOptions{
+		ChunkRunes:   h.cfg.Upload.ChunkRunes,
+		OverlapRunes: &overlapRunes,
+	}
 }
 
 // extractRequest for legacy endpoint.
@@ -207,15 +420,6 @@ func readTextFile(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
-}
-
-func isMarkdownUpload(filename, contentType string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	if ext == ".md" || ext == ".markdown" || ext == ".mdown" {
-		return true
-	}
-	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	return contentType == "text/markdown" || contentType == "text/x-markdown"
 }
 
 func bindExtractRequest(c *gin.Context) (extractRequest, error) {
