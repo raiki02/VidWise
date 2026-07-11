@@ -14,8 +14,8 @@ import (
 type RAGDeleteInput struct {
 	SourceID  string   `json:"source_id,omitempty" jsonschema_description:"Stable source_id returned by rag_index or /upload."`
 	SourceIDs []string `json:"source_ids,omitempty" jsonschema_description:"Stable source_ids returned by rag_index or /upload."`
-	UserID    string   `json:"user_id,omitempty" jsonschema_description:"User id that scopes deletion to that user's indexed content. Required unless session_id is provided."`
-	SessionID string   `json:"session_id,omitempty" jsonschema_description:"Session id that scopes deletion to one chat/session. Required unless user_id is provided."`
+	UserID    string   `json:"user_id,omitempty" jsonschema_description:"User id for the personal knowledge-base scope. Required unless session_id is provided."`
+	SessionID string   `json:"session_id,omitempty" jsonschema_description:"Fallback session scope used only when user_id is absent."`
 }
 
 type RAGDeleteOutput struct {
@@ -36,7 +36,7 @@ func NewRAGDeleteToolWithManager(manager *rag.SourceManager) (tool.InvokableTool
 	}
 	inner, err := utils.InferTool(
 		"rag_delete",
-		"Delete indexed RAG chunks by stable source_id within an explicit user_id or session_id scope. Use the source_ids returned by rag_index or /upload.",
+		"Delete indexed RAG chunks by stable source_id. user_id is treated as the personal knowledge-base scope; session_id is used only when user_id is absent.",
 		func(ctx context.Context, input RAGDeleteInput) (RAGDeleteOutput, error) {
 			req, err := normalizeRAGDeleteInput(input)
 			if err != nil {
@@ -74,7 +74,7 @@ func normalizeRAGDeleteInput(input RAGDeleteInput) (rag.DeleteRequest, error) {
 	if len(out) == 0 {
 		return rag.DeleteRequest{}, errors.New("source_id is required")
 	}
-	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.StrictScopePolicy())
+	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.PersonalKnowledgeScopePolicy())
 	if err != nil {
 		return rag.DeleteRequest{}, err
 	}

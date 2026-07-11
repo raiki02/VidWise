@@ -18,8 +18,8 @@ type RAGIndexInput struct {
 	ContentType  string            `json:"content_type,omitempty" jsonschema_description:"Optional MIME content type, such as text/markdown."`
 	Format       string            `json:"format,omitempty" jsonschema_description:"Optional source format: auto, plain, or markdown."`
 	Metadata     map[string]string `json:"metadata,omitempty" jsonschema_description:"Optional source metadata to attach to indexed chunks."`
-	UserID       string            `json:"user_id,omitempty" jsonschema_description:"User id that scopes indexed chunks. Required unless session_id is provided."`
-	SessionID    string            `json:"session_id,omitempty" jsonschema_description:"Session id that scopes indexed chunks. Required unless user_id is provided."`
+	UserID       string            `json:"user_id,omitempty" jsonschema_description:"User id for the personal knowledge-base scope. Required unless session_id is provided."`
+	SessionID    string            `json:"session_id,omitempty" jsonschema_description:"Fallback session scope used only when user_id is absent."`
 	ChunkRunes   int               `json:"chunk_runes,omitempty" jsonschema_description:"Optional max runes per chunk for this indexing call."`
 	OverlapRunes *int              `json:"overlap_runes,omitempty" jsonschema_description:"Optional sliding-window overlap runes for this indexing call."`
 }
@@ -52,7 +52,7 @@ func NewRAGIndexToolWithManager(manager *rag.SourceManager) (tool.InvokableTool,
 	}
 	inner, err := utils.InferTool(
 		"rag_index",
-		"Index text or Markdown into the RAG knowledge base within an explicit user_id or session_id scope. Parses structured sources, enriches metadata, chunks, embeds, and stores them in the Qdrant vector database.",
+		"Index text or Markdown into the RAG knowledge base. user_id is treated as the personal knowledge-base scope; session_id is used only when user_id is absent.",
 		func(ctx context.Context, input RAGIndexInput) (RAGIndexOutput, error) {
 			req, err := normalizeRAGIndexInput(input)
 			if err != nil {
@@ -87,7 +87,7 @@ func normalizeRAGIndexInput(input RAGIndexInput) (ragIndexRequest, error) {
 	if err != nil {
 		return ragIndexRequest{}, err
 	}
-	scope, err := rag.ResolveScope(input.UserID, input.SessionID, rag.StrictScopePolicy())
+	scope, err := rag.ResolveScope(input.UserID, input.SessionID, rag.PersonalKnowledgeScopePolicy())
 	if err != nil {
 		return ragIndexRequest{}, err
 	}

@@ -10,8 +10,8 @@ import (
 )
 
 type RAGListSourcesInput struct {
-	UserID    string `json:"user_id,omitempty" jsonschema_description:"User id that scopes the source list. Required unless session_id is provided."`
-	SessionID string `json:"session_id,omitempty" jsonschema_description:"Session id that scopes the source list. Required unless user_id is provided."`
+	UserID    string `json:"user_id,omitempty" jsonschema_description:"User id for the personal knowledge-base scope. Required unless session_id is provided."`
+	SessionID string `json:"session_id,omitempty" jsonschema_description:"Fallback session scope used only when user_id is absent."`
 	Limit     int    `json:"limit,omitempty" jsonschema_description:"Optional maximum number of sources to return."`
 }
 
@@ -30,7 +30,7 @@ func NewRAGListSourcesToolWithManager(manager *rag.SourceManager) (tool.Invokabl
 
 	inner, err := utils.InferTool(
 		"rag_list_sources",
-		"List indexed RAG sources within an explicit user_id or session_id scope.",
+		"List indexed RAG sources. user_id is treated as the personal knowledge-base scope; session_id is used only when user_id is absent.",
 		func(ctx context.Context, input RAGListSourcesInput) (RAGListSourcesOutput, error) {
 			req, err := normalizeRAGListSourcesInput(input)
 			if err != nil {
@@ -51,7 +51,7 @@ func NewRAGListSourcesToolWithManager(manager *rag.SourceManager) (tool.Invokabl
 }
 
 func normalizeRAGListSourcesInput(input RAGListSourcesInput) (rag.SourceListRequest, error) {
-	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.StrictScopePolicy())
+	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.PersonalKnowledgeScopePolicy())
 	if err != nil {
 		return rag.SourceListRequest{}, err
 	}

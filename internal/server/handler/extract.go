@@ -336,7 +336,7 @@ func strictRAGFilterFromRequest(c *gin.Context) (*rag.RetrieveFilter, error) {
 }
 
 func strictRAGScopeFromRequest(c *gin.Context) (rag.Scope, error) {
-	return rag.ResolveScope(ragScopeValueFromRequest(c, "user_id", "X-User-ID"), ragScopeValueFromRequest(c, "session_id", "X-Session-ID"), rag.StrictScopePolicy())
+	return rag.ResolveScope(ragScopeValueFromRequest(c, "user_id", "X-User-ID"), ragScopeValueFromRequest(c, "session_id", "X-Session-ID"), rag.PersonalKnowledgeScopePolicy())
 }
 
 func ragScopeValueFromRequest(c *gin.Context, field, header string) string {
