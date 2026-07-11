@@ -289,7 +289,7 @@ func TestListRAGSourcesRequiresScopeBeforeListing(t *testing.T) {
 	}
 }
 
-func TestDeleteFilterFromRequestParsesRequiredScope(t *testing.T) {
+func TestDeleteFilterFromRequestPrefersPersonalUserScope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodDelete, "/rag/source/source-1?user_id=u1&session_id=s1", nil)
@@ -298,7 +298,7 @@ func TestDeleteFilterFromRequestParsesRequiredScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deleteFilterFromRequest: %v", err)
 	}
-	if got == nil || got.UserID != "u1" || got.SessionID != "s1" {
+	if got == nil || got.UserID != "u1" || got.SessionID != "" {
 		t.Fatalf("unexpected filter: %#v", got)
 	}
 }
@@ -314,7 +314,7 @@ func TestStrictRAGScopeFromRequestPrefersHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("strictRAGScopeFromRequest: %v", err)
 	}
-	if got.UserID != "header-user" || got.SessionID != "header-session" {
+	if got.UserID != "header-user" || got.SessionID != "" {
 		t.Fatalf("expected header scope, got %#v", got)
 	}
 }
@@ -329,7 +329,7 @@ func TestStrictRAGScopeFromRequestReadsFormScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("strictRAGScopeFromRequest: %v", err)
 	}
-	if got.UserID != "form-user" || got.SessionID != "form-session" {
+	if got.UserID != "form-user" || got.SessionID != "" {
 		t.Fatalf("expected form scope, got %#v", got)
 	}
 }

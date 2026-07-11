@@ -78,7 +78,7 @@ func DetectContentFormat(format ContentFormat, filename, contentType string) Con
 // documents before chunking; plain text remains a single document.
 func DocumentsFromSource(source Source) ([]Document, ContentFormat) {
 	format := DetectContentFormat(source.Format, source.Filename, source.ContentType)
-	text := strings.TrimSpace(source.Text)
+	text := CleanSourceText(source.Text, format)
 	if text == "" {
 		return nil, format
 	}

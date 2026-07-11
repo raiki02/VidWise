@@ -24,11 +24,18 @@ func DefaultScopePolicy() ScopePolicy {
 	return ScopePolicy{AllowUnscoped: true}
 }
 
-func ChatScopePolicy() ScopePolicy {
+// PersonalKnowledgeScopePolicy is for user-facing RAG operations: user_id is
+// the stable personal knowledge-base boundary, while session_id is a fallback
+// for temporary or anonymous use.
+func PersonalKnowledgeScopePolicy() ScopePolicy {
 	return ScopePolicy{
 		AllowUnscoped:         false,
 		PreferUserOverSession: true,
 	}
+}
+
+func ChatScopePolicy() ScopePolicy {
+	return PersonalKnowledgeScopePolicy()
 }
 
 func StrictScopePolicy() ScopePolicy {

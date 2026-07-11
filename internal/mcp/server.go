@@ -97,10 +97,10 @@ func generateDescription(name string) string {
 		"format_transcript": "Format raw ASR transcript text using an LLM with typo fixing and paragraph organization.",
 		"embed_texts":       "Generate vector embeddings for text strings using the configured embedding model.",
 		"rerank_documents":  "Rerank a list of documents by relevance to a query.",
-		"rag_index":         "Index text into the RAG knowledge base within an explicit user or session scope.",
-		"rag_query":         "Search the RAG knowledge base within an explicit user or session scope.",
-		"rag_list_sources":  "List indexed RAG sources within an explicit user or session scope.",
-		"rag_delete":        "Delete indexed RAG chunks by stable source_id within an explicit user or session scope.",
+		"rag_index":         "Index text into the personal RAG knowledge base. user_id is preferred; session_id is a fallback scope.",
+		"rag_query":         "Search the personal RAG knowledge base. user_id is preferred; session_id is a fallback scope.",
+		"rag_list_sources":  "List indexed RAG sources in the personal knowledge base. user_id is preferred; session_id is a fallback scope.",
+		"rag_delete":        "Delete indexed RAG chunks by stable source_id. user_id is preferred; session_id is a fallback scope.",
 	}
 	if desc, ok := descriptions[name]; ok {
 		return desc

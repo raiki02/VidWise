@@ -23,7 +23,7 @@ const (
 // become metadata, and each heading section is merged with its paragraphs before
 // the downstream chunking pass.
 func ParseMarkdownDocuments(markdownText string, baseMetadata map[string]string) []Document {
-	markdownText = strings.TrimSpace(normalizeMarkdownNewlines(markdownText))
+	markdownText = CleanSourceText(markdownText, ContentFormatMarkdown)
 	if markdownText == "" {
 		return nil
 	}

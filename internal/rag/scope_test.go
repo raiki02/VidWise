@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestResolveScopeChatPolicyPrefersUserOverSession(t *testing.T) {
-	scope, err := ResolveScope(" user-1 ", " session-1 ", ChatScopePolicy())
+func TestResolveScopePersonalKnowledgePolicyPrefersUserOverSession(t *testing.T) {
+	scope, err := ResolveScope(" user-1 ", " session-1 ", PersonalKnowledgeScopePolicy())
 	if err != nil {
 		t.Fatalf("ResolveScope: %v", err)
 	}
@@ -21,8 +21,8 @@ func TestResolveScopeChatPolicyPrefersUserOverSession(t *testing.T) {
 	}
 }
 
-func TestResolveScopeAllowsSessionOnly(t *testing.T) {
-	scope, err := ResolveScope("", " session-1 ", ChatScopePolicy())
+func TestResolveScopePersonalKnowledgePolicyAllowsSessionOnly(t *testing.T) {
+	scope, err := ResolveScope("", " session-1 ", PersonalKnowledgeScopePolicy())
 	if err != nil {
 		t.Fatalf("ResolveScope: %v", err)
 	}
@@ -34,8 +34,8 @@ func TestResolveScopeAllowsSessionOnly(t *testing.T) {
 	}
 }
 
-func TestResolveScopeChatPolicyRequiresScope(t *testing.T) {
-	_, err := ResolveScope("", "", ChatScopePolicy())
+func TestResolveScopePersonalKnowledgePolicyRequiresScope(t *testing.T) {
+	_, err := ResolveScope("", "", PersonalKnowledgeScopePolicy())
 	if !errors.Is(err, ErrScopeRequired) {
 		t.Fatalf("error = %v, want ErrScopeRequired", err)
 	}
@@ -63,6 +63,22 @@ func TestResolveScopeRejectsUnscopedWhenStrict(t *testing.T) {
 
 func TestDefaultPolicyKeepsCombinedUserAndSessionScope(t *testing.T) {
 	filter, err := NewRetrieveFilterWithPolicy(" user-1 ", " session-1 ", DefaultScopePolicy())
+	if err != nil {
+		t.Fatalf("NewRetrieveFilterWithPolicy: %v", err)
+	}
+	if filter == nil {
+		t.Fatal("expected filter")
+	}
+	if filter.UserID != "user-1" {
+		t.Fatalf("UserID = %q, want user-1", filter.UserID)
+	}
+	if filter.SessionID != "session-1" {
+		t.Fatalf("SessionID = %q, want session-1", filter.SessionID)
+	}
+}
+
+func TestStrictPolicyKeepsCombinedUserAndSessionScope(t *testing.T) {
+	filter, err := NewRetrieveFilterWithPolicy(" user-1 ", " session-1 ", StrictScopePolicy())
 	if err != nil {
 		t.Fatalf("NewRetrieveFilterWithPolicy: %v", err)
 	}

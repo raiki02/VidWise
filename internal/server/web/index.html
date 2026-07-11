@@ -137,6 +137,9 @@
     .source-meta { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 3px; overflow-wrap: anywhere; }
     .source-cell { min-width: 220px; }
     .metadata-cell { min-width: 280px; }
+    .advanced-filter { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .advanced-filter summary { color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 700; }
+    .advanced-filter summary::marker { color: var(--soft); }
     .main {
       min-width: 0;
       min-height: 100vh;
@@ -263,7 +266,7 @@
     </nav>
 
     <section class="side-section">
-      <div class="side-title">Scope</div>
+      <div class="side-title">知识库范围</div>
       <div>
         <label for="scope-user">User ID</label>
         <input id="scope-user" autocomplete="off" placeholder="u1" />
@@ -295,7 +298,7 @@
     <header>
       <h2 id="page-title">Agent 问答</h2>
       <div class="header-meta">
-        <span id="scope-pill" class="pill">scope 未保存</span>
+        <span id="scope-pill" class="pill">知识库范围未保存</span>
         <span id="source-pill" class="pill">0 sources</span>
         <span id="task-pill" class="pill">0 tasks</span>
       </div>
@@ -315,19 +318,22 @@
           </div>
           <div>
             <div class="panel">
-              <h3>检索范围</h3>
-              <div id="selected-source-list" class="status-box">未选择 source 时使用当前 scope 下的知识库。</div>
-              <div style="margin-top:12px;">
-                <label for="source-filter">Source IDs</label>
-                <input id="source-filter" placeholder="source-1, source-2" />
-              </div>
-              <div style="margin-top:12px;">
-                <label for="document-filter">Document IDs</label>
-                <input id="document-filter" placeholder="doc-1, doc-2" />
-              </div>
+              <h3>知识库范围</h3>
+              <div id="selected-source-list" class="status-box">当前检索个人知识库中的全部 source。</div>
               <div id="chat-source-picker" class="source-picker" style="margin-top:12px;"></div>
+              <details class="advanced-filter">
+                <summary>高级 ID 过滤</summary>
+                <div style="margin-top:12px;">
+                  <label for="source-filter">Source IDs</label>
+                  <input id="source-filter" placeholder="source-1, source-2" />
+                </div>
+                <div style="margin-top:12px;">
+                  <label for="document-filter">Document IDs</label>
+                  <input id="document-filter" placeholder="doc-1, doc-2" />
+                </div>
+              </details>
               <div class="row" style="margin-top:12px;">
-                <button id="reload-chat-sources" type="button">刷新 sources</button>
+                <button id="reload-chat-sources" type="button">刷新列表</button>
                 <button id="clear-source-filter" type="button">清空选择</button>
               </div>
             </div>
@@ -570,7 +576,7 @@
     function updateScopeUI() {
       $("#scope-user").value = state.userId;
       $("#scope-session").value = state.sessionId;
-      $("#scope-pill").textContent = state.userId ? `user:${state.userId}` : (state.sessionId ? `session:${compactId(state.sessionId)}` : "scope 未保存");
+      $("#scope-pill").textContent = state.userId ? `user:${state.userId}` : (state.sessionId ? `session:${compactId(state.sessionId)}` : "知识库范围未保存");
       $("#scope-pill").className = "pill" + (state.userId || state.sessionId ? " ok" : " warn");
       $("#source-pill").textContent = `${state.selectedSourceIds.size} sources`;
       $("#task-pill").textContent = state.activeTaskId ? `task:${compactId(state.activeTaskId)}` : "0 tasks";
@@ -582,6 +588,24 @@
       if (state.userId) params.set("user_id", state.userId);
       if (state.sessionId) params.set("session_id", state.sessionId);
       return params;
+    }
+
+    function effectiveKnowledgeScopeLabel() {
+      if (state.userId) return `个人知识库 user:${state.userId}`;
+      if (state.sessionId) return `会话知识库 session:${compactId(state.sessionId)}`;
+      return "知识库范围未保存";
+    }
+
+    function defaultRetrievalText() {
+      if (state.userId) return `当前检索 ${effectiveKnowledgeScopeLabel()} 的全部 source。`;
+      if (state.sessionId) return `当前检索 ${effectiveKnowledgeScopeLabel()} 的全部 source。`;
+      return "请先保存 User ID 或 Session ID。";
+    }
+
+    function emptySourceText() {
+      if (state.userId) return `${effectiveKnowledgeScopeLabel()} 暂无 source。`;
+      if (state.sessionId) return `${effectiveKnowledgeScopeLabel()} 暂无 source。`;
+      return "请先保存 User ID 或 Session ID。";
     }
 
     function appendScopeToFormData(fd) {
@@ -803,7 +827,7 @@
         });
         persistSelectedSources();
         renderSources();
-        status.textContent = state.sources.length ? `已加载 ${state.sources.length} 个 source。` : "当前 scope 下暂无 source。";
+        status.textContent = state.sources.length ? `已加载 ${state.sources.length} 个 source。` : emptySourceText();
         status.style.color = "";
       } catch (err) {
         status.textContent = err.message;
@@ -842,7 +866,7 @@
       const picker = $("#chat-source-picker");
       if (!picker) return;
       if (!state.sources.length) {
-        picker.innerHTML = `<div class="status-box">当前 scope 下暂无 source。</div>`;
+        picker.innerHTML = `<div class="status-box">${esc(emptySourceText())}</div>`;
         return;
       }
       picker.innerHTML = state.sources.map((source) => {
@@ -918,8 +942,9 @@
       const manualOnly = manualSourceIDs().filter((sourceID) => !selectedKnownIDs.has(sourceID));
       const docs = documentFilters();
       if (!selected.length && !manualOnly.length && !docs.length) {
-        box.textContent = "未选择 source 时使用当前 scope 下的知识库。";
+        box.textContent = defaultRetrievalText();
       } else {
+        const scopeHTML = `<div class="source-meta">${esc(effectiveKnowledgeScopeLabel())}</div>`;
         const knownHTML = selected.map((source) => `
           <div style="margin-bottom:10px;">
             <span class="pill ok">${esc(sourceLabel(source))}</span>
@@ -933,7 +958,7 @@
         const docHTML = docs.length
           ? `<div class="source-meta">Document Filters</div><div class="chip-list">${docs.map((docID) => `<button class="chip active" type="button" title="${esc(docID)}" data-doc-filter="${esc(docID)}">doc:${esc(compactId(docID))}</button>`).join("")}</div>`
           : "";
-        box.innerHTML = `${knownHTML}${manualHTML}${docHTML}`;
+        box.innerHTML = `${scopeHTML}${knownHTML}${manualHTML}${docHTML}`;
       }
       $("#source-pill").textContent = `${chatSourceIDs().length} sources`;
       syncDocumentChips();
@@ -1093,7 +1118,7 @@
         const data = await fetchJSON(`/tasks?${params}`);
         const tasks = data.tasks || [];
         $("#task-pill").textContent = `${tasks.length} tasks`;
-        status.textContent = tasks.length ? `已加载 ${tasks.length} 个任务。` : "当前 scope 下暂无任务。";
+        status.textContent = tasks.length ? `已加载 ${tasks.length} 个任务。` : "当前范围下暂无任务。";
         list.innerHTML = tasks.map(renderTask).join("");
       } catch (err) {
         status.textContent = err.message;

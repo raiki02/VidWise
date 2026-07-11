@@ -422,7 +422,7 @@ func (a *Agent) llmEnabled() bool {
 }
 
 func retrieveFilterForTurn(userID, sessionID string, sourceIDs, documentIDs []string) (*rag.RetrieveFilter, bool) {
-	filter, err := rag.NewRetrieveFilterWithPolicy(userID, sessionID, rag.ChatScopePolicy())
+	filter, err := rag.NewRetrieveFilterWithPolicy(userID, sessionID, rag.PersonalKnowledgeScopePolicy())
 	if err != nil {
 		return nil, false
 	}

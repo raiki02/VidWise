@@ -117,7 +117,7 @@ func TestNormalizeRAGIndexInputBuildsStructuredMarkdownSource(t *testing.T) {
 	if req.Source.Metadata["source_url"] != "https://example.com/video" {
 		t.Fatalf("metadata missing: %#v", req.Source.Metadata)
 	}
-	if req.UserID != "u1" || req.SessionID != "s1" {
+	if req.UserID != "u1" || req.SessionID != "" {
 		t.Fatalf("scope not normalized: user=%q session=%q", req.UserID, req.SessionID)
 	}
 	if req.Options.ChunkRunes != 256 {
@@ -275,7 +275,7 @@ func TestNormalizeRAGDeleteInputAcceptsSingleAndBatchSourceIDs(t *testing.T) {
 	if len(got.SourceIDs) != 2 || got.SourceIDs[0] != "source-1" || got.SourceIDs[1] != "source-2" {
 		t.Fatalf("unexpected source ids: %#v", got.SourceIDs)
 	}
-	if got.Filter == nil || got.Filter.UserID != "user-1" || got.Filter.SessionID != "session-1" {
+	if got.Filter == nil || got.Filter.UserID != "user-1" || got.Filter.SessionID != "" {
 		t.Fatalf("unexpected filter: %#v", got.Filter)
 	}
 }

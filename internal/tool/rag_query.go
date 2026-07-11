@@ -13,8 +13,8 @@ import (
 // RAGQueryInput is the input for the RAG retrieval tool.
 type RAGQueryInput struct {
 	Query        string   `json:"query" jsonschema:"required" jsonschema_description:"The user's question for retrieving relevant context."`
-	UserID       string   `json:"user_id,omitempty" jsonschema_description:"User id that scopes retrieval to that user's indexed content. Required unless session_id is provided."`
-	SessionID    string   `json:"session_id,omitempty" jsonschema_description:"Session id that scopes retrieval to one chat/session. Required unless user_id is provided."`
+	UserID       string   `json:"user_id,omitempty" jsonschema_description:"User id for the personal knowledge-base scope. Required unless session_id is provided."`
+	SessionID    string   `json:"session_id,omitempty" jsonschema_description:"Fallback session scope used only when user_id is absent."`
 	SourceIDs    []string `json:"source_ids,omitempty" jsonschema_description:"Optional stable source_ids to limit retrieval within the scoped knowledge base."`
 	DocumentIDs  []string `json:"document_ids,omitempty" jsonschema_description:"Optional document_ids to limit retrieval within the scoped knowledge base."`
 	TopK         int      `json:"top_k,omitempty" jsonschema_description:"Optional number of final chunks to return."`
@@ -51,7 +51,7 @@ func NewRAGQueryTool(retriever *rag.Retriever) (tool.InvokableTool, *Wrapper, er
 
 	inner, err := utils.InferTool(
 		"rag_query",
-		"Search the RAG knowledge base within an explicit user_id or session_id scope. Embeds the query, retrieves relevant chunks from Qdrant, reranks them, and returns both raw chunks and prompt-ready packed context.",
+		"Search the RAG knowledge base. user_id is treated as the personal knowledge-base scope; session_id is used only when user_id is absent. Returns raw chunks and prompt-ready packed context.",
 		func(ctx context.Context, input RAGQueryInput) (RAGQueryOutput, error) {
 			req, err := normalizeRAGQueryInput(input)
 			if err != nil {
@@ -108,7 +108,7 @@ func normalizeRAGQueryInput(input RAGQueryInput) (ragQueryRequest, error) {
 	if query == "" {
 		return ragQueryRequest{}, errors.New("query is required")
 	}
-	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.StrictScopePolicy())
+	filter, err := rag.NewRetrieveFilterWithPolicy(input.UserID, input.SessionID, rag.PersonalKnowledgeScopePolicy())
 	if err != nil {
 		return ragQueryRequest{}, err
 	}

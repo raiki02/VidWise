@@ -97,12 +97,11 @@ func (idx *Indexer) IndexText(ctx context.Context, text string) (int, error) {
 
 // IndexTextScoped indexes text with user and session metadata for multi-tenant isolation.
 func (idx *Indexer) IndexTextScoped(ctx context.Context, text, userID, sessionID string) (int, error) {
-	return idx.IndexDocumentsScoped(ctx, []Document{{
-		PageContent: text,
-		Metadata: map[string]string{
-			qdrantclient.FieldContentType: PlainContentType,
-		},
-	}}, userID, sessionID)
+	docs, _ := DocumentsFromSource(Source{
+		Text:   text,
+		Format: ContentFormatPlain,
+	})
+	return idx.IndexDocumentsScoped(ctx, docs, userID, sessionID)
 }
 
 // IndexMarkdown parses a Markdown document, enriches sections with heading
@@ -113,7 +112,11 @@ func (idx *Indexer) IndexMarkdown(ctx context.Context, markdownText string, meta
 
 // IndexMarkdownScoped indexes Markdown with user/session metadata.
 func (idx *Indexer) IndexMarkdownScoped(ctx context.Context, markdownText string, metadata map[string]string, userID, sessionID string) (int, error) {
-	docs := ParseMarkdownDocuments(markdownText, metadata)
+	docs, _ := DocumentsFromSource(Source{
+		Text:     markdownText,
+		Format:   ContentFormatMarkdown,
+		Metadata: metadata,
+	})
 	return idx.IndexDocumentsScoped(ctx, docs, userID, sessionID)
 }
 
