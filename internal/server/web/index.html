@@ -236,6 +236,17 @@
     .task { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #111116; }
     .steps { display: grid; gap: 6px; margin-top: 8px; }
     .step { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+    .task-output { margin-top: 10px; }
+    .task-output summary { font-size: 12px; }
+    .task-output textarea {
+      margin-top: 8px;
+      min-height: 180px;
+      max-height: 360px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
     .muted { color: var(--muted); }
     .small { font-size: 12px; }
     .hidden { display: none !important; }
@@ -473,6 +484,7 @@
       sources: [],
       activeTaskId: "",
       pollTimer: 0,
+      indexingTaskIds: new Set(),
     };
 
     const titles = {
@@ -1095,7 +1107,8 @@
       clearTimeout(state.pollTimer);
       try {
         const task = await fetchJSON(`/task/${encodeURIComponent(taskId)}`);
-        $("#active-task").innerHTML = renderTask(task);
+        $("#active-task").innerHTML = renderTask(task, { openTranscript: true });
+        bindTaskActionButtons($("#active-task"));
         if (!["done", "failed"].includes(task.status)) {
           state.pollTimer = setTimeout(() => pollTask(taskId), 1800);
         } else {
@@ -1119,17 +1132,20 @@
         const tasks = data.tasks || [];
         $("#task-pill").textContent = `${tasks.length} tasks`;
         status.textContent = tasks.length ? `已加载 ${tasks.length} 个任务。` : "当前范围下暂无任务。";
-        list.innerHTML = tasks.map(renderTask).join("");
+        list.innerHTML = tasks.map((task) => renderTask(task)).join("");
+        bindTaskActionButtons(list);
       } catch (err) {
         status.textContent = err.message;
         status.style.color = "var(--danger)";
       }
     }
 
-    function renderTask(task) {
+    function renderTask(task, options = {}) {
       const steps = (task.steps || []).map((step) => {
         return `<div class="step"><span>${esc(step.name)}</span><span class="pill ${statusClass(step.status)}">${esc(step.status)}</span>${step.error ? `<div class="id" style="grid-column:1 / -1;">${esc(step.error)}</div>` : ""}</div>`;
       }).join("");
+      const output = task.output && typeof task.output === "object" ? task.output : {};
+      const transcript = renderTaskTranscript(task, output, options);
       return `<div class="task">
         <div class="row" style="justify-content:space-between;">
           <strong>${esc(task.type || "task")}</strong>
@@ -1138,7 +1154,73 @@
         <div class="id">${esc(task.task_id || "")}</div>
         ${task.error ? `<div style="color:var(--danger);margin-top:6px;">${esc(task.error)}</div>` : ""}
         <div class="steps">${steps}</div>
+        ${transcript}
       </div>`;
+    }
+
+    function renderTaskTranscript(task, output, options = {}) {
+      const text = typeof output.text === "string" ? output.text : "";
+      if (!text || task.status !== "done") return "";
+      const indexed = output.knowledge_indexed === true;
+      const indexing = state.indexingTaskIds.has(task.task_id);
+      const sourceIds = normalizeList(Array.isArray(output.knowledge_source_ids) ? output.knowledge_source_ids : []);
+      const sourceText = sourceIds.length ? `source_ids: ${sourceIds.map(compactId).join(", ")}` : "";
+      const chunkCount = Number(output.knowledge_chunk_count || 0);
+      const indexedMeta = indexed
+        ? `<span class="pill ok">已存入知识库</span>${chunkCount ? `<span class="pill">${chunkCount} chunks</span>` : ""}${sourceText ? `<span class="id">${esc(sourceText)}</span>` : ""}`
+        : `<button class="primary" type="button" data-task-index="${esc(task.task_id)}"${indexing ? " disabled" : ""}>${indexing ? "入库中..." : "存入知识库"}</button>`;
+      const lengthText = output.text_length || text.length;
+      const open = options.openTranscript ? " open" : "";
+      return `<details class="task-output"${open}>
+        <summary>提取文本 · ${esc(lengthText)} length</summary>
+        <textarea readonly rows="10">${esc(text)}</textarea>
+        <div class="task-actions">
+          ${indexedMeta}
+          <span class="small muted" data-task-index-status></span>
+        </div>
+      </details>`;
+    }
+
+    function bindTaskActionButtons(root = document) {
+      root.querySelectorAll("[data-task-index]").forEach((button) => {
+        button.onclick = () => indexTaskTranscript(button);
+      });
+    }
+
+    async function indexTaskTranscript(button) {
+      const taskId = button.dataset.taskIndex;
+      const box = button.closest(".task");
+      const status = box ? box.querySelector("[data-task-index-status]") : null;
+      if (!taskId) return;
+      state.indexingTaskIds.add(taskId);
+      button.disabled = true;
+      button.textContent = "入库中...";
+      if (status) {
+        status.textContent = "";
+        status.style.color = "";
+      }
+      try {
+        const data = await fetchJSON(`/task/${encodeURIComponent(taskId)}/index`, { method: "POST" });
+        if (status) {
+          const sourceIds = normalizeList(data.source_ids || []).map(compactId).join(", ");
+          status.textContent = `完成：${data.chunk_count || 0} chunks${sourceIds ? ` · ${sourceIds}` : ""}`;
+          status.style.color = "#bbf7d0";
+        }
+        await loadSources();
+        if (state.activeTaskId === taskId) {
+          await pollTask(taskId);
+        }
+        await loadTasks();
+      } catch (err) {
+        if (status) {
+          status.textContent = err.message;
+          status.style.color = "var(--danger)";
+        }
+        button.disabled = false;
+        button.textContent = "存入知识库";
+      } finally {
+        state.indexingTaskIds.delete(taskId);
+      }
     }
 
     async function formatText(event) {

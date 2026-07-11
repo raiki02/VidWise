@@ -136,6 +136,21 @@ func (t *Tracker) Complete(id string, output map[string]any) (TrackedTask, bool)
 	})
 }
 
+func (t *Tracker) PatchOutput(id string, patch map[string]any) (TrackedTask, bool) {
+	return t.update(id, func(task TrackedTask, now time.Time) TrackedTask {
+		output := copyOutput(task.Output)
+		if output == nil {
+			output = make(map[string]any, len(patch))
+		}
+		for key, value := range patch {
+			output[key] = value
+		}
+		task.Output = output
+		task.UpdatedAt = now
+		return task
+	})
+}
+
 func (t *Tracker) Fail(id, message string) (TrackedTask, bool) {
 	return t.update(id, func(task TrackedTask, now time.Time) TrackedTask {
 		task.Status = StatusFailed

@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 
-	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
 const (
-	VideoProcessStepDownloadAudio      = "download_audio"
-	VideoProcessStepTranscribeAudio    = "transcribe_audio"
-	VideoProcessStepFormatTranscript   = "format_transcript"
-	VideoProcessStepIndexKnowledgeBase = "index_knowledge_base"
+	VideoProcessStepDownloadAudio    = "download_audio"
+	VideoProcessStepTranscribeAudio  = "transcribe_audio"
+	VideoProcessStepFormatTranscript = "format_transcript"
 )
 
 // VideoProcessStepNames returns the stable ordered steps for the video Agent pipeline.
@@ -23,7 +21,6 @@ func VideoProcessStepNames() []string {
 		VideoProcessStepDownloadAudio,
 		VideoProcessStepTranscribeAudio,
 		VideoProcessStepFormatTranscript,
-		VideoProcessStepIndexKnowledgeBase,
 	}
 }
 
@@ -36,7 +33,7 @@ type VideoProcessObserver interface {
 }
 
 // ExecuteVideoProcess runs the video processing pipeline:
-// Download audio → ASR transcribe → LLM format → RAG index.
+// Download audio → ASR transcribe → optional LLM paragraph formatting.
 func ExecuteVideoProcess(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID string, language string) (string, error) {
 	return ExecuteVideoProcessWithObserver(ctx, registry, url, workDir, name, userID, sessionID, taskID, language, nil)
 }
@@ -122,35 +119,6 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 			}
 			slog.Info("agent.pipeline.format_done", "text_len", len(formattedText))
 			observer.StepDone(VideoProcessStepFormatTranscript)
-		}
-	}
-
-	// Step 4: RAG index to Qdrant
-	ragTool, ragErr := registry.Get("rag_index")
-	if ragErr != nil {
-		observer.StepSkipped(VideoProcessStepIndexKnowledgeBase, "rag_index tool unavailable")
-		slog.Warn("agent.pipeline.no_rag_tool", "err", ragErr)
-	} else {
-		observer.StepStarted(VideoProcessStepIndexKnowledgeBase)
-		ragArgs, _ := tool.ToJSON(tool.RAGIndexInput{
-			Text:        formattedText,
-			Filename:    name + ".txt",
-			ContentType: "text/plain",
-			Format:      "plain",
-			UserID:      userID,
-			SessionID:   sessionID,
-			Metadata: map[string]string{
-				qdrantclient.FieldTaskID:    taskID,
-				qdrantclient.FieldSourceURL: url,
-			},
-		})
-		ragResult, err := ragTool.InvokableRun(ctx, ragArgs)
-		if err != nil {
-			observer.StepFailed(VideoProcessStepIndexKnowledgeBase, err)
-			slog.Warn("agent.pipeline.rag_index_failed", "err", err)
-		} else {
-			slog.Info("agent.pipeline.rag_index_done", "result", ragResult)
-			observer.StepDone(VideoProcessStepIndexKnowledgeBase)
 		}
 	}
 

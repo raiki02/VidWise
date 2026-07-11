@@ -7,9 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/agent"
 	"github.com/raiki02/vidwise/internal/background"
@@ -66,6 +69,12 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	}
 	if task.Output["text_length"] != len("formatted text") {
 		t.Fatalf("task output = %#v, want text_length", task.Output)
+	}
+	if task.Output["text"] != "formatted text" {
+		t.Fatalf("task output = %#v, want transcript text", task.Output)
+	}
+	if task.Output["knowledge_indexed"] != false {
+		t.Fatalf("task output = %#v, want knowledge_indexed=false", task.Output)
 	}
 	if len(task.Steps) != len(agent.VideoProcessStepNames()) {
 		t.Fatalf("task steps = %#v", task.Steps)
@@ -170,4 +179,95 @@ func TestVideoProcessMarksTaskFailedWhenPipelineFails(t *testing.T) {
 	if task.Steps[1].Status != taskpkg.StatusFailed {
 		t.Fatalf("transcribe step = %#v, want failed", task.Steps[1])
 	}
+}
+
+func TestIndexTaskTranscriptIndexesCompletedTaskText(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	registry := tool.NewRegistry()
+	rag := &recordingRAGIndexTool{output: `{"chunk_count":2,"content_type":"text/plain","source_ids":["source-1"]}`}
+	registry.Register("rag_index", rag, nil)
+	tracker := taskpkg.NewTracker()
+	tracker.Create(taskpkg.TrackCreateRequest{
+		ID:        "task-1",
+		Type:      "video_process",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	tracker.Complete("task-1", map[string]any{
+		"text":              "formatted transcript",
+		"text_length":       len("formatted transcript"),
+		"filename":          "demo.txt",
+		"source_url":        "https://example.com/video",
+		"knowledge_indexed": false,
+	})
+	h := NewVideoHandlerWithBackgroundAndTasks(registry, background.NewRunner(time.Second), tracker)
+
+	router := gin.New()
+	router.POST("/task/:id/index", h.IndexTaskTranscript)
+
+	req := httptest.NewRequest(http.MethodPost, "/task/task-1/index", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(rag.input, `"text":"formatted transcript"`) {
+		t.Fatalf("rag input missing transcript text: %s", rag.input)
+	}
+	if !strings.Contains(rag.input, `"task_id":"task-1"`) {
+		t.Fatalf("rag input missing task metadata: %s", rag.input)
+	}
+
+	var out VideoTaskIndexResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "indexed" || out.ChunkCount != 2 || len(out.SourceIDs) != 1 || out.SourceIDs[0] != "source-1" {
+		t.Fatalf("unexpected index response: %#v", out)
+	}
+	task, ok := tracker.Get("task-1")
+	if !ok {
+		t.Fatal("expected task")
+	}
+	if task.Output["knowledge_indexed"] != true {
+		t.Fatalf("task output = %#v, want indexed", task.Output)
+	}
+}
+
+func TestIndexTaskTranscriptRejectsRunningTask(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tracker := taskpkg.NewTracker()
+	tracker.Create(taskpkg.TrackCreateRequest{ID: "task-1", Type: "video_process", UserID: "u1"})
+	tracker.Start("task-1")
+	h := NewVideoHandlerWithBackgroundAndTasks(tool.NewRegistry(), background.NewRunner(time.Second), tracker)
+
+	router := gin.New()
+	router.POST("/task/:id/index", h.IndexTaskTranscript)
+
+	req := httptest.NewRequest(http.MethodPost, "/task/task-1/index", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+type recordingRAGIndexTool struct {
+	input  string
+	output string
+	err    error
+}
+
+func (t *recordingRAGIndexTool) Info(context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: "rag_index"}, nil
+}
+
+func (t *recordingRAGIndexTool) InvokableRun(_ context.Context, input string, _ ...einotool.Option) (string, error) {
+	t.input = input
+	if t.err != nil {
+		return "", t.err
+	}
+	return t.output, nil
 }
