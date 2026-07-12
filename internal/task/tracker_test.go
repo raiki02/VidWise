@@ -145,6 +145,26 @@ func TestTrackerReturnsCopies(t *testing.T) {
 	}
 }
 
+func TestTrackerPatchesOutput(t *testing.T) {
+	tracker := NewTracker()
+	tracker.Create(TrackCreateRequest{ID: "task-1"})
+	tracker.Complete("task-1", map[string]any{"text": "transcript"})
+
+	got, ok := tracker.PatchOutput("task-1", map[string]any{
+		"knowledge_indexed": true,
+		"chunk_count":       2,
+	})
+	if !ok {
+		t.Fatal("expected task output to be patched")
+	}
+	if got.Output["text"] != "transcript" {
+		t.Fatalf("existing output lost: %#v", got.Output)
+	}
+	if got.Output["knowledge_indexed"] != true || got.Output["chunk_count"] != 2 {
+		t.Fatalf("patched output = %#v", got.Output)
+	}
+}
+
 func TestTrackerReportsMissingTask(t *testing.T) {
 	tracker := NewTracker()
 	if _, ok := tracker.Get("missing"); ok {

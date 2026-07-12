@@ -196,6 +196,25 @@ func TestRouterMountsTaskListRoute(t *testing.T) {
 	}
 }
 
+func TestRouterMountsTaskTranscriptIndexRoute(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		ragruntime.Runtime{},
+		nil,
+		nil,
+		capability.FromRuntime(capability.RuntimeDeps{}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/task/missing/index", nil)
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("expected mounted route to return 404 from handler, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 	raw, err := webFS.ReadFile("web/index.html")
 	if err != nil {
@@ -206,6 +225,8 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"/chat/query",
 		"/extract",
 		"/video/process",
+		"/task/",
+		"/index",
 		"/tasks?",
 		"/rag/sources?",
 		"/rag/source/",
@@ -221,6 +242,8 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"data-nav=\"sources\"",
 		"id=\"extract-type\"",
 		"id=\"task-list\"",
+		"data-task-index",
+		"任务完成后可入库",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("static index missing %q", want)

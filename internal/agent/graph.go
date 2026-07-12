@@ -5,16 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
-	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
 )
 
 const (
-	VideoProcessStepDownloadAudio      = "download_audio"
-	VideoProcessStepTranscribeAudio    = "transcribe_audio"
-	VideoProcessStepFormatTranscript   = "format_transcript"
-	VideoProcessStepIndexKnowledgeBase = "index_knowledge_base"
+	VideoProcessStepDownloadAudio    = "download_audio"
+	VideoProcessStepTranscribeAudio  = "transcribe_audio"
+	VideoProcessStepFormatTranscript = "format_transcript"
+
+	VideoProcessTextStageTranscribed = "transcribed"
+	VideoProcessTextStageFormatted   = "formatted"
+	VideoProcessTextStageReady       = "ready"
 )
 
 // VideoProcessStepNames returns the stable ordered steps for the video Agent pipeline.
@@ -23,7 +26,6 @@ func VideoProcessStepNames() []string {
 		VideoProcessStepDownloadAudio,
 		VideoProcessStepTranscribeAudio,
 		VideoProcessStepFormatTranscript,
-		VideoProcessStepIndexKnowledgeBase,
 	}
 }
 
@@ -35,8 +37,14 @@ type VideoProcessObserver interface {
 	StepSkipped(name, reason string)
 }
 
+// VideoProcessOutputObserver receives partial task output as soon as the
+// pipeline has user-facing transcript text available.
+type VideoProcessOutputObserver interface {
+	OutputUpdated(output map[string]any)
+}
+
 // ExecuteVideoProcess runs the video processing pipeline:
-// Download audio → ASR transcribe → LLM format → RAG index.
+// Download audio → ASR transcribe → optional LLM paragraph formatting.
 func ExecuteVideoProcess(ctx context.Context, registry *tool.Registry, url, workDir, name, userID, sessionID, taskID string, language string) (string, error) {
 	return ExecuteVideoProcessWithObserver(ctx, registry, url, workDir, name, userID, sessionID, taskID, language, nil)
 }
@@ -97,6 +105,7 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 		rawText = asrOutput.Text
 		slog.Info("agent.pipeline.asr_parsed", "text_len", len(rawText), "lang", asrOutput.Language, "duration", asrOutput.Duration)
 	}
+	notifyVideoProcessOutput(observer, VideoProcessTextOutput(rawText, name, url, VideoProcessTextStageTranscribed))
 
 	// Step 3: LLM paragraph formatting (optional)
 	formattedText := rawText
@@ -121,36 +130,8 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 				formattedText = formatResult
 			}
 			slog.Info("agent.pipeline.format_done", "text_len", len(formattedText))
+			notifyVideoProcessOutput(observer, VideoProcessTextOutput(formattedText, name, url, VideoProcessTextStageFormatted))
 			observer.StepDone(VideoProcessStepFormatTranscript)
-		}
-	}
-
-	// Step 4: RAG index to Qdrant
-	ragTool, ragErr := registry.Get("rag_index")
-	if ragErr != nil {
-		observer.StepSkipped(VideoProcessStepIndexKnowledgeBase, "rag_index tool unavailable")
-		slog.Warn("agent.pipeline.no_rag_tool", "err", ragErr)
-	} else {
-		observer.StepStarted(VideoProcessStepIndexKnowledgeBase)
-		ragArgs, _ := tool.ToJSON(tool.RAGIndexInput{
-			Text:        formattedText,
-			Filename:    name + ".txt",
-			ContentType: "text/plain",
-			Format:      "plain",
-			UserID:      userID,
-			SessionID:   sessionID,
-			Metadata: map[string]string{
-				qdrantclient.FieldTaskID:    taskID,
-				qdrantclient.FieldSourceURL: url,
-			},
-		})
-		ragResult, err := ragTool.InvokableRun(ctx, ragArgs)
-		if err != nil {
-			observer.StepFailed(VideoProcessStepIndexKnowledgeBase, err)
-			slog.Warn("agent.pipeline.rag_index_failed", "err", err)
-		} else {
-			slog.Info("agent.pipeline.rag_index_done", "result", ragResult)
-			observer.StepDone(VideoProcessStepIndexKnowledgeBase)
 		}
 	}
 
@@ -170,4 +151,33 @@ func normalizeVideoProcessObserver(observer VideoProcessObserver) VideoProcessOb
 		return noopVideoProcessObserver{}
 	}
 	return observer
+}
+
+func VideoProcessTextOutput(text, name, sourceURL, stage string) map[string]any {
+	filename := strings.TrimSpace(name)
+	if filename == "" {
+		filename = "transcript"
+	}
+	if !strings.HasSuffix(strings.ToLower(filename), ".txt") {
+		filename += ".txt"
+	}
+	if stage == "" {
+		stage = VideoProcessTextStageReady
+	}
+	return map[string]any{
+		"text":              text,
+		"text_length":       len(text),
+		"text_stage":        stage,
+		"filename":          filename,
+		"source_url":        strings.TrimSpace(sourceURL),
+		"knowledge_indexed": false,
+	}
+}
+
+func notifyVideoProcessOutput(observer VideoProcessObserver, output map[string]any) {
+	outputObserver, ok := observer.(VideoProcessOutputObserver)
+	if !ok {
+		return
+	}
+	outputObserver.OutputUpdated(output)
 }

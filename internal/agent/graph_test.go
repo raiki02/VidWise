@@ -28,7 +28,8 @@ func (f fakeGraphTool) InvokableRun(context.Context, string, ...einotool.Option)
 }
 
 type recordingVideoObserver struct {
-	events []string
+	events  []string
+	outputs []map[string]any
 }
 
 func (o *recordingVideoObserver) StepStarted(name string) {
@@ -47,12 +48,15 @@ func (o *recordingVideoObserver) StepSkipped(name, reason string) {
 	o.events = append(o.events, "skipped:"+name+":"+reason)
 }
 
+func (o *recordingVideoObserver) OutputUpdated(output map[string]any) {
+	o.outputs = append(o.outputs, output)
+}
+
 func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 	registry := tool.NewRegistry()
 	registerGraphTool(registry, "download_audio", "")
 	registerGraphTool(registry, "transcribe_audio", `{"text":"raw transcript","language":"zh","duration":1}`)
 	registerGraphTool(registry, "format_transcript", `{"formatted_text":"formatted transcript"}`)
-	registerGraphTool(registry, "rag_index", `{"status":"ok"}`)
 	observer := &recordingVideoObserver{}
 
 	got, err := ExecuteVideoProcessWithObserver(context.Background(), registry, "https://example.com/v", "/tmp", "demo", "u1", "s1", "task-1", "zh", observer)
@@ -70,11 +74,18 @@ func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 		"done:transcribe_audio",
 		"start:format_transcript",
 		"done:format_transcript",
-		"start:index_knowledge_base",
-		"done:index_knowledge_base",
 	}
 	if !equalStrings(observer.events, want) {
 		t.Fatalf("events = %#v, want %#v", observer.events, want)
+	}
+	if len(observer.outputs) != 2 {
+		t.Fatalf("outputs = %#v, want transcribed and formatted output", observer.outputs)
+	}
+	if observer.outputs[0]["text"] != "raw transcript" || observer.outputs[0]["text_stage"] != VideoProcessTextStageTranscribed {
+		t.Fatalf("transcribed output = %#v", observer.outputs[0])
+	}
+	if observer.outputs[1]["text"] != "formatted transcript" || observer.outputs[1]["text_stage"] != VideoProcessTextStageFormatted {
+		t.Fatalf("formatted output = %#v", observer.outputs[1])
 	}
 }
 
@@ -98,7 +109,6 @@ func TestExecuteVideoProcessReportsOptionalStepSkips(t *testing.T) {
 		"start:transcribe_audio",
 		"done:transcribe_audio",
 		"skipped:format_transcript:format_transcript tool unavailable",
-		"skipped:index_knowledge_base:rag_index tool unavailable",
 	}
 	if !equalStrings(observer.events, want) {
 		t.Fatalf("events = %#v, want %#v", observer.events, want)

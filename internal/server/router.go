@@ -93,6 +93,7 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	// Task status
 	e.GET("/tasks", taskHandler.ListTasks)
 	e.GET("/task/:id", taskHandler.GetTask)
+	e.POST("/task/:id/index", videoHandler.IndexTaskTranscript)
 
 	// Health
 	e.GET("/rag/health", chatHandler.RAGHealth)
