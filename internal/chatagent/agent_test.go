@@ -125,7 +125,7 @@ func TestEvaluateRetrievalSkipsGenericSummaryWhenRetrieverUnavailable(t *testing
 	}
 }
 
-func TestEvaluateRetrievalDefaultsToRetrieveWhenLLMDisabled(t *testing.T) {
+func TestEvaluateRetrievalUsesHeuristicWhenLLMDisabled(t *testing.T) {
 	agent := New(disabledLLMConfig(), rag.ContextConfig{})
 
 	got := agent.EvaluateRetrieval(context.Background(), RetrievalEvaluationRequest{
@@ -138,6 +138,25 @@ func TestEvaluateRetrievalDefaultsToRetrieveWhenLLMDisabled(t *testing.T) {
 	}
 	if got.Reason != "llm_unavailable" {
 		t.Fatalf("reason = %q, want llm_unavailable", got.Reason)
+	}
+}
+
+func TestEvaluateRetrievalSkipsOpaqueQueryWhenLLMDisabled(t *testing.T) {
+	agent := New(disabledLLMConfig(), rag.ContextConfig{})
+
+	got := agent.EvaluateRetrieval(context.Background(), RetrievalEvaluationRequest{
+		Query:              "123123",
+		RetrieverAvailable: true,
+	})
+
+	if got.ShouldRetrieve {
+		t.Fatalf("expected opaque query to skip retrieval, got %#v", got)
+	}
+	if got.Reason != "llm_unavailable" {
+		t.Fatalf("reason = %q, want llm_unavailable", got.Reason)
+	}
+	if got.RetrievalQuery != "" {
+		t.Fatalf("retrieval query = %q, want empty", got.RetrievalQuery)
 	}
 }
 
@@ -215,6 +234,24 @@ func TestEvaluateRetrievalFallsBackToRetrieveOnModelFailure(t *testing.T) {
 
 	if !got.ShouldRetrieve {
 		t.Fatalf("expected conservative retrieval on model failure, got %#v", got)
+	}
+	if got.Reason != "eval_gen_failed" {
+		t.Fatalf("reason = %q, want eval_gen_failed", got.Reason)
+	}
+}
+
+func TestEvaluateRetrievalSkipsOpaqueQueryOnModelFailure(t *testing.T) {
+	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {
+		return &fakeModel{err: errors.New("model down")}, nil
+	})
+
+	got := agent.EvaluateRetrieval(context.Background(), RetrievalEvaluationRequest{
+		Query:              "123123",
+		RetrieverAvailable: true,
+	})
+
+	if got.ShouldRetrieve {
+		t.Fatalf("expected opaque query to skip retrieval on classifier failure, got %#v", got)
 	}
 	if got.Reason != "eval_gen_failed" {
 		t.Fatalf("reason = %q, want eval_gen_failed", got.Reason)
