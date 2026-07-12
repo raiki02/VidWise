@@ -1160,15 +1160,18 @@
 
     function renderTaskTranscript(task, output, options = {}) {
       const text = typeof output.text === "string" ? output.text : "";
-      if (!text || task.status !== "done") return "";
+      if (!text) return "";
       const indexed = output.knowledge_indexed === true;
       const indexing = state.indexingTaskIds.has(task.task_id);
+      const done = task.status === "done";
       const sourceIds = normalizeList(Array.isArray(output.knowledge_source_ids) ? output.knowledge_source_ids : []);
       const sourceText = sourceIds.length ? `source_ids: ${sourceIds.map(compactId).join(", ")}` : "";
       const chunkCount = Number(output.knowledge_chunk_count || 0);
       const indexedMeta = indexed
         ? `<span class="pill ok">已存入知识库</span>${chunkCount ? `<span class="pill">${chunkCount} chunks</span>` : ""}${sourceText ? `<span class="id">${esc(sourceText)}</span>` : ""}`
-        : `<button class="primary" type="button" data-task-index="${esc(task.task_id)}"${indexing ? " disabled" : ""}>${indexing ? "入库中..." : "存入知识库"}</button>`;
+        : done
+          ? `<button class="primary" type="button" data-task-index="${esc(task.task_id)}"${indexing ? " disabled" : ""}>${indexing ? "入库中..." : "存入知识库"}</button>`
+          : `<button class="primary" type="button" disabled>任务完成后可入库</button>`;
       const lengthText = output.text_length || text.length;
       const open = options.openTranscript ? " open" : "";
       return `<details class="task-output"${open}>

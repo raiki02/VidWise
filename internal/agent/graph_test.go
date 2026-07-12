@@ -28,7 +28,8 @@ func (f fakeGraphTool) InvokableRun(context.Context, string, ...einotool.Option)
 }
 
 type recordingVideoObserver struct {
-	events []string
+	events  []string
+	outputs []map[string]any
 }
 
 func (o *recordingVideoObserver) StepStarted(name string) {
@@ -45,6 +46,10 @@ func (o *recordingVideoObserver) StepFailed(name string, err error) {
 
 func (o *recordingVideoObserver) StepSkipped(name, reason string) {
 	o.events = append(o.events, "skipped:"+name+":"+reason)
+}
+
+func (o *recordingVideoObserver) OutputUpdated(output map[string]any) {
+	o.outputs = append(o.outputs, output)
 }
 
 func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
@@ -72,6 +77,15 @@ func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 	}
 	if !equalStrings(observer.events, want) {
 		t.Fatalf("events = %#v, want %#v", observer.events, want)
+	}
+	if len(observer.outputs) != 2 {
+		t.Fatalf("outputs = %#v, want transcribed and formatted output", observer.outputs)
+	}
+	if observer.outputs[0]["text"] != "raw transcript" || observer.outputs[0]["text_stage"] != VideoProcessTextStageTranscribed {
+		t.Fatalf("transcribed output = %#v", observer.outputs[0])
+	}
+	if observer.outputs[1]["text"] != "formatted transcript" || observer.outputs[1]["text_stage"] != VideoProcessTextStageFormatted {
+		t.Fatalf("formatted output = %#v", observer.outputs[1])
 	}
 }
 

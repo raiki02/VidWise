@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/raiki02/vidwise/internal/tool"
 )
@@ -13,6 +14,10 @@ const (
 	VideoProcessStepDownloadAudio    = "download_audio"
 	VideoProcessStepTranscribeAudio  = "transcribe_audio"
 	VideoProcessStepFormatTranscript = "format_transcript"
+
+	VideoProcessTextStageTranscribed = "transcribed"
+	VideoProcessTextStageFormatted   = "formatted"
+	VideoProcessTextStageReady       = "ready"
 )
 
 // VideoProcessStepNames returns the stable ordered steps for the video Agent pipeline.
@@ -30,6 +35,12 @@ type VideoProcessObserver interface {
 	StepDone(name string)
 	StepFailed(name string, err error)
 	StepSkipped(name, reason string)
+}
+
+// VideoProcessOutputObserver receives partial task output as soon as the
+// pipeline has user-facing transcript text available.
+type VideoProcessOutputObserver interface {
+	OutputUpdated(output map[string]any)
 }
 
 // ExecuteVideoProcess runs the video processing pipeline:
@@ -94,6 +105,7 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 		rawText = asrOutput.Text
 		slog.Info("agent.pipeline.asr_parsed", "text_len", len(rawText), "lang", asrOutput.Language, "duration", asrOutput.Duration)
 	}
+	notifyVideoProcessOutput(observer, VideoProcessTextOutput(rawText, name, url, VideoProcessTextStageTranscribed))
 
 	// Step 3: LLM paragraph formatting (optional)
 	formattedText := rawText
@@ -118,6 +130,7 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 				formattedText = formatResult
 			}
 			slog.Info("agent.pipeline.format_done", "text_len", len(formattedText))
+			notifyVideoProcessOutput(observer, VideoProcessTextOutput(formattedText, name, url, VideoProcessTextStageFormatted))
 			observer.StepDone(VideoProcessStepFormatTranscript)
 		}
 	}
@@ -138,4 +151,33 @@ func normalizeVideoProcessObserver(observer VideoProcessObserver) VideoProcessOb
 		return noopVideoProcessObserver{}
 	}
 	return observer
+}
+
+func VideoProcessTextOutput(text, name, sourceURL, stage string) map[string]any {
+	filename := strings.TrimSpace(name)
+	if filename == "" {
+		filename = "transcript"
+	}
+	if !strings.HasSuffix(strings.ToLower(filename), ".txt") {
+		filename += ".txt"
+	}
+	if stage == "" {
+		stage = VideoProcessTextStageReady
+	}
+	return map[string]any{
+		"text":              text,
+		"text_length":       len(text),
+		"text_stage":        stage,
+		"filename":          filename,
+		"source_url":        strings.TrimSpace(sourceURL),
+		"knowledge_indexed": false,
+	}
+}
+
+func notifyVideoProcessOutput(observer VideoProcessObserver, output map[string]any) {
+	outputObserver, ok := observer.(VideoProcessOutputObserver)
+	if !ok {
+		return
+	}
+	outputObserver.OutputUpdated(output)
 }

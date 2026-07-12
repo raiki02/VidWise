@@ -84,6 +84,74 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	}
 }
 
+func TestVideoProcessPublishesTranscriptWhileTaskRuns(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	runner := background.NewRunner(time.Second)
+	transcriptPublished := make(chan struct{})
+	finish := make(chan struct{})
+
+	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
+	h.processWithObserver = func(_ context.Context, _ *tool.Registry, _, _, name, _, _, _, _ string, observer agent.VideoProcessObserver) (string, error) {
+		if outputObserver, ok := observer.(agent.VideoProcessOutputObserver); ok {
+			outputObserver.OutputUpdated(agent.VideoProcessTextOutput("raw transcript", name, "https://example.com/video", agent.VideoProcessTextStageTranscribed))
+		}
+		close(transcriptPublished)
+		<-finish
+		return "formatted transcript", nil
+	}
+
+	router := gin.New()
+	router.Use(testTraceIDMiddleware("trace-video-1"))
+	router.POST("/video/process", h.VideoProcess)
+
+	body := bytes.NewBufferString(`{"url":"https://example.com/video","name":"demo","user_id":"u1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/video/process", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		close(finish)
+		t.Fatalf("expected status 202, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out VideoProcessResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		close(finish)
+		t.Fatalf("decode response: %v", err)
+	}
+	select {
+	case <-transcriptPublished:
+	case <-time.After(time.Second):
+		close(finish)
+		t.Fatal("transcript was not published while task was running")
+	}
+
+	task, ok := h.tasks.Get(out.TaskID)
+	if !ok {
+		close(finish)
+		t.Fatalf("expected task %s to be tracked", out.TaskID)
+	}
+	if task.Status != taskpkg.StatusRunning {
+		close(finish)
+		t.Fatalf("task status = %q, want running", task.Status)
+	}
+	if task.Output["text"] != "raw transcript" {
+		close(finish)
+		t.Fatalf("task output = %#v, want raw transcript while running", task.Output)
+	}
+	if task.Output["text_stage"] != agent.VideoProcessTextStageTranscribed {
+		close(finish)
+		t.Fatalf("task output = %#v, want transcribed stage", task.Output)
+	}
+
+	close(finish)
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.Wait(waitCtx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+}
+
 func TestVideoProcessUsesDetachedBackgroundContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	runner := background.NewRunner(time.Second)

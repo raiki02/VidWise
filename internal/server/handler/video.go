@@ -157,7 +157,7 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
 			return
 		}
-		tasks.Complete(taskID, videoProcessTaskOutput(result, req.Name, req.URL))
+		tasks.Complete(taskID, agent.VideoProcessTextOutput(result, req.Name, req.URL, agent.VideoProcessTextStageReady))
 	})
 
 	c.JSON(http.StatusAccepted, VideoProcessResponse{
@@ -298,21 +298,8 @@ func (o taskStepObserver) StepSkipped(name, reason string) {
 	o.tasks.SkipStep(o.taskID, name, reason)
 }
 
-func videoProcessTaskOutput(text, name, sourceURL string) map[string]any {
-	filename := strings.TrimSpace(name)
-	if filename == "" {
-		filename = "transcript"
-	}
-	if !strings.HasSuffix(strings.ToLower(filename), ".txt") {
-		filename += ".txt"
-	}
-	return map[string]any{
-		"text":              text,
-		"text_length":       len(text),
-		"filename":          filename,
-		"source_url":        strings.TrimSpace(sourceURL),
-		"knowledge_indexed": false,
-	}
+func (o taskStepObserver) OutputUpdated(output map[string]any) {
+	o.tasks.PatchOutput(o.taskID, output)
 }
 
 func taskOutputString(output map[string]any, key string) string {
