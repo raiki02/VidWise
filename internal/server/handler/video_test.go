@@ -27,6 +27,9 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	h.processWithObserver = func(_ context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string, observer agent.VideoProcessObserver) (string, error) {
 		observer.StepStarted(agent.VideoProcessStepDownloadAudio)
 		observer.StepDone(agent.VideoProcessStepDownloadAudio)
+		if outputObserver, ok := observer.(agent.VideoProcessOutputObserver); ok {
+			outputObserver.OutputUpdated(agent.VideoProcessTextOutput("formatted text", "demo", "https://example.com/video", agent.VideoProcessTextStageFormatted))
+		}
 		return "formatted text", nil
 	}
 
@@ -73,6 +76,9 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	if task.Output["text"] != "formatted text" {
 		t.Fatalf("task output = %#v, want transcript text", task.Output)
 	}
+	if task.Output["formatted_text"] != "formatted text" || task.Output["can_index_knowledge"] != true {
+		t.Fatalf("task output = %#v, want formatted indexable transcript", task.Output)
+	}
 	if task.Output["knowledge_indexed"] != false {
 		t.Fatalf("task output = %#v, want knowledge_indexed=false", task.Output)
 	}
@@ -97,6 +103,9 @@ func TestVideoProcessPublishesTranscriptWhileTaskRuns(t *testing.T) {
 		}
 		close(transcriptPublished)
 		<-finish
+		if outputObserver, ok := observer.(agent.VideoProcessOutputObserver); ok {
+			outputObserver.OutputUpdated(agent.VideoProcessTextOutput("formatted transcript", name, "https://example.com/video", agent.VideoProcessTextStageFormatted))
+		}
 		return "formatted transcript", nil
 	}
 
@@ -149,6 +158,16 @@ func TestVideoProcessPublishesTranscriptWhileTaskRuns(t *testing.T) {
 	defer cancel()
 	if err := runner.Wait(waitCtx); err != nil {
 		t.Fatalf("wait: %v", err)
+	}
+	task, ok = h.tasks.Get(out.TaskID)
+	if !ok {
+		t.Fatalf("expected task %s to be tracked", out.TaskID)
+	}
+	if task.Output["text"] != "formatted transcript" || task.Output["formatted_text"] != "formatted transcript" {
+		t.Fatalf("task output = %#v, want formatted transcript after completion", task.Output)
+	}
+	if task.Output["raw_text"] != "raw transcript" {
+		t.Fatalf("task output = %#v, want raw transcript retained", task.Output)
 	}
 }
 
@@ -262,11 +281,16 @@ func TestIndexTaskTranscriptIndexesCompletedTaskText(t *testing.T) {
 		SessionID: "s1",
 	})
 	tracker.Complete("task-1", map[string]any{
-		"text":              "formatted transcript",
-		"text_length":       len("formatted transcript"),
-		"filename":          "demo.txt",
-		"source_url":        "https://example.com/video",
-		"knowledge_indexed": false,
+		"text":                "formatted transcript",
+		"text_length":         len("formatted transcript"),
+		"text_stage":          agent.VideoProcessTextStageReady,
+		"raw_text":            "raw transcript",
+		"formatted_text":      "formatted transcript",
+		"text_formatted":      true,
+		"can_index_knowledge": true,
+		"filename":            "demo.txt",
+		"source_url":          "https://example.com/video",
+		"knowledge_indexed":   false,
 	})
 	h := NewVideoHandlerWithBackgroundAndTasks(registry, background.NewRunner(time.Second), tracker)
 
@@ -300,6 +324,46 @@ func TestIndexTaskTranscriptIndexesCompletedTaskText(t *testing.T) {
 	}
 	if task.Output["knowledge_indexed"] != true {
 		t.Fatalf("task output = %#v, want indexed", task.Output)
+	}
+}
+
+func TestIndexTaskTranscriptRejectsUnformattedTaskText(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	registry := tool.NewRegistry()
+	rag := &recordingRAGIndexTool{output: `{"chunk_count":2,"content_type":"text/plain","source_ids":["source-1"]}`}
+	registry.Register("rag_index", rag, nil)
+	tracker := taskpkg.NewTracker()
+	tracker.Create(taskpkg.TrackCreateRequest{
+		ID:        "task-1",
+		Type:      "video_process",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	tracker.Complete("task-1", map[string]any{
+		"text":                "raw transcript",
+		"text_length":         len("raw transcript"),
+		"text_stage":          agent.VideoProcessTextStageReady,
+		"raw_text":            "raw transcript",
+		"text_formatted":      false,
+		"can_index_knowledge": false,
+		"filename":            "demo.txt",
+		"source_url":          "https://example.com/video",
+		"knowledge_indexed":   false,
+	})
+	h := NewVideoHandlerWithBackgroundAndTasks(registry, background.NewRunner(time.Second), tracker)
+
+	router := gin.New()
+	router.POST("/task/:id/index", h.IndexTaskTranscript)
+
+	req := httptest.NewRequest(http.MethodPost, "/task/task-1/index", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected status 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if rag.input != "" {
+		t.Fatalf("rag index should not be called for raw transcript, got input: %s", rag.input)
 	}
 }
 

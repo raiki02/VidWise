@@ -157,7 +157,7 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 			slog.Error("video.process_failed", "trace_id", traceID, "task_id", taskID, "session_id", req.SessionID, "err", err)
 			return
 		}
-		tasks.Complete(taskID, agent.VideoProcessTextOutput(result, req.Name, req.URL, agent.VideoProcessTextStageReady))
+		tasks.Complete(taskID, completeVideoProcessOutput(tasks, taskID, result, req.Name, req.URL))
 	})
 
 	c.JSON(http.StatusAccepted, VideoProcessResponse{
@@ -196,11 +196,6 @@ func (h *VideoHandler) IndexTaskTranscript(c *gin.Context) {
 		return
 	}
 
-	text := taskOutputString(tracked.Output, "text")
-	if text == "" {
-		errorJSON(c, http.StatusBadRequest, "task transcript text is not available")
-		return
-	}
 	if taskOutputBool(tracked.Output, "knowledge_indexed") {
 		c.JSON(http.StatusOK, VideoTaskIndexResponse{
 			Status:      "already_indexed",
@@ -209,6 +204,11 @@ func (h *VideoHandler) IndexTaskTranscript(c *gin.Context) {
 			ContentType: taskOutputString(tracked.Output, "knowledge_content_type"),
 			SourceIDs:   taskOutputStrings(tracked.Output, "knowledge_source_ids"),
 		})
+		return
+	}
+	text := taskOutputString(tracked.Output, "formatted_text")
+	if text == "" || !taskOutputBool(tracked.Output, "text_formatted") || !taskOutputBool(tracked.Output, "can_index_knowledge") {
+		errorJSON(c, http.StatusConflict, "task transcript must be formatted before indexing")
 		return
 	}
 
@@ -300,6 +300,26 @@ func (o taskStepObserver) StepSkipped(name, reason string) {
 
 func (o taskStepObserver) OutputUpdated(output map[string]any) {
 	o.tasks.PatchOutput(o.taskID, output)
+}
+
+func completeVideoProcessOutput(tasks *taskpkg.Tracker, taskID, result, name, sourceURL string) map[string]any {
+	rawText := ""
+	formattedText := ""
+	textFormatted := false
+	if tasks != nil {
+		if tracked, ok := tasks.Get(taskID); ok {
+			rawText = taskOutputString(tracked.Output, "raw_text")
+			formattedText = taskOutputString(tracked.Output, "formatted_text")
+			textFormatted = taskOutputBool(tracked.Output, "text_formatted")
+		}
+	}
+	if formattedText != "" && textFormatted {
+		return agent.VideoProcessReadyTextOutput(formattedText, rawText, name, sourceURL, true)
+	}
+	if rawText == "" {
+		rawText = result
+	}
+	return agent.VideoProcessReadyTextOutput(result, rawText, name, sourceURL, false)
 }
 
 func taskOutputString(output map[string]any, key string) string {

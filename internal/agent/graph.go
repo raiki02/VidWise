@@ -123,15 +123,29 @@ func ExecuteVideoProcessWithObserver(ctx context.Context, registry *tool.Registr
 		} else {
 			var fmtOutput struct {
 				FormattedText string `json:"formatted_text"`
+				Formatted     *bool  `json:"formatted"`
+				Status        string `json:"status"`
+				Reason        string `json:"reason"`
 			}
+			formatSucceeded := false
 			if err := json.Unmarshal([]byte(formatResult), &fmtOutput); err == nil && fmtOutput.FormattedText != "" {
-				formattedText = fmtOutput.FormattedText
+				if fmtOutput.Formatted == nil || *fmtOutput.Formatted {
+					formattedText = fmtOutput.FormattedText
+					formatSucceeded = true
+				} else {
+					reason := firstNonEmpty(fmtOutput.Reason, fmtOutput.Status, "format_transcript did not produce formatted text")
+					observer.StepSkipped(VideoProcessStepFormatTranscript, reason)
+					slog.Warn("agent.pipeline.format_skipped", "reason", reason)
+				}
 			} else {
-				formattedText = formatResult
+				formattedText = strings.TrimSpace(formatResult)
+				formatSucceeded = formattedText != ""
 			}
-			slog.Info("agent.pipeline.format_done", "text_len", len(formattedText))
-			notifyVideoProcessOutput(observer, VideoProcessTextOutput(formattedText, name, url, VideoProcessTextStageFormatted))
-			observer.StepDone(VideoProcessStepFormatTranscript)
+			if formatSucceeded {
+				slog.Info("agent.pipeline.format_done", "text_len", len(formattedText))
+				notifyVideoProcessOutput(observer, VideoProcessTextOutput(formattedText, name, url, VideoProcessTextStageFormatted))
+				observer.StepDone(VideoProcessStepFormatTranscript)
+			}
 		}
 	}
 
@@ -164,14 +178,49 @@ func VideoProcessTextOutput(text, name, sourceURL, stage string) map[string]any 
 	if stage == "" {
 		stage = VideoProcessTextStageReady
 	}
-	return map[string]any{
-		"text":              text,
-		"text_length":       len(text),
-		"text_stage":        stage,
-		"filename":          filename,
-		"source_url":        strings.TrimSpace(sourceURL),
-		"knowledge_indexed": false,
+	output := map[string]any{
+		"text":                text,
+		"text_length":         len(text),
+		"text_stage":          stage,
+		"filename":            filename,
+		"source_url":          strings.TrimSpace(sourceURL),
+		"text_formatted":      false,
+		"can_index_knowledge": false,
+		"knowledge_indexed":   false,
 	}
+	switch stage {
+	case VideoProcessTextStageTranscribed:
+		output["raw_text"] = text
+		output["raw_text_length"] = len(text)
+	case VideoProcessTextStageFormatted:
+		output["formatted_text"] = text
+		output["formatted_text_length"] = len(text)
+		output["text_formatted"] = true
+		output["can_index_knowledge"] = true
+	}
+	return output
+}
+
+func VideoProcessReadyTextOutput(text, rawText, name, sourceURL string, formatted bool) map[string]any {
+	output := VideoProcessTextOutput(text, name, sourceURL, VideoProcessTextStageReady)
+	rawText = strings.TrimSpace(rawText)
+	if rawText != "" {
+		output["raw_text"] = rawText
+		output["raw_text_length"] = len(rawText)
+	}
+	if formatted {
+		output["formatted_text"] = text
+		output["formatted_text_length"] = len(text)
+		output["text_formatted"] = true
+		output["can_index_knowledge"] = true
+		return output
+	}
+	if rawText == "" {
+		output["raw_text"] = text
+		output["raw_text_length"] = len(text)
+	}
+	output["formatting_required"] = true
+	return output
 }
 
 func notifyVideoProcessOutput(observer VideoProcessObserver, output map[string]any) {
@@ -180,4 +229,14 @@ func notifyVideoProcessOutput(observer VideoProcessObserver, output map[string]a
 		return
 	}
 	outputObserver.OutputUpdated(output)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

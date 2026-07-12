@@ -76,6 +76,9 @@ func formatText(ctx context.Context, rawText string, sourceFormat TextFormat, cf
 	slog.Info("llm.format.start", "chunks", len(chunks), "chunk_runes", cfg.ChunkRunes, "format", sourceFormat)
 
 	formatted := formatChunksParallel(formatCtx, cm, chunks, rawText, cfg, perChunkTimeout, fallback)
+	if len(formatted) == 0 {
+		return "", errChunkFailed
+	}
 	slog.Info("llm.format.done", "elapsed", time.Since(start))
 	return strings.Join(formatted, "\n\n"), nil
 }

@@ -84,8 +84,14 @@ func TestExecuteVideoProcessReportsStepProgress(t *testing.T) {
 	if observer.outputs[0]["text"] != "raw transcript" || observer.outputs[0]["text_stage"] != VideoProcessTextStageTranscribed {
 		t.Fatalf("transcribed output = %#v", observer.outputs[0])
 	}
+	if observer.outputs[0]["raw_text"] != "raw transcript" || observer.outputs[0]["can_index_knowledge"] != false {
+		t.Fatalf("transcribed output should not be indexable: %#v", observer.outputs[0])
+	}
 	if observer.outputs[1]["text"] != "formatted transcript" || observer.outputs[1]["text_stage"] != VideoProcessTextStageFormatted {
 		t.Fatalf("formatted output = %#v", observer.outputs[1])
+	}
+	if observer.outputs[1]["formatted_text"] != "formatted transcript" || observer.outputs[1]["can_index_knowledge"] != true {
+		t.Fatalf("formatted output should be indexable: %#v", observer.outputs[1])
 	}
 }
 
@@ -112,6 +118,46 @@ func TestExecuteVideoProcessReportsOptionalStepSkips(t *testing.T) {
 	}
 	if !equalStrings(observer.events, want) {
 		t.Fatalf("events = %#v, want %#v", observer.events, want)
+	}
+	if len(observer.outputs) != 1 {
+		t.Fatalf("outputs = %#v, want only transcribed output", observer.outputs)
+	}
+	if observer.outputs[0]["formatted_text"] != nil || observer.outputs[0]["can_index_knowledge"] != false {
+		t.Fatalf("unformatted output should not be indexable: %#v", observer.outputs[0])
+	}
+}
+
+func TestExecuteVideoProcessDoesNotIndexFormatterFallbackText(t *testing.T) {
+	registry := tool.NewRegistry()
+	registerGraphTool(registry, "download_audio", "")
+	registerGraphTool(registry, "transcribe_audio", `{"text":"raw transcript","language":"zh","duration":1}`)
+	registerGraphTool(registry, "format_transcript", `{"formatted_text":"raw transcript","formatted":false,"status":"skipped","reason":"llm disabled"}`)
+	observer := &recordingVideoObserver{}
+
+	got, err := ExecuteVideoProcessWithObserver(context.Background(), registry, "https://example.com/v", "/tmp", "demo", "u1", "s1", "task-1", "zh", observer)
+	if err != nil {
+		t.Fatalf("ExecuteVideoProcessWithObserver returned error: %v", err)
+	}
+	if got != "raw transcript" {
+		t.Fatalf("text = %q, want raw transcript", got)
+	}
+
+	want := []string{
+		"start:download_audio",
+		"done:download_audio",
+		"start:transcribe_audio",
+		"done:transcribe_audio",
+		"start:format_transcript",
+		"skipped:format_transcript:llm disabled",
+	}
+	if !equalStrings(observer.events, want) {
+		t.Fatalf("events = %#v, want %#v", observer.events, want)
+	}
+	if len(observer.outputs) != 1 {
+		t.Fatalf("outputs = %#v, want only transcribed output", observer.outputs)
+	}
+	if observer.outputs[0]["formatted_text"] != nil || observer.outputs[0]["can_index_knowledge"] != false {
+		t.Fatalf("fallback output should not be indexable: %#v", observer.outputs[0])
 	}
 }
 
