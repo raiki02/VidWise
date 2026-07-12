@@ -314,25 +314,25 @@ func (a *Agent) EvaluateRetrieval(ctx context.Context, req RetrievalEvaluationRe
 		return RetrievalEvaluation{ShouldRetrieve: false, Reason: "retriever_unavailable"}
 	}
 	if !a.llmEnabled() {
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_unavailable", RetrievalQuery: req.Query}
+		return fallbackRetrievalEvaluation("llm_unavailable", req.Query)
 	}
 
 	cm, err := a.newModel(ctx, a.llmCfg)
 	if err != nil {
 		slog.Warn("chat.agent.rag_eval_llm_failed", "err", err)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "llm_init_failed", RetrievalQuery: req.Query}
+		return fallbackRetrievalEvaluation("llm_init_failed", req.Query)
 	}
 
 	resp, genErr := cm.Generate(ctx, buildRetrievalEvaluationMessages(req))
 	if genErr != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
 		slog.Warn("chat.agent.rag_eval_gen_failed", "err", genErr)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_gen_failed", RetrievalQuery: req.Query}
+		return fallbackRetrievalEvaluation("eval_gen_failed", req.Query)
 	}
 
 	var result RetrievalEvaluation
 	if err := extractJSON(resp.Content, &result); err != nil {
 		slog.Warn("chat.agent.rag_eval_parse_failed", "content", resp.Content, "err", err)
-		return RetrievalEvaluation{ShouldRetrieve: true, Reason: "eval_parse_failed", RetrievalQuery: req.Query}
+		return fallbackRetrievalEvaluation("eval_parse_failed", req.Query)
 	}
 
 	result = normalizeRetrievalEvaluation(result, req.Query)
@@ -457,6 +457,14 @@ func retrievalQueryForTurn(eval RetrievalEvaluation, fallbackQuery string) strin
 		return query
 	}
 	return strings.TrimSpace(fallbackQuery)
+}
+
+func fallbackRetrievalEvaluation(reason, query string) RetrievalEvaluation {
+	query = strings.TrimSpace(query)
+	if isLikelyKnowledgeBaseQuery(query) {
+		return RetrievalEvaluation{ShouldRetrieve: true, Reason: reason, RetrievalQuery: query}
+	}
+	return RetrievalEvaluation{ShouldRetrieve: false, Reason: reason}
 }
 
 func retrievalQueriesForTurn(retrievalQuery, originalQuery string) []string {

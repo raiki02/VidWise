@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/capability"
+	"github.com/raiki02/vidwise/internal/chat"
 	"github.com/raiki02/vidwise/internal/chatagent"
 	"github.com/raiki02/vidwise/internal/rag"
 )
@@ -241,6 +245,55 @@ func TestChatQueryReportsSkippedDuplicateRAGContext(t *testing.T) {
 	}
 }
 
+func TestChatQueryPassesOnlyPreviousMessagesAsHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	llmCfg := testEnabledLLMConfig()
+	store := newFakeChatSessionStore()
+	store.sessions["s1"] = chat.Session{ID: "s1", UserID: "u1", Title: "old session"}
+	store.messages["s1"] = []chat.Message{
+		{ID: "m1", SessionID: "s1", Role: "user", Content: "旧问题"},
+		{ID: "m2", SessionID: "s1", Role: "assistant", Content: "旧回答"},
+	}
+
+	var answerPrompt string
+	h := NewChatHandler(store, nil, nil, llmCfg, testCapabilitiesWithChatStore(llmCfg))
+	h.answerAgent = chatagent.NewWithModelFactory(llmCfg, rag.ContextConfig{}, func(context.Context, appconfig.LLMConfig) (chatagent.ChatModel, error) {
+		return &recordingHandlerModel{
+			response: "new answer",
+			onGenerate: func(input []*schema.Message) {
+				if len(input) > 1 {
+					answerPrompt = input[1].Content
+				}
+			},
+		}, nil
+	})
+
+	router := gin.New()
+	router.POST("/chat/query", h.ChatQuery)
+
+	body := bytes.NewBufferString(`{"query":"本轮内容","session_id":"s1","user_id":"u1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/chat/query", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	for _, want := range []string{"对话历史", "用户: 旧问题", "助手: 旧回答", "用户最新问题：本轮内容"} {
+		if !strings.Contains(answerPrompt, want) {
+			t.Fatalf("answer prompt missing %q:\n%s", want, answerPrompt)
+		}
+	}
+	if strings.Contains(answerPrompt, "用户: 本轮内容") {
+		t.Fatalf("current user message leaked into history:\n%s", answerPrompt)
+	}
+	if strings.Count(answerPrompt, "本轮内容") != 1 {
+		t.Fatalf("current query should appear once, prompt:\n%s", answerPrompt)
+	}
+}
+
 func TestSessionEndpointsReturnUnavailableWithoutSessionStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	llmCfg := testDisabledLLMConfig()
@@ -412,14 +465,131 @@ func TestChatChunkFromContextCitationAddsSnippetNumber(t *testing.T) {
 	}
 }
 
+type recordingHandlerModel struct {
+	response   string
+	onGenerate func([]*schema.Message)
+}
+
+func (m *recordingHandlerModel) Generate(_ context.Context, input []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
+	if m.onGenerate != nil {
+		m.onGenerate(input)
+	}
+	return schema.AssistantMessage(m.response, nil), nil
+}
+
+type fakeChatSessionStore struct {
+	sessions map[string]chat.Session
+	messages map[string][]chat.Message
+	nextID   int
+}
+
+func newFakeChatSessionStore() *fakeChatSessionStore {
+	return &fakeChatSessionStore{
+		sessions: make(map[string]chat.Session),
+		messages: make(map[string][]chat.Message),
+	}
+}
+
+func (s *fakeChatSessionStore) CreateSessionForUser(_ context.Context, userID, title string) (*chat.Session, error) {
+	s.nextID++
+	session := chat.Session{ID: fmt.Sprintf("session-%d", s.nextID), UserID: userID, Title: title}
+	s.sessions[session.ID] = session
+	return &session, nil
+}
+
+func (s *fakeChatSessionStore) AddMessage(_ context.Context, sessionID, role, content string) (*chat.Message, error) {
+	s.nextID++
+	msg := chat.Message{ID: fmt.Sprintf("msg-%d", s.nextID), SessionID: sessionID, Role: role, Content: content}
+	s.messages[sessionID] = append(s.messages[sessionID], msg)
+	return &msg, nil
+}
+
+func (s *fakeChatSessionStore) GetMessages(_ context.Context, sessionID string, limit int) ([]chat.Message, error) {
+	return limitMessages(s.messages[sessionID], limit), nil
+}
+
+func (s *fakeChatSessionStore) GetRecentMessages(_ context.Context, sessionID string, limit int) ([]chat.Message, error) {
+	return limitMessages(s.messages[sessionID], limit), nil
+}
+
+func (s *fakeChatSessionStore) ListSessions(_ context.Context, limit int) ([]chat.Session, error) {
+	out := make([]chat.Session, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		out = append(out, session)
+	}
+	return limitSessions(out, limit), nil
+}
+
+func (s *fakeChatSessionStore) ListSessionsByUser(_ context.Context, userID string, limit int) ([]chat.Session, error) {
+	out := make([]chat.Session, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		if session.UserID == userID {
+			out = append(out, session)
+		}
+	}
+	return limitSessions(out, limit), nil
+}
+
+func (s *fakeChatSessionStore) GetSession(_ context.Context, id string) (*chat.Session, error) {
+	session, ok := s.sessions[id]
+	if !ok {
+		return nil, fmt.Errorf("session not found")
+	}
+	return &session, nil
+}
+
+func (s *fakeChatSessionStore) UpdateSessionTitle(_ context.Context, sessionID, title string) error {
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+	session.Title = title
+	s.sessions[sessionID] = session
+	return nil
+}
+
+func limitMessages(messages []chat.Message, limit int) []chat.Message {
+	if limit > 0 && len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+	out := make([]chat.Message, len(messages))
+	copy(out, messages)
+	return out
+}
+
+func limitSessions(sessions []chat.Session, limit int) []chat.Session {
+	if limit > 0 && len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
+	out := make([]chat.Session, len(sessions))
+	copy(out, sessions)
+	return out
+}
+
 func testDisabledLLMConfig() appconfig.LLMConfig {
 	enabled := false
 	return appconfig.LLMConfig{Enabled: &enabled}
 }
 
+func testEnabledLLMConfig() appconfig.LLMConfig {
+	enabled := true
+	return appconfig.LLMConfig{Enabled: &enabled, Model: "test-model"}
+}
+
 func testCapabilities(llmCfg appconfig.LLMConfig) capability.Snapshot {
 	return capability.FromRuntime(capability.RuntimeDeps{
 		ChatSessionStore: false,
+		MemoryStore:      false,
+		VectorStore:      false,
+		Embedding:        false,
+		Rerank:           false,
+		LLMConfig:        llmCfg,
+	})
+}
+
+func testCapabilitiesWithChatStore(llmCfg appconfig.LLMConfig) capability.Snapshot {
+	return capability.FromRuntime(capability.RuntimeDeps{
+		ChatSessionStore: true,
 		MemoryStore:      false,
 		VectorStore:      false,
 		Embedding:        false,

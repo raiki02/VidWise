@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 )
 
 type ChatHandler struct {
-	repo        *chat.Repo
+	repo        chatSessionStore
 	memRepo     *memory.Repo
 	llmCfg      appconfig.LLMConfig
 	caps        capability.Snapshot
@@ -27,18 +28,30 @@ type ChatHandler struct {
 	background  *background.Runner
 }
 
-func NewChatHandler(repo *chat.Repo, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot) *ChatHandler {
+type chatSessionStore interface {
+	CreateSessionForUser(ctx context.Context, userID, title string) (*chat.Session, error)
+	AddMessage(ctx context.Context, sessionID, role, content string) (*chat.Message, error)
+	GetMessages(ctx context.Context, sessionID string, limit int) ([]chat.Message, error)
+	GetRecentMessages(ctx context.Context, sessionID string, limit int) ([]chat.Message, error)
+	ListSessions(ctx context.Context, limit int) ([]chat.Session, error)
+	ListSessionsByUser(ctx context.Context, userID string, limit int) ([]chat.Session, error)
+	GetSession(ctx context.Context, id string) (*chat.Session, error)
+	UpdateSessionTitle(ctx context.Context, sessionID, title string) error
+}
+
+func NewChatHandler(repo chatSessionStore, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot) *ChatHandler {
 	return NewChatHandlerWithRAGContext(repo, memRepo, retriever, llmCfg, caps, rag.DefaultContextConfig())
 }
 
-func NewChatHandlerWithRAGContext(repo *chat.Repo, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot, ragContext rag.ContextConfig) *ChatHandler {
+func NewChatHandlerWithRAGContext(repo chatSessionStore, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot, ragContext rag.ContextConfig) *ChatHandler {
 	return NewChatHandlerWithBackground(repo, memRepo, retriever, llmCfg, caps, ragContext, nil)
 }
 
-func NewChatHandlerWithBackground(repo *chat.Repo, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot, ragContext rag.ContextConfig, runner *background.Runner) *ChatHandler {
+func NewChatHandlerWithBackground(repo chatSessionStore, memRepo *memory.Repo, retriever *rag.Retriever, llmCfg appconfig.LLMConfig, caps capability.Snapshot, ragContext rag.ContextConfig, runner *background.Runner) *ChatHandler {
 	if runner == nil {
 		runner = background.NewRunner(30 * time.Second)
 	}
+	repo = normalizeChatSessionStore(repo)
 	return &ChatHandler{
 		repo:    repo,
 		memRepo: memRepo,
@@ -150,28 +163,13 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		sessionID = s.ID
 	}
 
-	// Save user message
+	// Build recent history before saving this turn so the latest user query is
+	// passed once as the current query, not duplicated into the history block.
+	var recentMsgs []chat.Message
 	if h.sessionStoreAvailable() && sessionID != "" {
-		if _, err := h.repo.AddMessage(ctx, sessionID, "user", req.Query); err != nil {
-			slog.Error("chat.save_user_msg_failed", "err", err)
-		}
+		recentMsgs, _ = h.repo.GetRecentMessages(ctx, sessionID, 20)
 	}
-
-	// Auto-title: generate on first user message
-	if h.sessionStoreAvailable() && sessionID != "" {
-		msgs, _ := h.repo.GetMessages(ctx, sessionID, 0)
-		userCount := 0
-		for _, m := range msgs {
-			if m.Role == "user" {
-				userCount++
-			}
-		}
-		if userCount == 1 {
-			h.background.Go("chat.auto_title", func(ctx context.Context) {
-				h.autoGenerateTitle(ctx, sessionID, req.Query)
-			})
-		}
-	}
+	recentHistory := buildHistoryText(recentMsgs)
 
 	// Load user memory facts for cross-session context
 	userFacts := ""
@@ -179,12 +177,12 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 		userFacts = h.memRepo.FormatForPrompt(ctx, req.UserID)
 	}
 
-	// Build recent history for context
-	var recentMsgs []chat.Message
+	// Save user message
 	if h.sessionStoreAvailable() && sessionID != "" {
-		recentMsgs, _ = h.repo.GetRecentMessages(ctx, sessionID, 20)
+		if _, err := h.repo.AddMessage(ctx, sessionID, "user", req.Query); err != nil {
+			slog.Error("chat.save_user_msg_failed", "err", err)
+		}
 	}
-	recentHistory := buildHistoryText(recentMsgs)
 
 	turn, err := h.answerAgent.RunTurn(ctx, chatagent.TurnRequest{
 		Query:       req.Query,
@@ -201,6 +199,22 @@ func (h *ChatHandler) ChatQuery(c *gin.Context) {
 	}
 	chunks := turn.Chunks
 	answer := turn.Answer
+
+	// Auto-title: generate on first user message
+	if h.sessionStoreAvailable() && sessionID != "" {
+		msgs, _ := h.repo.GetMessages(ctx, sessionID, 0)
+		userCount := 0
+		for _, m := range msgs {
+			if m.Role == "user" {
+				userCount++
+			}
+		}
+		if userCount == 1 {
+			h.background.Go("chat.auto_title", func(ctx context.Context) {
+				h.autoGenerateTitle(ctx, sessionID, req.Query)
+			})
+		}
+	}
 
 	// Save assistant response
 	if h.sessionStoreAvailable() && sessionID != "" {
@@ -518,4 +532,18 @@ func buildHistoryText(msgs []chat.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+func normalizeChatSessionStore(repo chatSessionStore) chatSessionStore {
+	if repo == nil {
+		return nil
+	}
+	value := reflect.ValueOf(repo)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return nil
+		}
+	}
+	return repo
 }

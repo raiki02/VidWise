@@ -712,6 +712,8 @@
       state.sessionId = "";
       localStorage.setItem("vidwise.session_id", "");
       updateScopeUI();
+      $("#chat-input").value = "";
+      $("#rag-diagnostics").textContent = "暂无 RAG 诊断。";
       $("#messages").innerHTML = "";
       addMessage("assistant", "新对话已就绪。");
       switchTab("chat");
