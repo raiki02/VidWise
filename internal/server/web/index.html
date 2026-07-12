@@ -278,18 +278,24 @@
 
     <section class="side-section">
       <div class="side-title">知识库范围</div>
-      <div>
-        <label for="scope-user">User ID</label>
-        <input id="scope-user" autocomplete="off" placeholder="u1" />
-      </div>
-      <div>
-        <label for="scope-session">Session ID</label>
-        <input id="scope-session" autocomplete="off" placeholder="自动或手动填写" />
-      </div>
+      <div class="row"><span class="pill ok">个人知识库</span><span id="local-user-pill" class="id"></span></div>
       <div class="row">
-        <button id="save-scope" class="primary" type="button">保存</button>
         <button id="new-session" type="button">新对话</button>
       </div>
+      <details class="advanced-filter">
+        <summary>高级设置</summary>
+        <div style="margin-top:12px;">
+          <label for="scope-user">本地用户 ID</label>
+          <input id="scope-user" autocomplete="off" />
+        </div>
+        <div style="margin-top:12px;">
+          <label for="scope-session">当前对话 ID</label>
+          <input id="scope-session" autocomplete="off" placeholder="自动创建" />
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <button id="save-scope" class="primary" type="button">保存高级设置</button>
+        </div>
+      </details>
     </section>
 
     <section class="side-section">
@@ -476,9 +482,20 @@
   </main>
 
   <script>
+    function localUserId() {
+      const existing = localStorage.getItem("vidwise.user_id");
+      if (existing && existing.trim()) return existing.trim();
+      const suffix = window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      const generated = `local-user-${suffix}`;
+      localStorage.setItem("vidwise.user_id", generated);
+      return generated;
+    }
+
     const state = {
       tab: "chat",
-      userId: localStorage.getItem("vidwise.user_id") || "u1",
+      userId: localUserId(),
       sessionId: localStorage.getItem("vidwise.session_id") || "",
       selectedSourceIds: new Set(JSON.parse(localStorage.getItem("vidwise.selected_source_ids") || "[]")),
       sources: [],
@@ -577,7 +594,7 @@
     }
 
     function saveScope() {
-      state.userId = $("#scope-user").value.trim();
+      state.userId = $("#scope-user").value.trim() || localUserId();
       state.sessionId = $("#scope-session").value.trim();
       localStorage.setItem("vidwise.user_id", state.userId);
       localStorage.setItem("vidwise.session_id", state.sessionId);
@@ -588,7 +605,10 @@
     function updateScopeUI() {
       $("#scope-user").value = state.userId;
       $("#scope-session").value = state.sessionId;
-      $("#scope-pill").textContent = state.userId ? `user:${state.userId}` : (state.sessionId ? `session:${compactId(state.sessionId)}` : "知识库范围未保存");
+      $("#local-user-pill").textContent = compactId(state.userId);
+      $("#local-user-pill").title = state.userId;
+      $("#scope-pill").textContent = state.userId ? "个人知识库" : "知识库初始化中";
+      $("#scope-pill").title = state.userId || "";
       $("#scope-pill").className = "pill" + (state.userId || state.sessionId ? " ok" : " warn");
       $("#source-pill").textContent = `${state.selectedSourceIds.size} sources`;
       $("#task-pill").textContent = state.activeTaskId ? `task:${compactId(state.activeTaskId)}` : "0 tasks";
@@ -603,21 +623,21 @@
     }
 
     function effectiveKnowledgeScopeLabel() {
-      if (state.userId) return `个人知识库 user:${state.userId}`;
+      if (state.userId) return "个人知识库";
       if (state.sessionId) return `会话知识库 session:${compactId(state.sessionId)}`;
-      return "知识库范围未保存";
+      return "知识库初始化中";
     }
 
     function defaultRetrievalText() {
       if (state.userId) return `当前检索 ${effectiveKnowledgeScopeLabel()} 的全部 source。`;
       if (state.sessionId) return `当前检索 ${effectiveKnowledgeScopeLabel()} 的全部 source。`;
-      return "请先保存 User ID 或 Session ID。";
+      return "个人知识库正在初始化。";
     }
 
     function emptySourceText() {
       if (state.userId) return `${effectiveKnowledgeScopeLabel()} 暂无 source。`;
       if (state.sessionId) return `${effectiveKnowledgeScopeLabel()} 暂无 source。`;
-      return "请先保存 User ID 或 Session ID。";
+      return "个人知识库正在初始化。";
     }
 
     function appendScopeToFormData(fd) {
@@ -627,7 +647,7 @@
 
     function requireScope(target) {
       if (state.userId || state.sessionId) return true;
-      target.textContent = "请先保存 User ID 或 Session ID。";
+      target.textContent = "个人知识库正在初始化，请稍后重试。";
       target.style.color = "var(--danger)";
       return false;
     }
@@ -865,7 +885,7 @@
           <td>${esc(source.content_type || "-")}</td>
           <td class="metadata-cell">${renderSourceMetadata(source)}</td>
           <td>${source.chunk_count || 0}</td>
-          <td><div class="id">u:${esc(source.user_id || "-")}</div><div class="id">s:${esc(compactId(source.session_id || "-"))}</div></td>
+          <td><span class="pill ok" title="${esc(source.user_id || source.session_id || "")}">${source.user_id ? "个人知识库" : "会话知识库"}</span></td>
           <td><button class="danger" type="button" data-delete-source="${esc(source.source_id)}">删除</button></td>
         `;
         table.appendChild(tr);
@@ -1026,7 +1046,7 @@
       const url = $("#video-url").value.trim();
       const name = $("#video-name").value.trim();
       if (!state.userId) {
-        status.textContent = "视频任务需要 User ID。";
+        status.textContent = "个人知识库身份未初始化。";
         status.style.color = "var(--danger)";
         return;
       }

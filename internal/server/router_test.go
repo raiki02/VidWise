@@ -244,6 +244,11 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"id=\"task-list\"",
 		"data-task-index",
 		"任务完成后可入库",
+		"function localUserId()",
+		"local-user-",
+		"本地用户 ID",
+		"个人知识库",
+		"高级设置",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("static index missing %q", want)
