@@ -1,14 +1,22 @@
 """
 Embedding and Rerank Service
 FastAPI service providing /embed and /rerank endpoints.
-Supports Qwen and BGE model backends.
+Supports local Qwen/BGE model backends and Alibaba Cloud Model Studio
+embedding APIs.
 
 Configuration is read from config.yaml (same file used by the Go gateway),
 with environment variables as overrides:
 
   config.yaml                    env var override
+  embedding.provider           EMBEDDING_PROVIDER
   embedding.model              EMBEDDING_MODEL
   embedding.device             EMBEDDING_DEVICE
+  embedding.api_base_url       EMBEDDING_API_BASE_URL
+  embedding.api_key            EMBEDDING_API_KEY
+  embedding.api_key_env        EMBEDDING_API_KEY_ENV
+  embedding.api_timeout_seconds EMBEDDING_API_TIMEOUT_SECONDS
+  embedding.dimensions         EMBEDDING_DIMENSIONS
+  embedding.batch_size         EMBEDDING_BATCH_SIZE
   rerank.top_k                 RERANK_TOP_K
 """
 
@@ -61,20 +69,40 @@ def _get_int_env_or_cfg(env_name: str, cfg: dict, cfg_section: str, cfg_key: str
 
 
 _cfg = _load_config(CONFIG_PATH)
+_embedding_cfg = _cfg.get("embedding", {}) or {}
 
 MODEL_PROVIDER = os.getenv(
+    "EMBEDDING_PROVIDER",
+    _embedding_cfg.get("provider", "local"),
+)
+MODEL_NAME = os.getenv(
     "EMBEDDING_MODEL",
-    _cfg.get("embedding", {}).get("model", "./models/qwen3-embedding"),
+    _embedding_cfg.get("model", "./models/qwen3-embedding"),
 )
 MODEL_DEVICE = os.getenv(
     "EMBEDDING_DEVICE",
-    _cfg.get("embedding", {}).get("device", "auto"),
+    _embedding_cfg.get("device", "auto"),
 )
+EMBEDDING_API_BASE_URL = os.getenv("EMBEDDING_API_BASE_URL", _embedding_cfg.get("api_base_url", ""))
+EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", _embedding_cfg.get("api_key", ""))
+EMBEDDING_API_KEY_ENV = os.getenv("EMBEDDING_API_KEY_ENV", _embedding_cfg.get("api_key_env", "DASHSCOPE_API_KEY"))
+EMBEDDING_API_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_API_TIMEOUT_SECONDS", _embedding_cfg.get("api_timeout_seconds", 120)))
+EMBEDDING_DIMENSIONS = _get_int_env_or_cfg("EMBEDDING_DIMENSIONS", _cfg, "embedding", "dimensions", 0)
+EMBEDDING_BATCH_SIZE = _get_int_env_or_cfg("EMBEDDING_BATCH_SIZE", _cfg, "embedding", "batch_size", 10)
 RERANK_TOP_K = _get_int_env_or_cfg("RERANK_TOP_K", _cfg, "rerank", "top_k", 3)
 
+EMBEDDING_PROVIDER_CONFIG = {
+    "api_base_url": EMBEDDING_API_BASE_URL,
+    "api_key": EMBEDDING_API_KEY,
+    "api_key_env": EMBEDDING_API_KEY_ENV,
+    "api_timeout_seconds": EMBEDDING_API_TIMEOUT_SECONDS,
+    "dimensions": EMBEDDING_DIMENSIONS,
+    "batch_size": EMBEDDING_BATCH_SIZE,
+}
+
 logger.info(
-    "Embedding service config: model=%s device=%s rerank_top_k=%d config_path=%s",
-    MODEL_PROVIDER, MODEL_DEVICE, RERANK_TOP_K, CONFIG_PATH,
+    "Embedding service config: provider=%s model=%s device=%s rerank_top_k=%d config_path=%s",
+    MODEL_PROVIDER, MODEL_NAME, MODEL_DEVICE, RERANK_TOP_K, CONFIG_PATH,
 )
 
 backend = None
@@ -83,7 +111,7 @@ backend = None
 def get_backend():
     global backend
     if backend is None:
-        backend = create_backend(MODEL_PROVIDER, MODEL_DEVICE)
+        backend = create_backend(MODEL_NAME, MODEL_DEVICE, MODEL_PROVIDER, EMBEDDING_PROVIDER_CONFIG)
     return backend
 
 
@@ -119,7 +147,7 @@ class RerankResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "provider": MODEL_PROVIDER, "device": MODEL_DEVICE}
+    return {"status": "ok", "provider": MODEL_PROVIDER, "model": MODEL_NAME, "device": MODEL_DEVICE}
 
 
 @app.post("/embed")

@@ -32,6 +32,11 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "name": "./models/whisper-small",
         "device": "auto",
         "torch_dtype": "auto",
+        "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": "",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "api_timeout_seconds": 300,
+        "max_file_bytes": 7500000,
     },
     "transcribe": {
         "beam_size": 5,
@@ -153,9 +158,10 @@ def load_model() -> None:
         asr_config = load_asr_config()
         model_config = asr_config["model"]
 
+        provider = str(model_config.get("provider") or "whisper").strip().lower()
         stream_config = asr_config["stream"]
         vad_get_speech_ts = None
-        if stream_config.get("enabled", True):
+        if stream_config.get("enabled", True) and provider not in {"aliyun", "dashscope"}:
             logger.info("loading Silero VAD model")
             vad_model, vad_utils = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
@@ -168,9 +174,9 @@ def load_model() -> None:
 
         logger.info(
             "loading ASR model provider=%s model=%s device=%s",
-            model_config["provider"],
+            provider,
             model_config["name"],
-            model_config["device"],
+            model_config.get("device", ""),
         )
         model = create_asr_backend(
             model_config,
@@ -513,6 +519,15 @@ def load_asr_config() -> dict[str, Any]:
     model_config["name"] = os.getenv("ASR_MODEL", model_config["name"])
     model_config["device"] = os.getenv("ASR_DEVICE", model_config["device"])
     model_config["torch_dtype"] = os.getenv("ASR_TORCH_DTYPE", model_config.get("torch_dtype", "auto"))
+    model_config["api_base_url"] = os.getenv("ASR_API_BASE_URL", model_config.get("api_base_url", ""))
+    model_config["api_key"] = os.getenv("ASR_API_KEY", model_config.get("api_key", ""))
+    model_config["api_key_env"] = os.getenv("ASR_API_KEY_ENV", model_config.get("api_key_env", "DASHSCOPE_API_KEY"))
+    model_config["api_timeout_seconds"] = float(
+        os.getenv("ASR_API_TIMEOUT_SECONDS", model_config.get("api_timeout_seconds", 300))
+    )
+    model_config["max_file_bytes"] = int(
+        os.getenv("ASR_MAX_FILE_BYTES", model_config.get("max_file_bytes", 7500000))
+    )
 
     transcribe_config["beam_size"] = int(transcribe_config["beam_size"])
     transcribe_config["vad_filter"] = bool(transcribe_config["vad_filter"])

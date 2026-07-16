@@ -24,6 +24,36 @@ func TestApplyDefaultsSetsRAGRetrievalDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
+	var cfg Config
+	cfg.applyDefaults()
+
+	if cfg.ASR.Model.APIBaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
+		t.Fatalf("ASR APIBaseURL = %q", cfg.ASR.Model.APIBaseURL)
+	}
+	if cfg.ASR.Model.APIKeyEnv != "DASHSCOPE_API_KEY" {
+		t.Fatalf("ASR APIKeyEnv = %q, want DASHSCOPE_API_KEY", cfg.ASR.Model.APIKeyEnv)
+	}
+	if cfg.ASR.Model.APITimeoutSeconds != 300 {
+		t.Fatalf("ASR APITimeoutSeconds = %d, want 300", cfg.ASR.Model.APITimeoutSeconds)
+	}
+	if cfg.ASR.Model.MaxFileBytes != 7_500_000 {
+		t.Fatalf("ASR MaxFileBytes = %d, want 7500000", cfg.ASR.Model.MaxFileBytes)
+	}
+	if cfg.Embedding.Provider != "local" {
+		t.Fatalf("Embedding Provider = %q, want local", cfg.Embedding.Provider)
+	}
+	if cfg.Embedding.APIKeyEnv != "DASHSCOPE_API_KEY" {
+		t.Fatalf("Embedding APIKeyEnv = %q, want DASHSCOPE_API_KEY", cfg.Embedding.APIKeyEnv)
+	}
+	if cfg.Embedding.APITimeoutSeconds != 120 {
+		t.Fatalf("Embedding APITimeoutSeconds = %d, want 120", cfg.Embedding.APITimeoutSeconds)
+	}
+	if cfg.Embedding.BatchSize != 10 {
+		t.Fatalf("Embedding BatchSize = %d, want 10", cfg.Embedding.BatchSize)
+	}
+}
+
 func TestApplyDefaultsSetsServerTimeoutDefaults(t *testing.T) {
 	var cfg Config
 	cfg.applyDefaults()
@@ -184,6 +214,52 @@ func TestValidateRejectsInvalidRAGRetrievalConfig(t *testing.T) {
 				cfg.RAG.Context.MaxRunes = 0
 			},
 			wantErr: "rag.context.max_runes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			cfg.applyDefaults()
+			tt.mutate(&cfg)
+
+			err := cfg.validate()
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidModelProviders(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "invalid asr provider",
+			mutate: func(cfg *Config) {
+				cfg.ASR.Model.Provider = "unknown"
+			},
+			wantErr: "asr.model.provider",
+		},
+		{
+			name: "invalid embedding provider",
+			mutate: func(cfg *Config) {
+				cfg.Embedding.Provider = "unknown"
+			},
+			wantErr: "embedding.provider",
+		},
+		{
+			name: "invalid embedding batch size",
+			mutate: func(cfg *Config) {
+				cfg.Embedding.BatchSize = 0
+			},
+			wantErr: "embedding.batch_size",
 		},
 	}
 
