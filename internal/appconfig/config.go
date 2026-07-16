@@ -74,6 +74,19 @@ type ASRModelConfig struct {
 	XFYunMaxPollSeconds       int    `yaml:"xfyun_max_poll_seconds"`
 	XFYunMaxFileBytes         int64  `yaml:"xfyun_max_file_bytes"`
 	XFYunDurationCheckDisable bool   `yaml:"xfyun_duration_check_disable"`
+	BaiduTokenURL             string `yaml:"baidu_token_url"`
+	BaiduAPIBaseURL           string `yaml:"baidu_api_base_url"`
+	BaiduAPIKey               string `yaml:"baidu_api_key"`
+	BaiduAPIKeyEnv            string `yaml:"baidu_api_key_env"`
+	BaiduSecretKey            string `yaml:"baidu_secret_key"`
+	BaiduSecretKeyEnv         string `yaml:"baidu_secret_key_env"`
+	BaiduCUID                 string `yaml:"baidu_cuid"`
+	BaiduDevPID               int    `yaml:"baidu_dev_pid"`
+	BaiduRate                 int    `yaml:"baidu_rate"`
+	BaiduChannel              int    `yaml:"baidu_channel"`
+	BaiduAPITimeoutSeconds    int    `yaml:"baidu_api_timeout_seconds"`
+	BaiduChunkSeconds         int    `yaml:"baidu_chunk_seconds"`
+	BaiduMaxChunkBytes        int64  `yaml:"baidu_max_chunk_bytes"`
 }
 
 type ASRTranscribeConfig struct {
@@ -310,6 +323,39 @@ func (c *Config) applyDefaults() {
 	if c.ASR.Model.XFYunMaxFileBytes == 0 {
 		c.ASR.Model.XFYunMaxFileBytes = 500_000_000
 	}
+	if c.ASR.Model.BaiduTokenURL == "" {
+		c.ASR.Model.BaiduTokenURL = "https://aip.baidubce.com/oauth/2.0/token"
+	}
+	if c.ASR.Model.BaiduAPIBaseURL == "" {
+		c.ASR.Model.BaiduAPIBaseURL = "https://vop.baidu.com"
+	}
+	if c.ASR.Model.BaiduAPIKeyEnv == "" {
+		c.ASR.Model.BaiduAPIKeyEnv = "BAIDU_ASR_API_KEY"
+	}
+	if c.ASR.Model.BaiduSecretKeyEnv == "" {
+		c.ASR.Model.BaiduSecretKeyEnv = "BAIDU_ASR_SECRET_KEY"
+	}
+	if c.ASR.Model.BaiduCUID == "" {
+		c.ASR.Model.BaiduCUID = "vidwise"
+	}
+	if c.ASR.Model.BaiduDevPID == 0 {
+		c.ASR.Model.BaiduDevPID = 1537
+	}
+	if c.ASR.Model.BaiduRate == 0 {
+		c.ASR.Model.BaiduRate = 16000
+	}
+	if c.ASR.Model.BaiduChannel == 0 {
+		c.ASR.Model.BaiduChannel = 1
+	}
+	if c.ASR.Model.BaiduAPITimeoutSeconds == 0 {
+		c.ASR.Model.BaiduAPITimeoutSeconds = 60
+	}
+	if c.ASR.Model.BaiduChunkSeconds == 0 {
+		c.ASR.Model.BaiduChunkSeconds = 55
+	}
+	if c.ASR.Model.BaiduMaxChunkBytes == 0 {
+		c.ASR.Model.BaiduMaxChunkBytes = 10_000_000
+	}
 	if c.ASR.Transcribe.BeamSize == 0 {
 		c.ASR.Transcribe.BeamSize = 5
 	}
@@ -522,9 +568,9 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid asr.timeout: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.ASR.Model.Provider)) {
-	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope", "xfyun", "iflytek":
+	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope", "xfyun", "iflytek", "baidu", "baiducloud", "baidu-cloud":
 	default:
-		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope, xfyun, iflytek")
+		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope, xfyun, iflytek, baidu")
 	}
 	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)

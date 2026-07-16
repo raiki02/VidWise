@@ -83,6 +83,9 @@ huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 `aliyun`，并设置 `DASHSCOPE_API_KEY`。
 如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
 `xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
+如果使用百度智能云短语音识别，把 `asr.model.provider` 改为 `baidu`，
+并设置 `BAIDU_ASR_API_KEY` 和 `BAIDU_ASR_SECRET_KEY`；服务会用 ffmpeg
+把本地音频转为 16 kHz 单声道 WAV，并按百度短语音接口的 60 秒限制分片提交。
 
 ### 4. 配置
 
@@ -177,7 +180,7 @@ curl http://localhost:8080/rag/health   # RAG 状态
 | 配置段 | 说明 |
 |--------|------|
 | `server` | 网关监听地址 |
-| `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun/xfyun) |
+| `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun/xfyun/baidu) |
 | `llm` | LLM 提供商 (openai/ollama/deepseek) + 格式化参数 |
 | `mysql` | MySQL 连接串 (用于会话持久化，可选) |
 | `qdrant` | Qdrant 向量数据库地址 |

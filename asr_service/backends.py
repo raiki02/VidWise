@@ -6,6 +6,8 @@ import json
 import mimetypes
 import os
 import secrets
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -34,6 +36,16 @@ XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV = "XFYUN_API_SECRET"
 XFYUN_ASR_DEFAULT_LANGUAGE = "autodialect"
 XFYUN_ASR_DEFAULT_RESULT_TYPE = "transfer"
 XFYUN_ASR_DEFAULT_MAX_FILE_BYTES = 500_000_000
+BAIDU_ASR_DEFAULT_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
+BAIDU_ASR_DEFAULT_API_BASE_URL = "https://vop.baidu.com"
+BAIDU_ASR_DEFAULT_API_KEY_ENV = "BAIDU_ASR_API_KEY"
+BAIDU_ASR_DEFAULT_SECRET_KEY_ENV = "BAIDU_ASR_SECRET_KEY"
+BAIDU_ASR_DEFAULT_CUID = "vidwise"
+BAIDU_ASR_DEFAULT_DEV_PID = 1537
+BAIDU_ASR_DEFAULT_RATE = 16000
+BAIDU_ASR_DEFAULT_CHANNEL = 1
+BAIDU_ASR_DEFAULT_CHUNK_SECONDS = 55.0
+BAIDU_ASR_DEFAULT_MAX_CHUNK_BYTES = 10_000_000
 
 
 @dataclass
@@ -349,6 +361,18 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _clamped_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed < minimum:
+        return minimum
+    if parsed > maximum:
+        return maximum
+    return parsed
 
 
 class FasterWhisperBackend:
@@ -761,6 +785,188 @@ class XFYunASRBackend:
         return base64.b64encode(digest).decode("ascii")
 
 
+class BaiduASRBackend:
+    """Baidu Cloud short speech REST API with local-file WAV chunking."""
+
+    def __init__(
+        self,
+        model_config: dict[str, Any],
+        transcribe_config: dict[str, Any] | None = None,
+        urlopen: Any = urllib.request.urlopen,
+        audio_converter: Any = None,
+    ) -> None:
+        del transcribe_config
+
+        configured_base_url = str(model_config.get("api_base_url") or "").strip()
+        self.api_base_url = str(
+            model_config.get("baidu_api_base_url")
+            or (
+                configured_base_url
+                if configured_base_url and configured_base_url != ALIYUN_ASR_DEFAULT_BASE_URL
+                else ""
+            )
+            or BAIDU_ASR_DEFAULT_API_BASE_URL
+        ).rstrip("/")
+        self.token_url = str(model_config.get("baidu_token_url") or BAIDU_ASR_DEFAULT_TOKEN_URL).strip()
+        self.api_key = _resolve_baidu_api_key(model_config)
+        self.secret_key = _resolve_config_value(
+            model_config,
+            "baidu_secret_key",
+            "baidu_secret_key_env",
+            BAIDU_ASR_DEFAULT_SECRET_KEY_ENV,
+        )
+        missing = [
+            name
+            for name, value in (
+                ("asr.model.baidu_api_key", self.api_key),
+                ("asr.model.baidu_secret_key", self.secret_key),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"{', '.join(missing)} is required for baidu provider")
+
+        self.timeout = float(
+            model_config.get("baidu_api_timeout_seconds")
+            or model_config.get("api_timeout_seconds")
+            or 60
+        )
+        self.dev_pid = int(model_config.get("baidu_dev_pid") or BAIDU_ASR_DEFAULT_DEV_PID)
+        self.rate = int(model_config.get("baidu_rate") or BAIDU_ASR_DEFAULT_RATE)
+        self.channel = int(model_config.get("baidu_channel") or BAIDU_ASR_DEFAULT_CHANNEL)
+        self.cuid = str(model_config.get("baidu_cuid") or BAIDU_ASR_DEFAULT_CUID)
+        self.chunk_seconds = _clamped_float(
+            model_config.get("baidu_chunk_seconds"),
+            BAIDU_ASR_DEFAULT_CHUNK_SECONDS,
+            1.0,
+            60.0,
+        )
+        self.max_chunk_bytes = int(
+            model_config.get("baidu_max_chunk_bytes") or BAIDU_ASR_DEFAULT_MAX_CHUNK_BYTES
+        )
+        self.urlopen = urlopen
+        self.audio_converter = audio_converter or _ffmpeg_wav_chunks
+        self._access_token = ""
+        self._token_expiry_monotonic = 0.0
+
+    def transcribe(
+        self,
+        audio: str | np.ndarray,
+        *,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        initial_prompt: str,
+        sample_rate: int = 16000,
+    ) -> TranscriptionResult:
+        del beam_size, vad_filter, initial_prompt
+
+        segments: list[TranscriptionSegment] = []
+        texts: list[str] = []
+        offset = 0.0
+        for chunk_bytes, duration, rate in self._audio_chunks(audio, sample_rate):
+            if len(chunk_bytes) > self.max_chunk_bytes:
+                raise ValueError(
+                    f"baidu asr chunk is {len(chunk_bytes)} bytes, exceeds limit "
+                    f"configured by asr.model.baidu_max_chunk_bytes={self.max_chunk_bytes}"
+                )
+            text = self._recognize_chunk(chunk_bytes, rate).strip()
+            end = offset + duration
+            if text:
+                texts.append(text)
+                segments.append(TranscriptionSegment(start=offset, end=end, text=text))
+            offset = end
+
+        return TranscriptionResult(
+            text="\n".join(texts).strip(),
+            language=language or "zh",
+            language_probability=1.0,
+            duration=offset,
+            segments=segments,
+        )
+
+    def _audio_chunks(self, audio: str | np.ndarray, sample_rate: int):
+        if isinstance(audio, np.ndarray):
+            yield from _ndarray_wav_chunks(audio, sample_rate, self.chunk_seconds)
+            return
+        if audio.startswith(("http://", "https://")):
+            raise ValueError(
+                "baidu short speech REST API requires local audio bytes; "
+                "configure a file-URL transcription flow for remote URLs"
+            )
+        yield from self.audio_converter(audio, self.rate, self.chunk_seconds)
+
+    def _recognize_chunk(self, chunk_bytes: bytes, rate: int) -> str:
+        payload = {
+            "format": "wav",
+            "rate": int(rate),
+            "channel": self.channel,
+            "cuid": self.cuid,
+            "token": self._access_token_value(),
+            "dev_pid": self.dev_pid,
+            "speech": base64.b64encode(chunk_bytes).decode("ascii"),
+            "len": len(chunk_bytes),
+        }
+        response = self._post_json(self.api_base_url + "/server_api", payload)
+        return _parse_baidu_asr_response(response)
+
+    def _access_token_value(self) -> str:
+        now = time.monotonic()
+        if self._access_token and now < self._token_expiry_monotonic:
+            return self._access_token
+
+        params = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": self.api_key,
+                "client_secret": self.secret_key,
+            }
+        )
+        request = urllib.request.Request(
+            self.token_url + "?" + params,
+            data=b"",
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        payload = self._read_json(request, "baidu token")
+        access_token = str(payload.get("access_token") or "").strip()
+        if not access_token:
+            raise RuntimeError(f"baidu token response did not include access_token: {payload}")
+
+        try:
+            expires_in = int(payload.get("expires_in") or 0)
+        except (TypeError, ValueError):
+            expires_in = 0
+        self._access_token = access_token
+        self._token_expiry_monotonic = now + max(60, expires_in - 60) if expires_in else now + 3600
+        return access_token
+
+    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        return self._read_json(request, "baidu asr")
+
+    def _read_json(self, request: urllib.request.Request, label: str) -> dict[str, Any]:
+        try:
+            with self.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"{label} returned HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"call {label} failed: {exc.reason}") from exc
+
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"decode {label} response failed") from exc
+
+
 def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
     explicit = str(config.get("api_key") or "").strip()
     if explicit:
@@ -769,6 +975,24 @@ def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
     if not env_name:
         return ""
     return os.getenv(env_name, "").strip()
+
+
+def _resolve_baidu_api_key(config: dict[str, Any]) -> str:
+    value = _resolve_config_value(
+        config,
+        "baidu_api_key",
+        "baidu_api_key_env",
+        BAIDU_ASR_DEFAULT_API_KEY_ENV,
+    )
+    if value:
+        return value
+    explicit = str(config.get("api_key") or "").strip()
+    if explicit:
+        return explicit
+    env_name = str(config.get("api_key_env") or "").strip()
+    if env_name and env_name != ALIYUN_ASR_DEFAULT_API_KEY_ENV:
+        return os.getenv(env_name, "").strip()
+    return ""
 
 
 def _resolve_config_value(config: dict[str, Any], value_key: str, env_key: str, default_env: str) -> str:
@@ -804,6 +1028,67 @@ def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
     return f"data:audio/wav;base64,{encoded}"
 
 
+def _ndarray_wav_chunks(audio: np.ndarray, sample_rate: int, chunk_seconds: float):
+    audio_array = audio.astype(np.float32)
+    samples_per_chunk = max(1, int(float(sample_rate) * chunk_seconds))
+    for offset in range(0, audio_array.size, samples_per_chunk):
+        chunk = audio_array[offset:offset + samples_per_chunk]
+        if chunk.size == 0:
+            continue
+        yield (
+            _ndarray_to_wav_bytes(chunk, sample_rate),
+            float(chunk.size) / float(sample_rate),
+            sample_rate,
+        )
+
+
+def _ffmpeg_wav_chunks(audio_path: str, rate: int, chunk_seconds: float):
+    with tempfile.TemporaryDirectory(prefix="vidwise-baidu-asr-") as tmpdir:
+        output_pattern = os.path.join(tmpdir, "chunk_%05d.wav")
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            audio_path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(rate),
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "segment",
+            "-segment_time",
+            f"{chunk_seconds:g}",
+            "-reset_timestamps",
+            "1",
+            output_pattern,
+        ]
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg is required for baidu ASR local-file transcoding") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg failed to prepare baidu ASR audio chunks: {detail}") from exc
+
+        chunk_paths = sorted(
+            os.path.join(tmpdir, name)
+            for name in os.listdir(tmpdir)
+            if name.endswith(".wav")
+        )
+        if not chunk_paths:
+            raise RuntimeError("ffmpeg did not produce any baidu ASR audio chunks")
+        for chunk_path in chunk_paths:
+            with open(chunk_path, "rb") as f:
+                chunk_bytes = f.read()
+            yield chunk_bytes, _wav_duration(chunk_path), rate
+
+
 def _wav_duration(path: str) -> float:
     try:
         with wave.open(path, "rb") as wf:
@@ -812,6 +1097,20 @@ def _wav_duration(path: str) -> float:
         return float(frames) / float(rate) if rate else 0.0
     except (wave.Error, OSError, EOFError):
         return 0.0
+
+
+def _parse_baidu_asr_response(payload: dict[str, Any]) -> str:
+    err_no = payload.get("err_no")
+    if err_no is not None and str(err_no) != "0":
+        raise RuntimeError(f"baidu asr returned err_no {err_no}: {payload}")
+    if "result" not in payload:
+        raise RuntimeError(f"baidu asr response did not include result: {payload}")
+    result = payload.get("result")
+    if isinstance(result, list):
+        return "\n".join(str(item).strip() for item in result if str(item).strip()).strip()
+    if isinstance(result, str):
+        return result.strip()
+    return ""
 
 
 def _parse_aliyun_asr_response(payload: dict[str, Any], requested_language: str) -> tuple[str, str]:
@@ -923,4 +1222,6 @@ def create_asr_backend(model_config: dict[str, Any],
         return AliyunASRBackend(model_config, transcribe_config)
     if provider in {"xfyun", "iflytek"}:
         return XFYunASRBackend(model_config, transcribe_config)
+    if provider in {"baidu", "baiducloud", "baidu-cloud"}:
+        return BaiduASRBackend(model_config, transcribe_config)
     raise ValueError(f"Unsupported ASR provider: {provider}")
