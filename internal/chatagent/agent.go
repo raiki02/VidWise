@@ -781,44 +781,71 @@ func extractJSON(content string, v interface{}) error {
 	}
 
 	start := -1
-	depth := 0
-	var openBracket, closeBracket rune
+	var stack []rune
+	inString := false
+	escaped := false
+	var firstErr error
 
 	for i, ch := range content {
 		if start == -1 {
 			if ch == '[' || ch == '{' {
 				start = i
-				depth = 1
 				if ch == '[' {
-					openBracket, closeBracket = '[', ']'
+					stack = []rune{']'}
 				} else {
-					openBracket, closeBracket = '{', '}'
+					stack = []rune{'}'}
 				}
 			}
 			continue
 		}
 
-		if ch == openBracket {
-			depth++
-		} else if ch == closeBracket {
-			depth--
-			if depth == 0 {
-				return json.Unmarshal([]byte(content[start:i+1]), v)
+		if inString {
+			if escaped {
+				escaped = false
+				continue
 			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
 		}
-		if openBracket == '[' && ch == '{' {
-			depth++
-		} else if openBracket == '[' && ch == '}' {
-			depth--
-		} else if openBracket == '{' && ch == '[' {
-			depth++
-		} else if openBracket == '{' && ch == ']' {
-			depth--
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || ch != stack[len(stack)-1] {
+				start = -1
+				stack = nil
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				if err := json.Unmarshal([]byte(content[start:i+1]), v); err == nil {
+					return nil
+				} else if firstErr == nil {
+					firstErr = err
+				}
+				start = -1
+			}
 		}
 	}
 
 	if start >= 0 && start < len(content) {
-		return json.Unmarshal([]byte(content[start:]), v)
+		if err := json.Unmarshal([]byte(content[start:]), v); err != nil {
+			return err
+		}
+		return nil
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	return fmt.Errorf("no JSON found in: %s", truncateString(content, 200))
 }

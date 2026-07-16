@@ -193,6 +193,25 @@ func TestEvaluateRetrievalParsesModelDecisionAndIncludesContext(t *testing.T) {
 	}
 }
 
+func TestExtractJSONIgnoresBracketsInsideStrings(t *testing.T) {
+	var got RetrievalEvaluation
+	content := `模型输出：
+{"should_retrieve": true, "reason": "用户问了 {视频} 的细节", "retrieval_query": "第 2 章 [安装]"}`
+
+	if err := extractJSON(content, &got); err != nil {
+		t.Fatalf("extractJSON: %v", err)
+	}
+	if !got.ShouldRetrieve {
+		t.Fatalf("ShouldRetrieve = false, want true")
+	}
+	if got.Reason != "用户问了 {视频} 的细节" {
+		t.Fatalf("Reason = %q", got.Reason)
+	}
+	if got.RetrievalQuery != "第 2 章 [安装]" {
+		t.Fatalf("RetrievalQuery = %q", got.RetrievalQuery)
+	}
+}
+
 func TestEvaluateRetrievalParsesHistoryAwareRetrievalQuery(t *testing.T) {
 	model := &fakeModel{response: `{"should_retrieve": true, "reason": "follow_up", "retrieval_query": "Markdown RAG 的具体操作步骤"}`}
 	agent := NewWithModelFactory(enabledLLMConfig(), rag.ContextConfig{}, func(context.Context, appconfig.LLMConfig) (ChatModel, error) {

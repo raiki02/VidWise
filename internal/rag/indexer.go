@@ -221,26 +221,7 @@ func (idx *Indexer) indexDocumentsScoped(ctx context.Context, docs []Document, u
 	for i, chunk := range chunks {
 		identity := newChunkIdentity(chunk, userID, sessionID, i)
 		identities[i] = identity
-		payload := map[string]*pb.Value{
-			qdrantclient.FieldChunkIdx:    {Kind: &pb.Value_IntegerValue{IntegerValue: int64(i)}},
-			qdrantclient.FieldText:        {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
-			qdrantclient.FieldSourceID:    {Kind: &pb.Value_StringValue{StringValue: identity.sourceID}},
-			qdrantclient.FieldDocumentID:  {Kind: &pb.Value_StringValue{StringValue: identity.documentID}},
-			qdrantclient.FieldContentHash: {Kind: &pb.Value_StringValue{StringValue: identity.contentHash}},
-			qdrantclient.FieldChunkID:     {Kind: &pb.Value_StringValue{StringValue: identity.chunkID}},
-		}
-		for key, value := range chunk.Metadata {
-			if key == "" || value == "" {
-				continue
-			}
-			payload[key] = metadataPayloadValue(key, value)
-		}
-		if userID != "" {
-			payload[qdrantclient.FieldUserID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: userID}}
-		}
-		if sessionID != "" {
-			payload[qdrantclient.FieldSessionID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: sessionID}}
-		}
+		payload := buildChunkPayload(chunk, identity, i, userID, sessionID)
 		points[i] = &pb.PointStruct{
 			Id: &pb.PointId{
 				PointIdOptions: &pb.PointId_Uuid{Uuid: stablePointUUID(identity.chunkID)},
@@ -323,6 +304,51 @@ func chunkDocumentsWithConfig(docs []Document, cfg ChunkConfig) []documentChunk 
 		}
 	}
 	return out
+}
+
+func buildChunkPayload(chunk documentChunk, identity chunkIdentity, chunkIndex int, userID, sessionID string) map[string]*pb.Value {
+	payload := map[string]*pb.Value{
+		qdrantclient.FieldChunkIdx:    {Kind: &pb.Value_IntegerValue{IntegerValue: int64(chunkIndex)}},
+		qdrantclient.FieldText:        {Kind: &pb.Value_StringValue{StringValue: chunk.Text}},
+		qdrantclient.FieldSourceID:    {Kind: &pb.Value_StringValue{StringValue: identity.sourceID}},
+		qdrantclient.FieldDocumentID:  {Kind: &pb.Value_StringValue{StringValue: identity.documentID}},
+		qdrantclient.FieldContentHash: {Kind: &pb.Value_StringValue{StringValue: identity.contentHash}},
+		qdrantclient.FieldChunkID:     {Kind: &pb.Value_StringValue{StringValue: identity.chunkID}},
+	}
+	for key, value := range chunk.Metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" || isProtectedChunkPayloadField(key) {
+			continue
+		}
+		payload[key] = metadataPayloadValue(key, value)
+	}
+
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	if userID != "" {
+		payload[qdrantclient.FieldUserID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: userID}}
+	}
+	if sessionID != "" {
+		payload[qdrantclient.FieldSessionID] = &pb.Value{Kind: &pb.Value_StringValue{StringValue: sessionID}}
+	}
+	return payload
+}
+
+func isProtectedChunkPayloadField(key string) bool {
+	switch key {
+	case qdrantclient.FieldText,
+		qdrantclient.FieldChunkIdx,
+		qdrantclient.FieldSourceID,
+		qdrantclient.FieldDocumentID,
+		qdrantclient.FieldContentHash,
+		qdrantclient.FieldChunkID,
+		qdrantclient.FieldUserID,
+		qdrantclient.FieldSessionID:
+		return true
+	default:
+		return false
+	}
 }
 
 func newChunkIdentity(chunk documentChunk, userID, sessionID string, chunkIndex int) chunkIdentity {
@@ -521,6 +547,7 @@ func stablePointUUID(chunkID string) string {
 }
 
 func metadataPayloadValue(key, value string) *pb.Value {
+	value = strings.TrimSpace(value)
 	if isIntegerMetadataField(key) {
 		if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
 			return &pb.Value{Kind: &pb.Value_IntegerValue{IntegerValue: parsed}}
