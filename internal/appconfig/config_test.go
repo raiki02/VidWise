@@ -40,6 +40,36 @@ func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	if cfg.ASR.Model.MaxFileBytes != 7_500_000 {
 		t.Fatalf("ASR MaxFileBytes = %d, want 7500000", cfg.ASR.Model.MaxFileBytes)
 	}
+	if cfg.ASR.Model.XFYunAPIBaseURL != "https://raasr.xfyun.cn/v2" {
+		t.Fatalf("ASR XFYunAPIBaseURL = %q", cfg.ASR.Model.XFYunAPIBaseURL)
+	}
+	if cfg.ASR.Model.XFYunAppIDEnv != "XFYUN_APP_ID" {
+		t.Fatalf("ASR XFYunAppIDEnv = %q, want XFYUN_APP_ID", cfg.ASR.Model.XFYunAppIDEnv)
+	}
+	if cfg.ASR.Model.XFYunAccessKeyIDEnv != "XFYUN_API_KEY" {
+		t.Fatalf("ASR XFYunAccessKeyIDEnv = %q, want XFYUN_API_KEY", cfg.ASR.Model.XFYunAccessKeyIDEnv)
+	}
+	if cfg.ASR.Model.XFYunAccessKeySecretEnv != "XFYUN_API_SECRET" {
+		t.Fatalf("ASR XFYunAccessKeySecretEnv = %q, want XFYUN_API_SECRET", cfg.ASR.Model.XFYunAccessKeySecretEnv)
+	}
+	if cfg.ASR.Model.XFYunLanguage != "autodialect" {
+		t.Fatalf("ASR XFYunLanguage = %q, want autodialect", cfg.ASR.Model.XFYunLanguage)
+	}
+	if cfg.ASR.Model.XFYunResultType != "transfer" {
+		t.Fatalf("ASR XFYunResultType = %q, want transfer", cfg.ASR.Model.XFYunResultType)
+	}
+	if cfg.ASR.Model.XFYunAPITimeoutSeconds != 300 {
+		t.Fatalf("ASR XFYunAPITimeoutSeconds = %d, want 300", cfg.ASR.Model.XFYunAPITimeoutSeconds)
+	}
+	if cfg.ASR.Model.XFYunPollIntervalSeconds != 3 {
+		t.Fatalf("ASR XFYunPollIntervalSeconds = %d, want 3", cfg.ASR.Model.XFYunPollIntervalSeconds)
+	}
+	if cfg.ASR.Model.XFYunMaxPollSeconds != 600 {
+		t.Fatalf("ASR XFYunMaxPollSeconds = %d, want 600", cfg.ASR.Model.XFYunMaxPollSeconds)
+	}
+	if cfg.ASR.Model.XFYunMaxFileBytes != 500_000_000 {
+		t.Fatalf("ASR XFYunMaxFileBytes = %d, want 500000000", cfg.ASR.Model.XFYunMaxFileBytes)
+	}
 	if cfg.Embedding.Provider != "local" {
 		t.Fatalf("Embedding Provider = %q, want local", cfg.Embedding.Provider)
 	}

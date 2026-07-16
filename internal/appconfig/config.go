@@ -48,18 +48,32 @@ type ASRConfig struct {
 }
 
 type ASRModelConfig struct {
-	Provider          string `yaml:"provider"`
-	Name              string `yaml:"name"`
-	Device            string `yaml:"device"`
-	TorchDType        string `yaml:"torch_dtype"`
-	ComputeType       string `yaml:"compute_type"`
-	CPUThreads        int    `yaml:"cpu_threads"`
-	Workers           int    `yaml:"workers"`
-	APIBaseURL        string `yaml:"api_base_url"`
-	APIKey            string `yaml:"api_key"`
-	APIKeyEnv         string `yaml:"api_key_env"`
-	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
-	MaxFileBytes      int64  `yaml:"max_file_bytes"`
+	Provider                  string `yaml:"provider"`
+	Name                      string `yaml:"name"`
+	Device                    string `yaml:"device"`
+	TorchDType                string `yaml:"torch_dtype"`
+	ComputeType               string `yaml:"compute_type"`
+	CPUThreads                int    `yaml:"cpu_threads"`
+	Workers                   int    `yaml:"workers"`
+	APIBaseURL                string `yaml:"api_base_url"`
+	APIKey                    string `yaml:"api_key"`
+	APIKeyEnv                 string `yaml:"api_key_env"`
+	APITimeoutSeconds         int    `yaml:"api_timeout_seconds"`
+	MaxFileBytes              int64  `yaml:"max_file_bytes"`
+	XFYunAPIBaseURL           string `yaml:"xfyun_api_base_url"`
+	XFYunAppID                string `yaml:"xfyun_app_id"`
+	XFYunAppIDEnv             string `yaml:"xfyun_app_id_env"`
+	XFYunAccessKeyID          string `yaml:"xfyun_access_key_id"`
+	XFYunAccessKeyIDEnv       string `yaml:"xfyun_access_key_id_env"`
+	XFYunAccessKeySecret      string `yaml:"xfyun_access_key_secret"`
+	XFYunAccessKeySecretEnv   string `yaml:"xfyun_access_key_secret_env"`
+	XFYunLanguage             string `yaml:"xfyun_language"`
+	XFYunResultType           string `yaml:"xfyun_result_type"`
+	XFYunAPITimeoutSeconds    int    `yaml:"xfyun_api_timeout_seconds"`
+	XFYunPollIntervalSeconds  int    `yaml:"xfyun_poll_interval_seconds"`
+	XFYunMaxPollSeconds       int    `yaml:"xfyun_max_poll_seconds"`
+	XFYunMaxFileBytes         int64  `yaml:"xfyun_max_file_bytes"`
+	XFYunDurationCheckDisable bool   `yaml:"xfyun_duration_check_disable"`
 }
 
 type ASRTranscribeConfig struct {
@@ -265,6 +279,36 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ASR.Model.MaxFileBytes == 0 {
 		c.ASR.Model.MaxFileBytes = 7_500_000
+	}
+	if c.ASR.Model.XFYunAPIBaseURL == "" {
+		c.ASR.Model.XFYunAPIBaseURL = "https://raasr.xfyun.cn/v2"
+	}
+	if c.ASR.Model.XFYunAppIDEnv == "" {
+		c.ASR.Model.XFYunAppIDEnv = "XFYUN_APP_ID"
+	}
+	if c.ASR.Model.XFYunAccessKeyIDEnv == "" {
+		c.ASR.Model.XFYunAccessKeyIDEnv = "XFYUN_API_KEY"
+	}
+	if c.ASR.Model.XFYunAccessKeySecretEnv == "" {
+		c.ASR.Model.XFYunAccessKeySecretEnv = "XFYUN_API_SECRET"
+	}
+	if c.ASR.Model.XFYunLanguage == "" {
+		c.ASR.Model.XFYunLanguage = "autodialect"
+	}
+	if c.ASR.Model.XFYunResultType == "" {
+		c.ASR.Model.XFYunResultType = "transfer"
+	}
+	if c.ASR.Model.XFYunAPITimeoutSeconds == 0 {
+		c.ASR.Model.XFYunAPITimeoutSeconds = 300
+	}
+	if c.ASR.Model.XFYunPollIntervalSeconds == 0 {
+		c.ASR.Model.XFYunPollIntervalSeconds = 3
+	}
+	if c.ASR.Model.XFYunMaxPollSeconds == 0 {
+		c.ASR.Model.XFYunMaxPollSeconds = 600
+	}
+	if c.ASR.Model.XFYunMaxFileBytes == 0 {
+		c.ASR.Model.XFYunMaxFileBytes = 500_000_000
 	}
 	if c.ASR.Transcribe.BeamSize == 0 {
 		c.ASR.Transcribe.BeamSize = 5
@@ -478,9 +522,9 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid asr.timeout: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.ASR.Model.Provider)) {
-	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope":
+	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope", "xfyun", "iflytek":
 	default:
-		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope")
+		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope, xfyun, iflytek")
 	}
 	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)

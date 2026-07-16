@@ -19,9 +19,10 @@ asr:
   language: "zh"
   model:
     # Local providers: whisper, faster-whisper
-    # Cloud providers: aliyun, dashscope
+    # Cloud providers: aliyun, dashscope, xfyun, iflytek
     provider: "whisper"
     # Local: model path / HF model ID. Aliyun: qwen3-asr-flash.
+    # XFYun ignores this field and uses the recording-file transcription API.
     name: "./models/whisper-small"
     device: "auto"
     torch_dtype: "auto"
@@ -36,6 +37,21 @@ asr:
     # Qwen-ASR OpenAI-compatible local-file calls encode audio as base64.
     # Use OSS/file URL async transcription for larger production files.
     max_file_bytes: 7500000
+    # Used only when provider is xfyun/iflytek.
+    xfyun_api_base_url: "https://raasr.xfyun.cn/v2"
+    xfyun_app_id: ""
+    xfyun_app_id_env: "XFYUN_APP_ID"
+    xfyun_access_key_id: ""
+    xfyun_access_key_id_env: "XFYUN_API_KEY"
+    xfyun_access_key_secret: ""
+    xfyun_access_key_secret_env: "XFYUN_API_SECRET"
+    xfyun_language: "autodialect"
+    xfyun_result_type: "transfer"
+    xfyun_api_timeout_seconds: 300
+    xfyun_poll_interval_seconds: 3
+    xfyun_max_poll_seconds: 600
+    xfyun_max_file_bytes: 500000000
+    xfyun_duration_check_disable: true
   transcribe:
     beam_size: 5
     vad_filter: true
