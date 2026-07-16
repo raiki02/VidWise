@@ -48,13 +48,18 @@ type ASRConfig struct {
 }
 
 type ASRModelConfig struct {
-	Provider    string `yaml:"provider"`
-	Name        string `yaml:"name"`
-	Device      string `yaml:"device"`
-	TorchDType  string `yaml:"torch_dtype"`
-	ComputeType string `yaml:"compute_type"`
-	CPUThreads  int    `yaml:"cpu_threads"`
-	Workers     int    `yaml:"workers"`
+	Provider          string `yaml:"provider"`
+	Name              string `yaml:"name"`
+	Device            string `yaml:"device"`
+	TorchDType        string `yaml:"torch_dtype"`
+	ComputeType       string `yaml:"compute_type"`
+	CPUThreads        int    `yaml:"cpu_threads"`
+	Workers           int    `yaml:"workers"`
+	APIBaseURL        string `yaml:"api_base_url"`
+	APIKey            string `yaml:"api_key"`
+	APIKeyEnv         string `yaml:"api_key_env"`
+	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
+	MaxFileBytes      int64  `yaml:"max_file_bytes"`
 }
 
 type ASRTranscribeConfig struct {
@@ -148,10 +153,17 @@ type RAGContextConfig struct {
 }
 
 type EmbeddingConfig struct {
-	BaseURL string `yaml:"base_url"`
-	Model   string `yaml:"model"`
-	Device  string `yaml:"device"`
-	Timeout string `yaml:"timeout"`
+	BaseURL           string `yaml:"base_url"`
+	Provider          string `yaml:"provider"`
+	Model             string `yaml:"model"`
+	Device            string `yaml:"device"`
+	Timeout           string `yaml:"timeout"`
+	APIBaseURL        string `yaml:"api_base_url"`
+	APIKey            string `yaml:"api_key"`
+	APIKeyEnv         string `yaml:"api_key_env"`
+	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
+	Dimensions        int    `yaml:"dimensions"`
+	BatchSize         int    `yaml:"batch_size"`
 }
 
 type RerankConfig struct {
@@ -241,6 +253,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ASR.Model.Workers == 0 {
 		c.ASR.Model.Workers = 1
+	}
+	if c.ASR.Model.APIBaseURL == "" {
+		c.ASR.Model.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
+	if c.ASR.Model.APIKeyEnv == "" {
+		c.ASR.Model.APIKeyEnv = "DASHSCOPE_API_KEY"
+	}
+	if c.ASR.Model.APITimeoutSeconds == 0 {
+		c.ASR.Model.APITimeoutSeconds = 300
+	}
+	if c.ASR.Model.MaxFileBytes == 0 {
+		c.ASR.Model.MaxFileBytes = 7_500_000
 	}
 	if c.ASR.Transcribe.BeamSize == 0 {
 		c.ASR.Transcribe.BeamSize = 5
@@ -348,6 +372,9 @@ func (c *Config) applyDefaults() {
 	if c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "http://localhost:8003"
 	}
+	if c.Embedding.Provider == "" {
+		c.Embedding.Provider = "local"
+	}
 	if c.Embedding.Model == "" {
 		c.Embedding.Model = "qwen"
 	}
@@ -356,6 +383,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Embedding.Timeout == "" {
 		c.Embedding.Timeout = "2m"
+	}
+	if c.Embedding.APIBaseURL == "" {
+		c.Embedding.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
+	if c.Embedding.APIKeyEnv == "" {
+		c.Embedding.APIKeyEnv = "DASHSCOPE_API_KEY"
+	}
+	if c.Embedding.APITimeoutSeconds == 0 {
+		c.Embedding.APITimeoutSeconds = 120
+	}
+	if c.Embedding.BatchSize == 0 {
+		c.Embedding.BatchSize = 10
 	}
 	// Rerank defaults
 	if c.Rerank.BaseURL == "" {
@@ -438,8 +477,21 @@ func (c Config) validate() error {
 	if _, err := c.ASR.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid asr.timeout: %w", err)
 	}
+	switch strings.ToLower(strings.TrimSpace(c.ASR.Model.Provider)) {
+	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope":
+	default:
+		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope")
+	}
 	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Embedding.Provider)) {
+	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "aliyun", "dashscope":
+	default:
+		return fmt.Errorf("embedding.provider must be one of: local, sentence-transformers, huggingface, aliyun, dashscope")
+	}
+	if c.Embedding.BatchSize <= 0 {
+		return errors.New("embedding.batch_size must be greater than 0")
 	}
 	if c.RAG.Retrieval.SearchTopK <= 0 {
 		return errors.New("rag.retrieval.search_top_k must be greater than 0")

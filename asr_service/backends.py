@@ -1,3 +1,11 @@
+import base64
+import io
+import json
+import mimetypes
+import os
+import urllib.error
+import urllib.request
+import wave
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -7,6 +15,12 @@ import numpy as np
 DEFAULT_WHISPER_MAX_NEW_TOKENS = 448
 DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS = 224
 MIN_WHISPER_MAX_NEW_TOKENS = 1
+ALIYUN_ASR_DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+ALIYUN_ASR_DEFAULT_MODEL = "qwen3-asr-flash"
+ALIYUN_ASR_DEFAULT_API_KEY_ENV = "DASHSCOPE_API_KEY"
+# Base64 grows payload size by roughly 4/3. Keep local-file requests safely under
+# the 10 MB Qwen3-ASR-Flash input cap.
+ALIYUN_ASR_DEFAULT_MAX_FILE_BYTES = 7_500_000
 
 
 @dataclass
@@ -382,6 +396,196 @@ class FasterWhisperBackend:
         )
 
 
+class AliyunASRBackend:
+    """Alibaba Cloud Model Studio Qwen-ASR via the OpenAI-compatible API."""
+
+    def __init__(
+        self,
+        model_config: dict[str, Any],
+        transcribe_config: dict[str, Any] | None = None,
+        urlopen: Any = urllib.request.urlopen,
+    ) -> None:
+        self.model_name = _aliyun_model_name(model_config.get("name"))
+        self.api_base_url = str(
+            model_config.get("api_base_url")
+            or model_config.get("base_url")
+            or ALIYUN_ASR_DEFAULT_BASE_URL
+        ).rstrip("/")
+        self.api_key = _resolve_api_key(model_config, ALIYUN_ASR_DEFAULT_API_KEY_ENV)
+        if not self.api_key:
+            raise ValueError("asr.model.api_key or asr.model.api_key_env is required for aliyun provider")
+
+        self.timeout = float(model_config.get("api_timeout_seconds") or 300)
+        self.max_file_bytes = int(model_config.get("max_file_bytes") or ALIYUN_ASR_DEFAULT_MAX_FILE_BYTES)
+        self.enable_itn = bool((transcribe_config or {}).get("enable_itn", model_config.get("enable_itn", False)))
+        self.urlopen = urlopen
+
+    def transcribe(
+        self,
+        audio: str | np.ndarray,
+        *,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        initial_prompt: str,
+        sample_rate: int = 16000,
+    ) -> TranscriptionResult:
+        del beam_size, vad_filter
+
+        audio_input, duration = self._audio_input(audio, sample_rate)
+        messages: list[dict[str, Any]] = []
+        if initial_prompt:
+            messages.append({"role": "system", "content": initial_prompt})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": audio_input},
+                    }
+                ],
+            }
+        )
+
+        asr_options: dict[str, Any] = {"enable_itn": self.enable_itn}
+        if language and language.lower() != "auto":
+            asr_options["language"] = language
+
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "stream": False,
+            "asr_options": asr_options,
+        }
+        response = self._post_json("/chat/completions", payload)
+        text, detected_language = _parse_aliyun_asr_response(response, language)
+        duration = float((response.get("usage") or {}).get("seconds") or duration)
+
+        segments = [TranscriptionSegment(start=0.0, end=duration, text=text)] if text else []
+        return TranscriptionResult(
+            text=text,
+            language=detected_language or language or "auto",
+            language_probability=1.0,
+            duration=duration,
+            segments=segments,
+        )
+
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self.api_base_url + path,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with self.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"aliyun asr returned HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"call aliyun asr failed: {exc.reason}") from exc
+
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("decode aliyun asr response failed") from exc
+
+    def _audio_input(self, audio: str | np.ndarray, sample_rate: int) -> tuple[str, float]:
+        if isinstance(audio, np.ndarray):
+            return _ndarray_to_wav_data_url(audio, sample_rate), float(audio.size) / float(sample_rate)
+
+        if audio.startswith(("http://", "https://", "oss://")):
+            return audio, 0.0
+
+        stat = os.stat(audio)
+        if stat.st_size > self.max_file_bytes:
+            raise ValueError(
+                f"audio file is {stat.st_size} bytes, exceeds aliyun base64 limit "
+                f"configured by asr.model.max_file_bytes={self.max_file_bytes}"
+            )
+        mime_type = mimetypes.guess_type(audio)[0] or "application/octet-stream"
+        with open(audio, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}", _wav_duration(audio)
+
+
+def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
+    explicit = str(config.get("api_key") or "").strip()
+    if explicit:
+        return explicit
+    env_name = str(config.get("api_key_env") or default_env).strip()
+    if not env_name:
+        return ""
+    return os.getenv(env_name, "").strip()
+
+
+def _aliyun_model_name(raw_name: Any) -> str:
+    name = str(raw_name or "").strip()
+    if not name or name.startswith((".", "/")):
+        return ALIYUN_ASR_DEFAULT_MODEL
+    return name
+
+
+def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
+    audio_i16 = (np.clip(audio.astype(np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_i16.tobytes())
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:audio/wav;base64,{encoded}"
+
+
+def _wav_duration(path: str) -> float:
+    try:
+        with wave.open(path, "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+        return float(frames) / float(rate) if rate else 0.0
+    except (wave.Error, OSError, EOFError):
+        return 0.0
+
+
+def _parse_aliyun_asr_response(payload: dict[str, Any], requested_language: str) -> tuple[str, str]:
+    choices = payload.get("choices") or []
+    if not choices:
+        raise RuntimeError("aliyun asr response did not include choices")
+
+    message = choices[0].get("message") or {}
+    text = _message_content_text(message.get("content")).strip()
+    annotations = message.get("annotations") or []
+    detected_language = requested_language or "auto"
+    for annotation in annotations:
+        if isinstance(annotation, dict) and annotation.get("language"):
+            detected_language = str(annotation["language"])
+            break
+    return text, detected_language
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                value = item.get("text") or item.get("content")
+                if value:
+                    parts.append(str(value))
+        return "".join(parts)
+    return ""
+
+
 def create_asr_backend(model_config: dict[str, Any],
                        transcribe_config: dict[str, Any] | None = None,
                        vad_model: Any = None,
@@ -391,4 +595,6 @@ def create_asr_backend(model_config: dict[str, Any],
         return WhisperBackend(model_config, transcribe_config, vad_model, vad_get_speech_ts)
     if provider in {"faster-whisper", "faster_whisper"}:
         return FasterWhisperBackend(model_config, transcribe_config)
+    if provider in {"aliyun", "dashscope"}:
+        return AliyunASRBackend(model_config, transcribe_config)
     raise ValueError(f"Unsupported ASR provider: {provider}")

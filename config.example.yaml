@@ -12,17 +12,30 @@ download:
   cookies_path: ""
 
 asr:
+  # Gateway -> local ASR adapter service. Keep this local even when the adapter
+  # itself calls Alibaba Cloud.
   base_url: "http://localhost:8001"
   timeout: "10m"
   language: "zh"
   model:
+    # Local providers: whisper, faster-whisper
+    # Cloud providers: aliyun, dashscope
     provider: "whisper"
+    # Local: model path / HF model ID. Aliyun: qwen3-asr-flash.
     name: "./models/whisper-small"
     device: "auto"
     torch_dtype: "auto"
     compute_type: "default"
     cpu_threads: 0
     workers: 1
+    # Used only when provider is aliyun/dashscope.
+    api_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: ""
+    api_key_env: "DASHSCOPE_API_KEY"
+    api_timeout_seconds: 300
+    # Qwen-ASR OpenAI-compatible local-file calls encode audio as base64.
+    # Use OSS/file URL async transcription for larger production files.
+    max_file_bytes: 7500000
   transcribe:
     beam_size: 5
     vad_filter: true
@@ -134,14 +147,27 @@ rag:
     max_runes: 12000
 
 embedding:
+  # Gateway -> local embedding adapter service. Keep this local even when the
+  # adapter itself calls Alibaba Cloud.
   base_url: "http://localhost:8003"
-  # Model shortcut (qwen, bge, bge-large) or local path.
+  # local/sentence-transformers loads local or HF models; aliyun/dashscope calls
+  # Alibaba Cloud Model Studio embeddings.
+  provider: "local"
+  # Local: model shortcut (qwen, bge, bge-large) or local path.
+  # Aliyun: text-embedding-v4.
   # Download first:
   #   huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
   #   huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
   model: "qwen"
   device: "auto"
   timeout: "2m"
+  # Used only when provider is aliyun/dashscope.
+  api_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key: ""
+  api_key_env: "DASHSCOPE_API_KEY"
+  api_timeout_seconds: 120
+  dimensions: 1024
+  batch_size: 10
 
 rerank:
   base_url: "http://localhost:8003"

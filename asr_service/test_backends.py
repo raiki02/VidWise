@@ -1,6 +1,10 @@
+import json
+import os
 import unittest
 
-from asr_service.backends import _build_whisper_generation_kwargs
+import numpy as np
+
+from asr_service.backends import AliyunASRBackend, _build_whisper_generation_kwargs
 
 
 class _FakeConfig:
@@ -68,6 +72,90 @@ class WhisperGenerationKwargsTest(unittest.TestCase):
 
         self.assertLessEqual(3 + len(kwargs["prompt_ids"]) + kwargs["max_new_tokens"], 16)
         self.assertGreaterEqual(kwargs["max_new_tokens"], 1)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
+class AliyunASRBackendTest(unittest.TestCase):
+    def test_transcribe_posts_audio_to_openai_compatible_endpoint(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "测试文本",
+                                "annotations": [{"language": "zh"}],
+                            }
+                        }
+                    ],
+                    "usage": {"seconds": 1.25},
+                }
+            )
+
+        backend = AliyunASRBackend(
+            {
+                "provider": "aliyun",
+                "name": "qwen3-asr-flash",
+                "api_base_url": "https://dashscope.example.com/compatible-mode/v1",
+                "api_key": "sk-test",
+            },
+            urlopen=fake_urlopen,
+        )
+
+        result = backend.transcribe(
+            np.zeros(1600, dtype=np.float32),
+            language="zh",
+            beam_size=5,
+            vad_filter=False,
+            initial_prompt="领域词",
+            sample_rate=16000,
+        )
+
+        self.assertEqual(result.text, "测试文本")
+        self.assertEqual(result.language, "zh")
+        self.assertEqual(result.duration, 1.25)
+        self.assertEqual(len(result.segments), 1)
+        request, timeout = requests[0]
+        self.assertEqual(timeout, 300)
+        self.assertEqual(request.get_full_url(), "https://dashscope.example.com/compatible-mode/v1/chat/completions")
+        self.assertEqual(dict(request.header_items())["Authorization"], "Bearer sk-test")
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["model"], "qwen3-asr-flash")
+        self.assertEqual(body["messages"][0]["role"], "system")
+        audio_data = body["messages"][1]["content"][0]["input_audio"]["data"]
+        self.assertTrue(audio_data.startswith("data:audio/wav;base64,"))
+        self.assertEqual(body["asr_options"]["language"], "zh")
+
+    def test_api_key_can_come_from_environment(self) -> None:
+        old_value = os.environ.get("DASHSCOPE_API_KEY")
+        os.environ["DASHSCOPE_API_KEY"] = "sk-env"
+        try:
+            backend = AliyunASRBackend(
+                {"provider": "aliyun", "api_base_url": "https://example.com/v1"},
+                urlopen=lambda request, timeout: _FakeHTTPResponse({"choices": [{"message": {"content": ""}}]}),
+            )
+            self.assertEqual(backend.api_key, "sk-env")
+        finally:
+            if old_value is None:
+                os.environ.pop("DASHSCOPE_API_KEY", None)
+            else:
+                os.environ["DASHSCOPE_API_KEY"] = old_value
 
 
 if __name__ == "__main__":

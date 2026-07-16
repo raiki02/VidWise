@@ -1,10 +1,12 @@
 # ASR Service (Streaming)
 
-This service exposes ASR HTTP and streaming WebSocket endpoints backed by OpenAI Whisper via transformers.
+This service exposes ASR HTTP and streaming WebSocket endpoints backed by local
+Whisper/Faster-Whisper models, or a cloud ASR backend such as Alibaba Cloud
+Model Studio Qwen-ASR.
 
 ## Backend
 
-The service uses `transformers` with the Whisper model:
+Local Whisper example:
 
 ```yaml
 asr:
@@ -16,6 +18,27 @@ asr:
 ```
 
 The `name` supports any HuggingFace Whisper model ID or local path (e.g., `"openai/whisper-small"`, `"openai/whisper-large-v3"`, or `"./models/whisper-small"`).
+
+Alibaba Cloud Qwen-ASR example:
+
+```yaml
+asr:
+  # Gateway -> this local ASR service.
+  base_url: "http://localhost:8001"
+  model:
+    provider: "aliyun"
+    name: "qwen3-asr-flash"
+    api_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: ""
+    api_key_env: "DASHSCOPE_API_KEY"
+    max_file_bytes: 7500000
+  stream:
+    enabled: false
+```
+
+The Aliyun backend keeps the same `/transcribe` response shape. Local files are
+sent to Qwen-ASR as base64 data URLs, so use small extracted audio files or move
+large production files to an OSS/file-URL async transcription flow.
 
 ## Response Shape
 
@@ -58,6 +81,6 @@ python asr_service/stream_client.py --ws-url ws://127.0.0.1:8001/stream --wav ./
 
 ## Notes
 
-- On first run, the Whisper model weights are downloaded from Hugging Face (or loaded from the local path).
-- The Silero VAD weights are downloaded via `torch.hub` on first use.
+- On first run, local Whisper model weights are downloaded from Hugging Face (or loaded from the local path).
+- The Silero VAD weights are downloaded via `torch.hub` on first use for local streaming mode.
 - Adjust stream settings in `config.yaml` under `asr.stream`.
