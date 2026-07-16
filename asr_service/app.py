@@ -37,6 +37,20 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "api_key_env": "DASHSCOPE_API_KEY",
         "api_timeout_seconds": 300,
         "max_file_bytes": 7500000,
+        "xfyun_api_base_url": "https://raasr.xfyun.cn/v2",
+        "xfyun_app_id": "",
+        "xfyun_app_id_env": "XFYUN_APP_ID",
+        "xfyun_access_key_id": "",
+        "xfyun_access_key_id_env": "XFYUN_API_KEY",
+        "xfyun_access_key_secret": "",
+        "xfyun_access_key_secret_env": "XFYUN_API_SECRET",
+        "xfyun_language": "autodialect",
+        "xfyun_result_type": "transfer",
+        "xfyun_api_timeout_seconds": 300,
+        "xfyun_poll_interval_seconds": 3,
+        "xfyun_max_poll_seconds": 600,
+        "xfyun_max_file_bytes": 500000000,
+        "xfyun_duration_check_disable": True,
     },
     "transcribe": {
         "beam_size": 5,
@@ -161,7 +175,7 @@ def load_model() -> None:
         provider = str(model_config.get("provider") or "whisper").strip().lower()
         stream_config = asr_config["stream"]
         vad_get_speech_ts = None
-        if stream_config.get("enabled", True) and provider not in {"aliyun", "dashscope"}:
+        if stream_config.get("enabled", True) and provider not in {"aliyun", "dashscope", "xfyun", "iflytek"}:
             logger.info("loading Silero VAD model")
             vad_model, vad_utils = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
@@ -429,6 +443,16 @@ def _event_to_samples(value: Any, sample_rate: int) -> int:
     return int(value)
 
 
+def _bool_env_or_cfg(env_name: str, cfg: dict[str, Any], cfg_key: str, default: bool) -> bool:
+    raw_env = os.getenv(env_name, "")
+    if raw_env != "":
+        return raw_env.strip().lower() in {"1", "true", "yes", "on"}
+    raw_cfg = cfg.get(cfg_key, default)
+    if isinstance(raw_cfg, str):
+        return raw_cfg.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(raw_cfg)
+
+
 def _create_vad_iterator(sample_rate: int, vad_config: dict[str, Any]) -> Any:
     if vad_iterator_cls is None or vad_model is None:
         raise RuntimeError("VAD model is not loaded")
@@ -527,6 +551,57 @@ def load_asr_config() -> dict[str, Any]:
     )
     model_config["max_file_bytes"] = int(
         os.getenv("ASR_MAX_FILE_BYTES", model_config.get("max_file_bytes", 7500000))
+    )
+    model_config["xfyun_api_base_url"] = os.getenv(
+        "ASR_XFYUN_API_BASE_URL",
+        model_config.get("xfyun_api_base_url", "https://raasr.xfyun.cn/v2"),
+    )
+    model_config["xfyun_app_id"] = os.getenv("ASR_XFYUN_APP_ID", model_config.get("xfyun_app_id", ""))
+    model_config["xfyun_app_id_env"] = os.getenv(
+        "ASR_XFYUN_APP_ID_ENV",
+        model_config.get("xfyun_app_id_env", "XFYUN_APP_ID"),
+    )
+    model_config["xfyun_access_key_id"] = os.getenv(
+        "ASR_XFYUN_ACCESS_KEY_ID",
+        model_config.get("xfyun_access_key_id", ""),
+    )
+    model_config["xfyun_access_key_id_env"] = os.getenv(
+        "ASR_XFYUN_ACCESS_KEY_ID_ENV",
+        model_config.get("xfyun_access_key_id_env", "XFYUN_API_KEY"),
+    )
+    model_config["xfyun_access_key_secret"] = os.getenv(
+        "ASR_XFYUN_ACCESS_KEY_SECRET",
+        model_config.get("xfyun_access_key_secret", ""),
+    )
+    model_config["xfyun_access_key_secret_env"] = os.getenv(
+        "ASR_XFYUN_ACCESS_KEY_SECRET_ENV",
+        model_config.get("xfyun_access_key_secret_env", "XFYUN_API_SECRET"),
+    )
+    model_config["xfyun_language"] = os.getenv(
+        "ASR_XFYUN_LANGUAGE",
+        model_config.get("xfyun_language", "autodialect"),
+    )
+    model_config["xfyun_result_type"] = os.getenv(
+        "ASR_XFYUN_RESULT_TYPE",
+        model_config.get("xfyun_result_type", "transfer"),
+    )
+    model_config["xfyun_api_timeout_seconds"] = float(
+        os.getenv("ASR_XFYUN_API_TIMEOUT_SECONDS", model_config.get("xfyun_api_timeout_seconds", 300))
+    )
+    model_config["xfyun_poll_interval_seconds"] = float(
+        os.getenv("ASR_XFYUN_POLL_INTERVAL_SECONDS", model_config.get("xfyun_poll_interval_seconds", 3))
+    )
+    model_config["xfyun_max_poll_seconds"] = float(
+        os.getenv("ASR_XFYUN_MAX_POLL_SECONDS", model_config.get("xfyun_max_poll_seconds", 600))
+    )
+    model_config["xfyun_max_file_bytes"] = int(
+        os.getenv("ASR_XFYUN_MAX_FILE_BYTES", model_config.get("xfyun_max_file_bytes", 500000000))
+    )
+    model_config["xfyun_duration_check_disable"] = _bool_env_or_cfg(
+        "ASR_XFYUN_DURATION_CHECK_DISABLE",
+        model_config,
+        "xfyun_duration_check_disable",
+        True,
     )
 
     transcribe_config["beam_size"] = int(transcribe_config["beam_size"])

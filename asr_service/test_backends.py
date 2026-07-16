@@ -1,10 +1,12 @@
 import json
 import os
+import tempfile
 import unittest
+import urllib.parse
 
 import numpy as np
 
-from asr_service.backends import AliyunASRBackend, _build_whisper_generation_kwargs
+from asr_service.backends import AliyunASRBackend, XFYunASRBackend, _build_whisper_generation_kwargs
 
 
 class _FakeConfig:
@@ -156,6 +158,119 @@ class AliyunASRBackendTest(unittest.TestCase):
                 os.environ.pop("DASHSCOPE_API_KEY", None)
             else:
                 os.environ["DASHSCOPE_API_KEY"] = old_value
+
+
+class XFYunASRBackendTest(unittest.TestCase):
+    def test_transcribe_uploads_file_and_polls_result(self) -> None:
+        requests = []
+        order_result = json.dumps(
+            {
+                "lattice": [
+                    {
+                        "json_1best": json.dumps(
+                            {
+                                "st": {
+                                    "bg": "0",
+                                    "ed": "1200",
+                                    "rt": [
+                                        {
+                                            "ws": [
+                                                {"cw": [{"w": "你好"}]},
+                                                {"cw": [{"w": "世界"}]},
+                                            ]
+                                        }
+                                    ],
+                                }
+                            }
+                        )
+                    }
+                ]
+            }
+        )
+        responses = [
+            {"code": "000000", "content": {"orderId": "order-1"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {"orderId": "order-1", "status": 4, "failType": 0},
+                    "orderResult": order_result,
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(responses.pop(0))
+
+        backend = XFYunASRBackend(
+            {
+                "provider": "xfyun",
+                "xfyun_api_base_url": "https://raasr.example.com/v2",
+                "xfyun_app_id": "app-id",
+                "xfyun_access_key_id": "access-key-id",
+                "xfyun_access_key_secret": "access-key-secret",
+                "xfyun_poll_interval_seconds": 0,
+                "xfyun_max_poll_seconds": 1,
+            },
+            urlopen=fake_urlopen,
+            sleep=lambda seconds: None,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            tmp.write(b"fake audio")
+            tmp.flush()
+            result = backend.transcribe(
+                tmp.name,
+                language="zh",
+                beam_size=5,
+                vad_filter=False,
+                initial_prompt="",
+            )
+
+        self.assertEqual(result.text, "你好世界")
+        self.assertEqual(result.duration, 1.2)
+        self.assertEqual(len(result.segments), 1)
+
+        upload_request, upload_timeout = requests[0]
+        self.assertEqual(upload_timeout, 300)
+        self.assertEqual(upload_request.get_full_url().split("?")[0], "https://raasr.example.com/v2/upload")
+        self.assertEqual(upload_request.data, b"fake audio")
+        upload_headers = dict(upload_request.header_items())
+        self.assertIn("Signature", upload_headers)
+        self.assertEqual(upload_headers["Content-type"], "application/octet-stream")
+        upload_query = urllib.parse.parse_qs(urllib.parse.urlparse(upload_request.get_full_url()).query)
+        self.assertEqual(upload_query["appId"], ["app-id"])
+        self.assertEqual(upload_query["accessKeyId"], ["access-key-id"])
+        self.assertEqual(upload_query["uploadMode"], ["fileStream"])
+        self.assertEqual(upload_query["language"], ["autodialect"])
+        self.assertEqual(upload_query["durationCheckDisable"], ["true"])
+
+        result_request, _ = requests[1]
+        self.assertEqual(result_request.get_full_url().split("?")[0], "https://raasr.example.com/v2/getResult")
+        result_query = urllib.parse.parse_qs(urllib.parse.urlparse(result_request.get_full_url()).query)
+        self.assertEqual(result_query["orderId"], ["order-1"])
+        self.assertEqual(result_query["resultType"], ["transfer"])
+
+    def test_credentials_can_come_from_environment(self) -> None:
+        old_values = {key: os.environ.get(key) for key in ("XFYUN_APP_ID", "XFYUN_API_KEY", "XFYUN_API_SECRET")}
+        os.environ["XFYUN_APP_ID"] = "env-app-id"
+        os.environ["XFYUN_API_KEY"] = "env-api-key"
+        os.environ["XFYUN_API_SECRET"] = "env-api-secret"
+        try:
+            backend = XFYunASRBackend(
+                {"provider": "xfyun", "xfyun_api_base_url": "https://example.com/v2"},
+                urlopen=lambda request, timeout: _FakeHTTPResponse({"code": "000000"}),
+                sleep=lambda seconds: None,
+            )
+            self.assertEqual(backend.app_id, "env-app-id")
+            self.assertEqual(backend.access_key_id, "env-api-key")
+            self.assertEqual(backend.access_key_secret, "env-api-secret")
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 if __name__ == "__main__":

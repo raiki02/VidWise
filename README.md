@@ -81,6 +81,8 @@ huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 如果使用阿里云模型 API，可以跳过对应的本地模型下载，在
 `config.yaml` 中把 `asr.model.provider` 或 `embedding.provider` 改为
 `aliyun`，并设置 `DASHSCOPE_API_KEY`。
+如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
+`xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
 
 ### 4. 配置
 
@@ -175,7 +177,7 @@ curl http://localhost:8080/rag/health   # RAG 状态
 | 配置段 | 说明 |
 |--------|------|
 | `server` | 网关监听地址 |
-| `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun) |
+| `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun/xfyun) |
 | `llm` | LLM 提供商 (openai/ollama/deepseek) + 格式化参数 |
 | `mysql` | MySQL 连接串 (用于会话持久化，可选) |
 | `qdrant` | Qdrant 向量数据库地址 |

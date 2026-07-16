@@ -1,12 +1,18 @@
 import base64
+import hashlib
+import hmac
 import io
 import json
 import mimetypes
 import os
+import secrets
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import numpy as np
@@ -21,6 +27,13 @@ ALIYUN_ASR_DEFAULT_API_KEY_ENV = "DASHSCOPE_API_KEY"
 # Base64 grows payload size by roughly 4/3. Keep local-file requests safely under
 # the 10 MB Qwen3-ASR-Flash input cap.
 ALIYUN_ASR_DEFAULT_MAX_FILE_BYTES = 7_500_000
+XFYUN_ASR_DEFAULT_BASE_URL = "https://raasr.xfyun.cn/v2"
+XFYUN_ASR_DEFAULT_APP_ID_ENV = "XFYUN_APP_ID"
+XFYUN_ASR_DEFAULT_ACCESS_KEY_ID_ENV = "XFYUN_API_KEY"
+XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV = "XFYUN_API_SECRET"
+XFYUN_ASR_DEFAULT_LANGUAGE = "autodialect"
+XFYUN_ASR_DEFAULT_RESULT_TYPE = "transfer"
+XFYUN_ASR_DEFAULT_MAX_FILE_BYTES = 500_000_000
 
 
 @dataclass
@@ -515,11 +528,254 @@ class AliyunASRBackend:
         return f"data:{mime_type};base64,{encoded}", _wav_duration(audio)
 
 
+class XFYunASRBackend:
+    """iFLYTEK Spark recording-file transcription model."""
+
+    def __init__(
+        self,
+        model_config: dict[str, Any],
+        transcribe_config: dict[str, Any] | None = None,
+        urlopen: Any = urllib.request.urlopen,
+        sleep: Any = time.sleep,
+    ) -> None:
+        del transcribe_config
+
+        configured_base_url = str(model_config.get("api_base_url") or "").strip()
+        self.api_base_url = str(
+            model_config.get("xfyun_api_base_url")
+            or (
+                configured_base_url
+                if configured_base_url and configured_base_url != ALIYUN_ASR_DEFAULT_BASE_URL
+                else ""
+            )
+            or XFYUN_ASR_DEFAULT_BASE_URL
+        ).rstrip("/")
+        self.app_id = _resolve_config_value(
+            model_config,
+            "xfyun_app_id",
+            "xfyun_app_id_env",
+            XFYUN_ASR_DEFAULT_APP_ID_ENV,
+        )
+        self.access_key_id = _resolve_config_value(
+            model_config,
+            "xfyun_access_key_id",
+            "xfyun_access_key_id_env",
+            XFYUN_ASR_DEFAULT_ACCESS_KEY_ID_ENV,
+        )
+        self.access_key_secret = _resolve_config_value(
+            model_config,
+            "xfyun_access_key_secret",
+            "xfyun_access_key_secret_env",
+            XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV,
+        )
+        missing = [
+            name
+            for name, value in (
+                ("asr.model.xfyun_app_id", self.app_id),
+                ("asr.model.xfyun_access_key_id", self.access_key_id),
+                ("asr.model.xfyun_access_key_secret", self.access_key_secret),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"{', '.join(missing)} is required for xfyun provider")
+
+        self.timeout = float(
+            model_config.get("xfyun_api_timeout_seconds")
+            or model_config.get("api_timeout_seconds")
+            or 300
+        )
+        self.poll_interval_seconds = float(model_config.get("xfyun_poll_interval_seconds") or 3)
+        self.max_poll_seconds = float(model_config.get("xfyun_max_poll_seconds") or 600)
+        self.max_file_bytes = int(model_config.get("xfyun_max_file_bytes") or XFYUN_ASR_DEFAULT_MAX_FILE_BYTES)
+        self.language = str(model_config.get("xfyun_language") or XFYUN_ASR_DEFAULT_LANGUAGE)
+        self.result_type = str(model_config.get("xfyun_result_type") or XFYUN_ASR_DEFAULT_RESULT_TYPE)
+        self.duration_check_disable = bool(model_config.get("xfyun_duration_check_disable", True))
+        self.urlopen = urlopen
+        self.sleep = sleep
+
+    def transcribe(
+        self,
+        audio: str | np.ndarray,
+        *,
+        language: str,
+        beam_size: int,
+        vad_filter: bool,
+        initial_prompt: str,
+        sample_rate: int = 16000,
+    ) -> TranscriptionResult:
+        del beam_size, vad_filter, initial_prompt
+
+        order_id, duration = self._upload(audio, language, sample_rate)
+        payload = self._wait_for_result(order_id)
+        segments = _parse_xfyun_segments(payload)
+        text = "\n".join(segment.text for segment in segments if segment.text).strip()
+        if segments:
+            duration = max(duration, max(segment.end for segment in segments))
+        return TranscriptionResult(
+            text=text,
+            language=language or self.language or "auto",
+            language_probability=1.0,
+            duration=duration,
+            segments=segments,
+        )
+
+    def _upload(self, audio: str | np.ndarray, language: str, sample_rate: int) -> tuple[str, float]:
+        if isinstance(audio, np.ndarray):
+            file_name = "audio.wav"
+            file_bytes = _ndarray_to_wav_bytes(audio, sample_rate)
+            duration = float(audio.size) / float(sample_rate)
+            params = self._upload_file_params(file_name, len(file_bytes), language)
+            response = self._post("/upload", params, file_bytes, "application/octet-stream")
+        elif audio.startswith(("http://", "https://")):
+            duration = 0.0
+            params = self._common_params()
+            params.update(
+                {
+                    "uploadMode": "urlLink",
+                    "fileUrl": audio,
+                    "language": self._request_language(language),
+                    "durationCheckDisable": _bool_query(self.duration_check_disable),
+                }
+            )
+            response = self._post("/upload", params, None, "application/json;charset=UTF-8")
+        else:
+            file_name = os.path.basename(audio) or "audio"
+            stat = os.stat(audio)
+            if stat.st_size > self.max_file_bytes:
+                raise ValueError(
+                    f"audio file is {stat.st_size} bytes, exceeds xfyun limit "
+                    f"configured by asr.model.xfyun_max_file_bytes={self.max_file_bytes}"
+                )
+            with open(audio, "rb") as f:
+                file_bytes = f.read()
+            duration = _wav_duration(audio)
+            params = self._upload_file_params(file_name, stat.st_size, language)
+            response = self._post("/upload", params, file_bytes, "application/octet-stream")
+
+        content = response.get("content") or {}
+        order_id = content.get("orderId") or response.get("orderId")
+        if not order_id:
+            raise RuntimeError(f"xfyun upload response did not include orderId: {response}")
+        return str(order_id), duration
+
+    def _wait_for_result(self, order_id: str) -> dict[str, Any]:
+        deadline = time.monotonic() + self.max_poll_seconds
+        last_response: dict[str, Any] | None = None
+        while True:
+            response = self._post(
+                "/getResult",
+                self._result_params(order_id),
+                None,
+                "application/json;charset=UTF-8",
+            )
+            last_response = response
+            content = response.get("content") or {}
+            order_info = content.get("orderInfo") or {}
+            status = str(order_info.get("status", ""))
+            fail_type = str(order_info.get("failType", "0"))
+            order_result = content.get("orderResult") or response.get("orderResult")
+
+            if order_result:
+                return _decode_xfyun_order_result(order_result)
+            if status in {"-1", "5"} or (fail_type not in {"", "0", "None"} and status not in {"3", "4"}):
+                raise RuntimeError(f"xfyun transcription failed: {response}")
+            if time.monotonic() >= deadline:
+                break
+            self.sleep(self.poll_interval_seconds)
+
+        raise TimeoutError(f"xfyun transcription timed out waiting for orderId={order_id}: {last_response}")
+
+    def _post(
+        self,
+        path: str,
+        params: dict[str, str],
+        data: bytes | None,
+        content_type: str,
+    ) -> dict[str, Any]:
+        query = _canonical_query(params)
+        signature = self._signature(query)
+        request = urllib.request.Request(
+            self.api_base_url + path + "?" + query,
+            data=data,
+            method="POST",
+            headers={
+                "Content-Type": content_type,
+                "signature": signature,
+            },
+        )
+        try:
+            with self.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"xfyun asr returned HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"call xfyun asr failed: {exc.reason}") from exc
+
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("decode xfyun asr response failed") from exc
+
+        code = str(payload.get("code") or "")
+        if code and code != "000000":
+            raise RuntimeError(f"xfyun asr returned code {code}: {payload}")
+        return payload
+
+    def _common_params(self) -> dict[str, str]:
+        return {
+            "appId": self.app_id,
+            "accessKeyId": self.access_key_id,
+            "dateTime": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+            "ts": str(int(time.time() * 1000)),
+            "signa": secrets.token_hex(8),
+        }
+
+    def _upload_file_params(self, file_name: str, file_size: int, language: str) -> dict[str, str]:
+        params = self._common_params()
+        params.update(
+            {
+                "uploadMode": "fileStream",
+                "fileName": file_name,
+                "fileSize": str(file_size),
+                "language": self._request_language(language),
+                "durationCheckDisable": _bool_query(self.duration_check_disable),
+            }
+        )
+        return params
+
+    def _result_params(self, order_id: str) -> dict[str, str]:
+        params = self._common_params()
+        params.update({"orderId": order_id, "resultType": self.result_type})
+        return params
+
+    def _request_language(self, language: str) -> str:
+        language = (language or "").strip().lower()
+        if language in {"zh", "zh-cn", "cn", "auto", ""}:
+            return self.language
+        return language
+
+    def _signature(self, query: str) -> str:
+        digest = hmac.new(self.access_key_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha1).digest()
+        return base64.b64encode(digest).decode("ascii")
+
+
 def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
     explicit = str(config.get("api_key") or "").strip()
     if explicit:
         return explicit
     env_name = str(config.get("api_key_env") or default_env).strip()
+    if not env_name:
+        return ""
+    return os.getenv(env_name, "").strip()
+
+
+def _resolve_config_value(config: dict[str, Any], value_key: str, env_key: str, default_env: str) -> str:
+    explicit = str(config.get(value_key) or "").strip()
+    if explicit:
+        return explicit
+    env_name = str(config.get(env_key) or default_env).strip()
     if not env_name:
         return ""
     return os.getenv(env_name, "").strip()
@@ -532,7 +788,7 @@ def _aliyun_model_name(raw_name: Any) -> str:
     return name
 
 
-def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
+def _ndarray_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     audio_i16 = (np.clip(audio.astype(np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wf:
@@ -540,7 +796,11 @@ def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(audio_i16.tobytes())
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return buffer.getvalue()
+
+
+def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
+    encoded = base64.b64encode(_ndarray_to_wav_bytes(audio, sample_rate)).decode("ascii")
     return f"data:audio/wav;base64,{encoded}"
 
 
@@ -586,6 +846,70 @@ def _message_content_text(content: Any) -> str:
     return ""
 
 
+def _canonical_query(params: dict[str, str]) -> str:
+    return urllib.parse.urlencode(
+        [(key, str(params[key])) for key in sorted(params)],
+        quote_via=urllib.parse.quote,
+    )
+
+
+def _bool_query(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _decode_xfyun_order_result(order_result: Any) -> dict[str, Any]:
+    if isinstance(order_result, dict):
+        return order_result
+    if isinstance(order_result, str):
+        try:
+            return json.loads(order_result)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("decode xfyun orderResult failed") from exc
+    raise RuntimeError(f"unsupported xfyun orderResult type: {type(order_result)}")
+
+
+def _parse_xfyun_segments(order_result: dict[str, Any]) -> list[TranscriptionSegment]:
+    segments: list[TranscriptionSegment] = []
+    for item in order_result.get("lattice") or []:
+        best = item.get("json_1best") or item.get("json_1Best")
+        if isinstance(best, str):
+            try:
+                best = json.loads(best)
+            except json.JSONDecodeError:
+                best = {}
+        if not isinstance(best, dict):
+            continue
+
+        st = best.get("st") or {}
+        text = _xfyun_st_text(st).strip()
+        if not text:
+            continue
+        start = _xfyun_time_seconds(st.get("bg") or item.get("begin") or item.get("bg"))
+        end = _xfyun_time_seconds(st.get("ed") or item.get("end") or item.get("ed"))
+        if end < start:
+            end = start
+        segments.append(TranscriptionSegment(start=start, end=end, text=text))
+    return segments
+
+
+def _xfyun_st_text(st: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for rt in st.get("rt") or []:
+        for ws in rt.get("ws") or []:
+            candidates = ws.get("cw") or []
+            if candidates:
+                parts.append(str(candidates[0].get("w") or ""))
+    return "".join(parts)
+
+
+def _xfyun_time_seconds(raw: Any) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return value / 1000.0 if value > 60 else value
+
+
 def create_asr_backend(model_config: dict[str, Any],
                        transcribe_config: dict[str, Any] | None = None,
                        vad_model: Any = None,
@@ -597,4 +921,6 @@ def create_asr_backend(model_config: dict[str, Any],
         return FasterWhisperBackend(model_config, transcribe_config)
     if provider in {"aliyun", "dashscope"}:
         return AliyunASRBackend(model_config, transcribe_config)
+    if provider in {"xfyun", "iflytek"}:
+        return XFYunASRBackend(model_config, transcribe_config)
     raise ValueError(f"Unsupported ASR provider: {provider}")
