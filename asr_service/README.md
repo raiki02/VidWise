@@ -2,7 +2,8 @@
 
 This service exposes ASR HTTP and streaming WebSocket endpoints backed by local
 Whisper/Faster-Whisper models, or a cloud ASR backend such as Alibaba Cloud
-Model Studio Qwen-ASR and iFLYTEK Spark recording-file transcription.
+Model Studio Qwen-ASR, iFLYTEK Spark recording-file transcription, and Baidu
+Cloud short speech recognition.
 
 ## Backend
 
@@ -65,6 +66,35 @@ asr:
 The iFLYTEK backend uploads the local file to `/v2/upload`, polls
 `/v2/getResult`, and normalizes the `orderResult` lattice output into the same
 `text` and `segments` shape returned by local Whisper.
+
+Baidu Cloud short speech example:
+
+```yaml
+asr:
+  # Gateway -> this local ASR service.
+  base_url: "http://localhost:8001"
+  model:
+    provider: "baidu"
+    baidu_token_url: "https://aip.baidubce.com/oauth/2.0/token"
+    baidu_api_base_url: "https://vop.baidu.com"
+    baidu_api_key: ""
+    baidu_api_key_env: "BAIDU_ASR_API_KEY"
+    baidu_secret_key: ""
+    baidu_secret_key_env: "BAIDU_ASR_SECRET_KEY"
+    baidu_cuid: "vidwise"
+    baidu_dev_pid: 1537
+    baidu_rate: 16000
+    baidu_channel: 1
+    baidu_chunk_seconds: 55
+  stream:
+    enabled: false
+```
+
+The Baidu backend uses the short speech REST API. Local files are transcoded
+with ffmpeg to 16 kHz mono WAV and submitted in chunks below the API's 60-second
+limit. Baidu's long audio file-transcription APIs require a public `speech_url`,
+so they need an object-storage/public-URL flow before this service can use them
+directly.
 
 ## Response Shape
 

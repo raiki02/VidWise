@@ -70,6 +70,39 @@ func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	if cfg.ASR.Model.XFYunMaxFileBytes != 500_000_000 {
 		t.Fatalf("ASR XFYunMaxFileBytes = %d, want 500000000", cfg.ASR.Model.XFYunMaxFileBytes)
 	}
+	if cfg.ASR.Model.BaiduTokenURL != "https://aip.baidubce.com/oauth/2.0/token" {
+		t.Fatalf("ASR BaiduTokenURL = %q", cfg.ASR.Model.BaiduTokenURL)
+	}
+	if cfg.ASR.Model.BaiduAPIBaseURL != "https://vop.baidu.com" {
+		t.Fatalf("ASR BaiduAPIBaseURL = %q", cfg.ASR.Model.BaiduAPIBaseURL)
+	}
+	if cfg.ASR.Model.BaiduAPIKeyEnv != "BAIDU_ASR_API_KEY" {
+		t.Fatalf("ASR BaiduAPIKeyEnv = %q, want BAIDU_ASR_API_KEY", cfg.ASR.Model.BaiduAPIKeyEnv)
+	}
+	if cfg.ASR.Model.BaiduSecretKeyEnv != "BAIDU_ASR_SECRET_KEY" {
+		t.Fatalf("ASR BaiduSecretKeyEnv = %q, want BAIDU_ASR_SECRET_KEY", cfg.ASR.Model.BaiduSecretKeyEnv)
+	}
+	if cfg.ASR.Model.BaiduCUID != "vidwise" {
+		t.Fatalf("ASR BaiduCUID = %q, want vidwise", cfg.ASR.Model.BaiduCUID)
+	}
+	if cfg.ASR.Model.BaiduDevPID != 1537 {
+		t.Fatalf("ASR BaiduDevPID = %d, want 1537", cfg.ASR.Model.BaiduDevPID)
+	}
+	if cfg.ASR.Model.BaiduRate != 16000 {
+		t.Fatalf("ASR BaiduRate = %d, want 16000", cfg.ASR.Model.BaiduRate)
+	}
+	if cfg.ASR.Model.BaiduChannel != 1 {
+		t.Fatalf("ASR BaiduChannel = %d, want 1", cfg.ASR.Model.BaiduChannel)
+	}
+	if cfg.ASR.Model.BaiduAPITimeoutSeconds != 60 {
+		t.Fatalf("ASR BaiduAPITimeoutSeconds = %d, want 60", cfg.ASR.Model.BaiduAPITimeoutSeconds)
+	}
+	if cfg.ASR.Model.BaiduChunkSeconds != 55 {
+		t.Fatalf("ASR BaiduChunkSeconds = %d, want 55", cfg.ASR.Model.BaiduChunkSeconds)
+	}
+	if cfg.ASR.Model.BaiduMaxChunkBytes != 10_000_000 {
+		t.Fatalf("ASR BaiduMaxChunkBytes = %d, want 10000000", cfg.ASR.Model.BaiduMaxChunkBytes)
+	}
 	if cfg.Embedding.Provider != "local" {
 		t.Fatalf("Embedding Provider = %q, want local", cfg.Embedding.Provider)
 	}

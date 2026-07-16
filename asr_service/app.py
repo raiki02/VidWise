@@ -51,6 +51,19 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "xfyun_max_poll_seconds": 600,
         "xfyun_max_file_bytes": 500000000,
         "xfyun_duration_check_disable": True,
+        "baidu_token_url": "https://aip.baidubce.com/oauth/2.0/token",
+        "baidu_api_base_url": "https://vop.baidu.com",
+        "baidu_api_key": "",
+        "baidu_api_key_env": "BAIDU_ASR_API_KEY",
+        "baidu_secret_key": "",
+        "baidu_secret_key_env": "BAIDU_ASR_SECRET_KEY",
+        "baidu_cuid": "vidwise",
+        "baidu_dev_pid": 1537,
+        "baidu_rate": 16000,
+        "baidu_channel": 1,
+        "baidu_api_timeout_seconds": 60,
+        "baidu_chunk_seconds": 55,
+        "baidu_max_chunk_bytes": 10000000,
     },
     "transcribe": {
         "beam_size": 5,
@@ -175,7 +188,15 @@ def load_model() -> None:
         provider = str(model_config.get("provider") or "whisper").strip().lower()
         stream_config = asr_config["stream"]
         vad_get_speech_ts = None
-        if stream_config.get("enabled", True) and provider not in {"aliyun", "dashscope", "xfyun", "iflytek"}:
+        if stream_config.get("enabled", True) and provider not in {
+            "aliyun",
+            "dashscope",
+            "xfyun",
+            "iflytek",
+            "baidu",
+            "baiducloud",
+            "baidu-cloud",
+        }:
             logger.info("loading Silero VAD model")
             vad_model, vad_utils = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
@@ -602,6 +623,46 @@ def load_asr_config() -> dict[str, Any]:
         model_config,
         "xfyun_duration_check_disable",
         True,
+    )
+    model_config["baidu_token_url"] = os.getenv(
+        "ASR_BAIDU_TOKEN_URL",
+        model_config.get("baidu_token_url", "https://aip.baidubce.com/oauth/2.0/token"),
+    )
+    model_config["baidu_api_base_url"] = os.getenv(
+        "ASR_BAIDU_API_BASE_URL",
+        model_config.get("baidu_api_base_url", "https://vop.baidu.com"),
+    )
+    model_config["baidu_api_key"] = os.getenv("ASR_BAIDU_API_KEY", model_config.get("baidu_api_key", ""))
+    model_config["baidu_api_key_env"] = os.getenv(
+        "ASR_BAIDU_API_KEY_ENV",
+        model_config.get("baidu_api_key_env", "BAIDU_ASR_API_KEY"),
+    )
+    model_config["baidu_secret_key"] = os.getenv(
+        "ASR_BAIDU_SECRET_KEY",
+        model_config.get("baidu_secret_key", ""),
+    )
+    model_config["baidu_secret_key_env"] = os.getenv(
+        "ASR_BAIDU_SECRET_KEY_ENV",
+        model_config.get("baidu_secret_key_env", "BAIDU_ASR_SECRET_KEY"),
+    )
+    model_config["baidu_cuid"] = os.getenv("ASR_BAIDU_CUID", model_config.get("baidu_cuid", "vidwise"))
+    model_config["baidu_dev_pid"] = int(
+        os.getenv("ASR_BAIDU_DEV_PID", model_config.get("baidu_dev_pid", 1537))
+    )
+    model_config["baidu_rate"] = int(
+        os.getenv("ASR_BAIDU_RATE", model_config.get("baidu_rate", 16000))
+    )
+    model_config["baidu_channel"] = int(
+        os.getenv("ASR_BAIDU_CHANNEL", model_config.get("baidu_channel", 1))
+    )
+    model_config["baidu_api_timeout_seconds"] = float(
+        os.getenv("ASR_BAIDU_API_TIMEOUT_SECONDS", model_config.get("baidu_api_timeout_seconds", 60))
+    )
+    model_config["baidu_chunk_seconds"] = float(
+        os.getenv("ASR_BAIDU_CHUNK_SECONDS", model_config.get("baidu_chunk_seconds", 55))
+    )
+    model_config["baidu_max_chunk_bytes"] = int(
+        os.getenv("ASR_BAIDU_MAX_CHUNK_BYTES", model_config.get("baidu_max_chunk_bytes", 10000000))
     )
 
     transcribe_config["beam_size"] = int(transcribe_config["beam_size"])

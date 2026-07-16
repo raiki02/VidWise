@@ -13,16 +13,16 @@ download:
 
 asr:
   # Gateway -> local ASR adapter service. Keep this local even when the adapter
-  # itself calls Alibaba Cloud.
+  # itself calls a cloud ASR provider.
   base_url: "http://localhost:8001"
   timeout: "10m"
   language: "zh"
   model:
     # Local providers: whisper, faster-whisper
-    # Cloud providers: aliyun, dashscope, xfyun, iflytek
+    # Cloud providers: aliyun, dashscope, xfyun, iflytek, baidu, baiducloud
     provider: "whisper"
     # Local: model path / HF model ID. Aliyun: qwen3-asr-flash.
-    # XFYun ignores this field and uses the recording-file transcription API.
+    # XFYun/Baidu ignore this field and use their own ASR APIs.
     name: "./models/whisper-small"
     device: "auto"
     torch_dtype: "auto"
@@ -52,6 +52,23 @@ asr:
     xfyun_max_poll_seconds: 600
     xfyun_max_file_bytes: 500000000
     xfyun_duration_check_disable: true
+    # Used only when provider is baidu/baiducloud.
+    # The backend uses Baidu short speech REST API, converts local audio to
+    # 16 kHz mono WAV with ffmpeg, and submits <=60s chunks.
+    baidu_token_url: "https://aip.baidubce.com/oauth/2.0/token"
+    baidu_api_base_url: "https://vop.baidu.com"
+    baidu_api_key: ""
+    baidu_api_key_env: "BAIDU_ASR_API_KEY"
+    baidu_secret_key: ""
+    baidu_secret_key_env: "BAIDU_ASR_SECRET_KEY"
+    baidu_cuid: "vidwise"
+    # 1537 is the common Mandarin model. Change this for other Baidu dev_pid models.
+    baidu_dev_pid: 1537
+    baidu_rate: 16000
+    baidu_channel: 1
+    baidu_api_timeout_seconds: 60
+    baidu_chunk_seconds: 55
+    baidu_max_chunk_bytes: 10000000
   transcribe:
     beam_size: 5
     vad_filter: true

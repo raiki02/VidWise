@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -6,7 +7,7 @@ import urllib.parse
 
 import numpy as np
 
-from asr_service.backends import AliyunASRBackend, XFYunASRBackend, _build_whisper_generation_kwargs
+from asr_service.backends import AliyunASRBackend, BaiduASRBackend, XFYunASRBackend, _build_whisper_generation_kwargs
 
 
 class _FakeConfig:
@@ -265,6 +266,107 @@ class XFYunASRBackendTest(unittest.TestCase):
             self.assertEqual(backend.app_id, "env-app-id")
             self.assertEqual(backend.access_key_id, "env-api-key")
             self.assertEqual(backend.access_key_secret, "env-api-secret")
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+class BaiduASRBackendTest(unittest.TestCase):
+    def test_transcribe_fetches_token_and_posts_wav_chunks(self) -> None:
+        requests = []
+        responses = [
+            {"access_token": "access-token", "expires_in": 3600},
+            {"err_no": 0, "err_msg": "success.", "result": ["第一段"]},
+            {"err_no": 0, "err_msg": "success.", "result": ["第二段"]},
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(responses.pop(0))
+
+        def fake_converter(audio_path: str, rate: int, chunk_seconds: float):
+            self.assertEqual(audio_path, "/tmp/input.mp3")
+            self.assertEqual(rate, 16000)
+            self.assertEqual(chunk_seconds, 55)
+            yield b"chunk-one", 1.5, rate
+            yield b"chunk-two", 0.75, rate
+
+        backend = BaiduASRBackend(
+            {
+                "provider": "baidu",
+                "baidu_token_url": "https://aip.example.com/oauth/2.0/token",
+                "baidu_api_base_url": "https://vop.example.com",
+                "baidu_api_key": "api-key",
+                "baidu_secret_key": "secret-key",
+                "baidu_cuid": "test-cuid",
+                "baidu_dev_pid": 1537,
+                "baidu_rate": 16000,
+                "baidu_channel": 1,
+                "baidu_api_timeout_seconds": 12,
+                "baidu_chunk_seconds": 55,
+            },
+            urlopen=fake_urlopen,
+            audio_converter=fake_converter,
+        )
+
+        result = backend.transcribe(
+            "/tmp/input.mp3",
+            language="zh",
+            beam_size=5,
+            vad_filter=False,
+            initial_prompt="",
+        )
+
+        self.assertEqual(result.text, "第一段\n第二段")
+        self.assertEqual(result.duration, 2.25)
+        self.assertEqual(len(result.segments), 2)
+        self.assertEqual(result.segments[0].start, 0.0)
+        self.assertEqual(result.segments[0].end, 1.5)
+        self.assertEqual(result.segments[1].start, 1.5)
+        self.assertEqual(result.segments[1].end, 2.25)
+
+        token_request, token_timeout = requests[0]
+        self.assertEqual(token_timeout, 12)
+        self.assertEqual(token_request.get_method(), "POST")
+        token_url = urllib.parse.urlparse(token_request.get_full_url())
+        self.assertEqual(token_url.scheme + "://" + token_url.netloc + token_url.path, "https://aip.example.com/oauth/2.0/token")
+        token_query = urllib.parse.parse_qs(token_url.query)
+        self.assertEqual(token_query["grant_type"], ["client_credentials"])
+        self.assertEqual(token_query["client_id"], ["api-key"])
+        self.assertEqual(token_query["client_secret"], ["secret-key"])
+
+        first_asr_request, first_asr_timeout = requests[1]
+        self.assertEqual(first_asr_timeout, 12)
+        self.assertEqual(first_asr_request.get_full_url(), "https://vop.example.com/server_api")
+        first_body = json.loads(first_asr_request.data.decode("utf-8"))
+        self.assertEqual(first_body["format"], "wav")
+        self.assertEqual(first_body["rate"], 16000)
+        self.assertEqual(first_body["channel"], 1)
+        self.assertEqual(first_body["cuid"], "test-cuid")
+        self.assertEqual(first_body["token"], "access-token")
+        self.assertEqual(first_body["dev_pid"], 1537)
+        self.assertEqual(first_body["len"], len(b"chunk-one"))
+        self.assertEqual(base64.b64decode(first_body["speech"]), b"chunk-one")
+
+        second_body = json.loads(requests[2][0].data.decode("utf-8"))
+        self.assertEqual(second_body["token"], "access-token")
+        self.assertEqual(base64.b64decode(second_body["speech"]), b"chunk-two")
+
+    def test_credentials_can_come_from_environment(self) -> None:
+        old_values = {key: os.environ.get(key) for key in ("BAIDU_ASR_API_KEY", "BAIDU_ASR_SECRET_KEY")}
+        os.environ["BAIDU_ASR_API_KEY"] = "env-api-key"
+        os.environ["BAIDU_ASR_SECRET_KEY"] = "env-secret-key"
+        try:
+            backend = BaiduASRBackend(
+                {"provider": "baidu", "baidu_api_base_url": "https://vop.example.com"},
+                urlopen=lambda request, timeout: _FakeHTTPResponse({"access_token": "token"}),
+                audio_converter=lambda audio_path, rate, chunk_seconds: [],
+            )
+            self.assertEqual(backend.api_key, "env-api-key")
+            self.assertEqual(backend.secret_key, "env-secret-key")
         finally:
             for key, value in old_values.items():
                 if value is None:
