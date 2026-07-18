@@ -40,7 +40,7 @@ func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	if cfg.ASR.Model.MaxFileBytes != 7_500_000 {
 		t.Fatalf("ASR MaxFileBytes = %d, want 7500000", cfg.ASR.Model.MaxFileBytes)
 	}
-	if cfg.ASR.Model.XFYunAPIBaseURL != "https://raasr.xfyun.cn/v2" {
+	if cfg.ASR.Model.XFYunAPIBaseURL != "https://office-api-ist-dx.iflyaisol.com/v2" {
 		t.Fatalf("ASR XFYunAPIBaseURL = %q", cfg.ASR.Model.XFYunAPIBaseURL)
 	}
 	if cfg.ASR.Model.XFYunAppIDEnv != "XFYUN_APP_ID" {

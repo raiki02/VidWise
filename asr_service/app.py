@@ -37,7 +37,7 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "api_key_env": "DASHSCOPE_API_KEY",
         "api_timeout_seconds": 300,
         "max_file_bytes": 7500000,
-        "xfyun_api_base_url": "https://raasr.xfyun.cn/v2",
+        "xfyun_api_base_url": "https://office-api-ist-dx.iflyaisol.com/v2",
         "xfyun_app_id": "",
         "xfyun_app_id_env": "XFYUN_APP_ID",
         "xfyun_access_key_id": "",
@@ -575,7 +575,7 @@ def load_asr_config() -> dict[str, Any]:
     )
     model_config["xfyun_api_base_url"] = os.getenv(
         "ASR_XFYUN_API_BASE_URL",
-        model_config.get("xfyun_api_base_url", "https://raasr.xfyun.cn/v2"),
+        model_config.get("xfyun_api_base_url", "https://office-api-ist-dx.iflyaisol.com/v2"),
     )
     model_config["xfyun_app_id"] = os.getenv("ASR_XFYUN_APP_ID", model_config.get("xfyun_app_id", ""))
     model_config["xfyun_app_id_env"] = os.getenv(

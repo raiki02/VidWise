@@ -294,7 +294,7 @@ func (c *Config) applyDefaults() {
 		c.ASR.Model.MaxFileBytes = 7_500_000
 	}
 	if c.ASR.Model.XFYunAPIBaseURL == "" {
-		c.ASR.Model.XFYunAPIBaseURL = "https://raasr.xfyun.cn/v2"
+		c.ASR.Model.XFYunAPIBaseURL = "https://office-api-ist-dx.iflyaisol.com/v2"
 	}
 	if c.ASR.Model.XFYunAppIDEnv == "" {
 		c.ASR.Model.XFYunAppIDEnv = "XFYUN_APP_ID"

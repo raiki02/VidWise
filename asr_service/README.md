@@ -49,7 +49,7 @@ asr:
   base_url: "http://localhost:8001"
   model:
     provider: "xfyun"
-    xfyun_api_base_url: "https://raasr.xfyun.cn/v2"
+    xfyun_api_base_url: "https://office-api-ist-dx.iflyaisol.com/v2"
     xfyun_app_id: ""
     xfyun_app_id_env: "XFYUN_APP_ID"
     xfyun_access_key_id: ""

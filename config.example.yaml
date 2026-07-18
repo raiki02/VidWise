@@ -38,7 +38,7 @@ asr:
     # Use OSS/file URL async transcription for larger production files.
     max_file_bytes: 7500000
     # Used only when provider is xfyun/iflytek.
-    xfyun_api_base_url: "https://raasr.xfyun.cn/v2"
+    xfyun_api_base_url: "https://office-api-ist-dx.iflyaisol.com/v2"
     xfyun_app_id: ""
     xfyun_app_id_env: "XFYUN_APP_ID"
     xfyun_access_key_id: ""

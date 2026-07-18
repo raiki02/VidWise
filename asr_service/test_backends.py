@@ -206,7 +206,7 @@ class XFYunASRBackendTest(unittest.TestCase):
         backend = XFYunASRBackend(
             {
                 "provider": "xfyun",
-                "xfyun_api_base_url": "https://raasr.example.com/v2",
+                "xfyun_api_base_url": "https://office.example.com/v2",
                 "xfyun_app_id": "app-id",
                 "xfyun_access_key_id": "access-key-id",
                 "xfyun_access_key_secret": "access-key-secret",
@@ -234,7 +234,7 @@ class XFYunASRBackendTest(unittest.TestCase):
 
         upload_request, upload_timeout = requests[0]
         self.assertEqual(upload_timeout, 300)
-        self.assertEqual(upload_request.get_full_url().split("?")[0], "https://raasr.example.com/v2/upload")
+        self.assertEqual(upload_request.get_full_url().split("?")[0], "https://office.example.com/v2/upload")
         self.assertEqual(upload_request.data, b"fake audio")
         upload_headers = dict(upload_request.header_items())
         self.assertIn("Signature", upload_headers)
@@ -242,13 +242,17 @@ class XFYunASRBackendTest(unittest.TestCase):
         upload_query = urllib.parse.parse_qs(urllib.parse.urlparse(upload_request.get_full_url()).query)
         self.assertEqual(upload_query["appId"], ["app-id"])
         self.assertEqual(upload_query["accessKeyId"], ["access-key-id"])
-        self.assertEqual(upload_query["uploadMode"], ["fileStream"])
+        self.assertEqual(upload_query["audioMode"], ["fileStream"])
         self.assertEqual(upload_query["language"], ["autodialect"])
         self.assertEqual(upload_query["durationCheckDisable"], ["true"])
+        self.assertRegex(upload_query["dateTime"][0], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        self.assertRegex(upload_query["signatureRandom"][0], r"^[A-Za-z0-9]{16}$")
 
         result_request, _ = requests[1]
-        self.assertEqual(result_request.get_full_url().split("?")[0], "https://raasr.example.com/v2/getResult")
+        self.assertEqual(result_request.get_full_url().split("?")[0], "https://office.example.com/v2/getResult")
+        self.assertEqual(result_request.data, b"{}")
         result_query = urllib.parse.parse_qs(urllib.parse.urlparse(result_request.get_full_url()).query)
+        self.assertNotIn("appId", result_query)
         self.assertEqual(result_query["orderId"], ["order-1"])
         self.assertEqual(result_query["resultType"], ["transfer"])
 
@@ -259,7 +263,7 @@ class XFYunASRBackendTest(unittest.TestCase):
         os.environ["XFYUN_API_SECRET"] = "env-api-secret"
         try:
             backend = XFYunASRBackend(
-                {"provider": "xfyun", "xfyun_api_base_url": "https://example.com/v2"},
+                {"provider": "xfyun", "xfyun_api_base_url": "https://office.example.com/v2"},
                 urlopen=lambda request, timeout: _FakeHTTPResponse({"code": "000000"}),
                 sleep=lambda seconds: None,
             )

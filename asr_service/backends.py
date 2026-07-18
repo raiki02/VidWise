@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import secrets
+import string
 import subprocess
 import tempfile
 import time
@@ -29,7 +30,7 @@ ALIYUN_ASR_DEFAULT_API_KEY_ENV = "DASHSCOPE_API_KEY"
 # Base64 grows payload size by roughly 4/3. Keep local-file requests safely under
 # the 10 MB Qwen3-ASR-Flash input cap.
 ALIYUN_ASR_DEFAULT_MAX_FILE_BYTES = 7_500_000
-XFYUN_ASR_DEFAULT_BASE_URL = "https://raasr.xfyun.cn/v2"
+XFYUN_ASR_DEFAULT_BASE_URL = "https://office-api-ist-dx.iflyaisol.com/v2"
 XFYUN_ASR_DEFAULT_APP_ID_ENV = "XFYUN_APP_ID"
 XFYUN_ASR_DEFAULT_ACCESS_KEY_ID_ENV = "XFYUN_API_KEY"
 XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV = "XFYUN_API_SECRET"
@@ -649,15 +650,15 @@ class XFYunASRBackend:
             file_name = "audio.wav"
             file_bytes = _ndarray_to_wav_bytes(audio, sample_rate)
             duration = float(audio.size) / float(sample_rate)
-            params = self._upload_file_params(file_name, len(file_bytes), language)
+            params = self._upload_file_params(file_name, len(file_bytes), language, duration)
             response = self._post("/upload", params, file_bytes, "application/octet-stream")
         elif audio.startswith(("http://", "https://")):
             duration = 0.0
-            params = self._common_params()
+            params = self._common_params(include_app_id=True)
             params.update(
                 {
-                    "uploadMode": "urlLink",
-                    "fileUrl": audio,
+                    "audioMode": "urlLink",
+                    "audioUrl": audio,
                     "language": self._request_language(language),
                     "durationCheckDisable": _bool_query(self.duration_check_disable),
                 }
@@ -674,7 +675,7 @@ class XFYunASRBackend:
             with open(audio, "rb") as f:
                 file_bytes = f.read()
             duration = _wav_duration(audio)
-            params = self._upload_file_params(file_name, stat.st_size, language)
+            params = self._upload_file_params(file_name, stat.st_size, language, duration)
             response = self._post("/upload", params, file_bytes, "application/octet-stream")
 
         content = response.get("content") or {}
@@ -721,7 +722,7 @@ class XFYunASRBackend:
         signature = self._signature(query)
         request = urllib.request.Request(
             self.api_base_url + path + "?" + query,
-            data=data,
+            data=data if data is not None else b"{}",
             method="POST",
             headers={
                 "Content-Type": content_type,
@@ -747,30 +748,33 @@ class XFYunASRBackend:
             raise RuntimeError(f"xfyun asr returned code {code}: {payload}")
         return payload
 
-    def _common_params(self) -> dict[str, str]:
-        return {
-            "appId": self.app_id,
+    def _common_params(self, *, include_app_id: bool) -> dict[str, str]:
+        params = {
             "accessKeyId": self.access_key_id,
-            "dateTime": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-            "ts": str(int(time.time() * 1000)),
-            "signa": secrets.token_hex(8),
+            "dateTime": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "signatureRandom": _random_alnum(16),
         }
+        if include_app_id:
+            params["appId"] = self.app_id
+        return params
 
-    def _upload_file_params(self, file_name: str, file_size: int, language: str) -> dict[str, str]:
-        params = self._common_params()
+    def _upload_file_params(self, file_name: str, file_size: int, language: str, duration_seconds: float) -> dict[str, str]:
+        params = self._common_params(include_app_id=True)
         params.update(
             {
-                "uploadMode": "fileStream",
+                "audioMode": "fileStream",
                 "fileName": file_name,
                 "fileSize": str(file_size),
                 "language": self._request_language(language),
                 "durationCheckDisable": _bool_query(self.duration_check_disable),
             }
         )
+        if not self.duration_check_disable:
+            params["duration"] = str(max(1, int(duration_seconds * 1000)))
         return params
 
     def _result_params(self, order_id: str) -> dict[str, str]:
-        params = self._common_params()
+        params = self._common_params(include_app_id=False)
         params.update({"orderId": order_id, "resultType": self.result_type})
         return params
 
@@ -1154,6 +1158,11 @@ def _canonical_query(params: dict[str, str]) -> str:
 
 def _bool_query(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _random_alnum(length: int) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def _decode_xfyun_order_result(order_result: Any) -> dict[str, Any]:
