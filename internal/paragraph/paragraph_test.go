@@ -17,6 +17,7 @@ type fakeChatModel struct {
 	mu      sync.Mutex
 	respond func(string) fakeChatResponse
 	calls   int
+	options []*einomodel.Options
 }
 
 type fakeChatResponse struct {
@@ -25,9 +26,10 @@ type fakeChatResponse struct {
 	delay   time.Duration
 }
 
-func (m *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
+func (m *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.Message, error) {
 	m.mu.Lock()
 	m.calls++
+	m.options = append(m.options, einomodel.GetCommonOptions(nil, opts...))
 	m.mu.Unlock()
 	var resp fakeChatResponse
 	if m.respond != nil {
@@ -49,6 +51,15 @@ func (m *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, _
 		return nil, resp.err
 	}
 	return schema.AssistantMessage(resp.content, nil), nil
+}
+
+func (m *fakeChatModel) lastOptions() *einomodel.Options {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.options) == 0 {
+		return nil
+	}
+	return m.options[len(m.options)-1]
 }
 
 func (m *fakeChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
@@ -125,6 +136,63 @@ func TestFormatChunksParallelFallsBackToRawWhenAllChunksFail(t *testing.T) {
 	got := formatChunksParallel(context.Background(), model, []string{"first", "second"}, "first\n\nsecond", cfg, time.Second, true)
 	if len(got) != 1 || got[0] != "first\n\nsecond" {
 		t.Fatalf("unexpected raw fallback output: %#v", got)
+	}
+}
+
+func TestFormatChunkOmitsSamplingParamsWhenDisabled(t *testing.T) {
+	disableSamplingParams := true
+	model := &fakeChatModel{respond: func(string) fakeChatResponse {
+		return fakeChatResponse{content: "formatted"}
+	}}
+	cfg := appconfig.LLMConfig{
+		Prompt: appconfig.PromptConfig{
+			System:       "system",
+			UserTemplate: "{{text}}",
+		},
+		Temperature:           0.2,
+		DisableSamplingParams: &disableSamplingParams,
+		MaxTokens:             16,
+	}
+
+	got := formatChunk(context.Background(), model, cfg, 0, "raw", time.Second)
+	if got != "formatted" {
+		t.Fatalf("formatChunk() = %q, want formatted", got)
+	}
+	opts := model.lastOptions()
+	if opts == nil {
+		t.Fatal("expected recorded options")
+	}
+	if opts.Temperature != nil {
+		t.Fatalf("expected no temperature option, got %v", *opts.Temperature)
+	}
+	if opts.MaxTokens == nil || *opts.MaxTokens != 16 {
+		t.Fatalf("MaxTokens = %v, want 16", opts.MaxTokens)
+	}
+}
+
+func TestFormatChunkPassesSamplingParamsByDefault(t *testing.T) {
+	model := &fakeChatModel{respond: func(string) fakeChatResponse {
+		return fakeChatResponse{content: "formatted"}
+	}}
+	cfg := appconfig.LLMConfig{
+		Prompt: appconfig.PromptConfig{
+			System:       "system",
+			UserTemplate: "{{text}}",
+		},
+		Temperature: 0.2,
+		MaxTokens:   16,
+	}
+
+	got := formatChunk(context.Background(), model, cfg, 0, "raw", time.Second)
+	if got != "formatted" {
+		t.Fatalf("formatChunk() = %q, want formatted", got)
+	}
+	opts := model.lastOptions()
+	if opts == nil {
+		t.Fatal("expected recorded options")
+	}
+	if opts.Temperature == nil || *opts.Temperature != 0.2 {
+		t.Fatalf("Temperature = %v, want 0.2", opts.Temperature)
 	}
 }
 

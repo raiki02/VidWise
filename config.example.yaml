@@ -120,6 +120,9 @@ llm:
   api_key_env: "OPENAI_API_KEY"
   timeout: "2m"
   temperature: 0.2
+  # Leave unset for auto-detection. Set true for OpenAI-compatible beta/reasoning
+  # models that reject temperature/top_p/penalty params.
+  disable_sampling_params: true
   max_tokens: 512
   path: ""
   keep_alive: ""

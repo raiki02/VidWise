@@ -123,19 +123,20 @@ type LLMConfig struct {
 	// FallbackToRawOnError controls whether the service should return the raw ASR
 	// transcript when the LLM paragraph formatter is unavailable (misconfigured,
 	// network errors, provider downtime, etc.).
-	FallbackToRawOnError *bool        `yaml:"fallback_to_raw_on_error"`
-	Provider             string       `yaml:"provider"`
-	BaseURL              string       `yaml:"base_url"`
-	APIKey               string       `yaml:"api_key"`
-	APIKeyEnv            string       `yaml:"api_key_env"`
-	Path                 string       `yaml:"path"`
-	Model                string       `yaml:"model"`
-	Timeout              string       `yaml:"timeout"`
-	Temperature          float32      `yaml:"temperature"`
-	MaxTokens            int          `yaml:"max_tokens"`
-	KeepAlive            string       `yaml:"keep_alive"`
-	Prompt               PromptConfig `yaml:"prompt"`
-	ChunkRunes           int          `yaml:"chunk_runes"`
+	FallbackToRawOnError  *bool        `yaml:"fallback_to_raw_on_error"`
+	Provider              string       `yaml:"provider"`
+	BaseURL               string       `yaml:"base_url"`
+	APIKey                string       `yaml:"api_key"`
+	APIKeyEnv             string       `yaml:"api_key_env"`
+	Path                  string       `yaml:"path"`
+	Model                 string       `yaml:"model"`
+	Timeout               string       `yaml:"timeout"`
+	Temperature           float32      `yaml:"temperature"`
+	DisableSamplingParams *bool        `yaml:"disable_sampling_params"`
+	MaxTokens             int          `yaml:"max_tokens"`
+	KeepAlive             string       `yaml:"keep_alive"`
+	Prompt                PromptConfig `yaml:"prompt"`
+	ChunkRunes            int          `yaml:"chunk_runes"`
 	// TwoStep enables a two-pass pipeline:
 	//   Step 1: per-chunk typo fix + traditional→simplified conversion (strict, no merging)
 	//   Step 2: semantic paragraph organization of the full step-1 output
@@ -147,6 +148,20 @@ type LLMConfig struct {
 type PromptConfig struct {
 	System       string `yaml:"system"`
 	UserTemplate string `yaml:"user_template"`
+}
+
+func (c LLMConfig) SamplingParamsDisabled() bool {
+	if c.DisableSamplingParams != nil {
+		return *c.DisableSamplingParams
+	}
+	if strings.ToLower(strings.TrimSpace(c.Provider)) != "openai" {
+		return false
+	}
+	model := strings.ToLower(strings.TrimSpace(c.Model))
+	return strings.HasPrefix(model, "o1") ||
+		strings.HasPrefix(model, "o3") ||
+		strings.HasPrefix(model, "o4") ||
+		strings.HasPrefix(model, "gpt-5")
 }
 
 type MySQLConfig struct {

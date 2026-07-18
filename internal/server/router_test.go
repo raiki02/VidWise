@@ -243,7 +243,9 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"id=\"extract-type\"",
 		"id=\"task-list\"",
 		"data-task-index",
-		"任务完成后可入库",
+		"class=\"task-knowledge\"",
+		"可存入知识库",
+		"任务完成后可判断",
 		"function localUserId()",
 		"local-user-",
 		"本地用户 ID",
@@ -253,6 +255,34 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("static index missing %q", want)
 		}
+	}
+
+	taskRenderStart := strings.Index(body, "function renderTask(task")
+	knowledgeRenderStart := strings.Index(body, "function renderTaskKnowledgeAction")
+	transcriptRenderStart := strings.Index(body, "function renderTaskTranscript")
+	if taskRenderStart < 0 || knowledgeRenderStart < 0 || transcriptRenderStart < 0 {
+		t.Fatal("static index missing task render helpers")
+	}
+	taskRender := body[taskRenderStart:knowledgeRenderStart]
+	if !strings.Contains(taskRender, "${knowledge}") {
+		t.Fatal("task card should render knowledge status outside transcript details")
+	}
+	if strings.Index(taskRender, "${knowledge}") > strings.Index(taskRender, `<div class="steps">${steps}</div>`) {
+		t.Fatal("task card should show knowledge status before task steps")
+	}
+
+	knowledgeRender := body[knowledgeRenderStart:transcriptRenderStart]
+	if !strings.Contains(knowledgeRender, "data-task-index-status") || !strings.Contains(knowledgeRender, "data-task-index") {
+		t.Fatal("knowledge status/action should live in the visible knowledge area")
+	}
+
+	transcriptRenderEnd := strings.Index(body[transcriptRenderStart:], "function bindTaskActionButtons")
+	if transcriptRenderEnd < 0 {
+		t.Fatal("static index missing task action binding helper")
+	}
+	transcriptRender := body[transcriptRenderStart : transcriptRenderStart+transcriptRenderEnd]
+	if strings.Contains(transcriptRender, "data-task-index") {
+		t.Fatal("transcript details should not hide the knowledge action")
 	}
 }
 

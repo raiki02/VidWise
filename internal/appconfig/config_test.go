@@ -157,6 +157,56 @@ func TestApplyDefaultsSetsTaskDefaults(t *testing.T) {
 	}
 }
 
+func TestLLMConfigSamplingParamsDisabled(t *testing.T) {
+	disabled := true
+	enabled := false
+
+	tests := []struct {
+		name string
+		cfg  LLMConfig
+		want bool
+	}{
+		{
+			name: "manual true",
+			cfg:  LLMConfig{DisableSamplingParams: &disabled},
+			want: true,
+		},
+		{
+			name: "manual false overrides reasoning model",
+			cfg:  LLMConfig{Provider: "openai", Model: "gpt-5-mini", DisableSamplingParams: &enabled},
+			want: false,
+		},
+		{
+			name: "gpt 5 model",
+			cfg:  LLMConfig{Provider: "openai", Model: "gpt-5"},
+			want: true,
+		},
+		{
+			name: "o series model",
+			cfg:  LLMConfig{Provider: "openai", Model: "o4-mini"},
+			want: true,
+		},
+		{
+			name: "non reasoning openai model",
+			cfg:  LLMConfig{Provider: "openai", Model: "gpt-4o-mini"},
+			want: false,
+		},
+		{
+			name: "non openai provider",
+			cfg:  LLMConfig{Provider: "deepseek", Model: "gpt-5"},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.SamplingParamsDisabled(); got != tt.want {
+				t.Fatalf("SamplingParamsDisabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServerConfigDurations(t *testing.T) {
 	cfg := ServerConfig{
 		ReadHeaderTimeout: "3s",

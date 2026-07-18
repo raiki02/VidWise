@@ -174,7 +174,7 @@ func formatChunk(
 	resp, err := cm.Generate(ctx, []*schema.Message{
 		schema.SystemMessage(cfg.Prompt.System),
 		schema.UserMessage(renderUserPrompt(cfg.Prompt.UserTemplate, chunk)),
-	}, einomodel.WithTemperature(cfg.Temperature), einomodel.WithMaxTokens(cfg.MaxTokens))
+	}, generationOptions(cfg)...)
 	if err != nil {
 		slog.Warn("llm.format.chunk_failed", "index", idx, "elapsed", time.Since(stage), "err", err)
 		return ""
@@ -182,6 +182,14 @@ func formatChunk(
 	slog.Info("llm.format.chunk_done", "index", idx, "elapsed", time.Since(stage))
 
 	return strings.TrimSpace(resp.Content)
+}
+
+func generationOptions(cfg appconfig.LLMConfig) []einomodel.Option {
+	opts := []einomodel.Option{einomodel.WithMaxTokens(cfg.MaxTokens)}
+	if !cfg.SamplingParamsDisabled() {
+		opts = append(opts, einomodel.WithTemperature(cfg.Temperature))
+	}
+	return opts
 }
 
 func renderUserPrompt(template, text string) string {
@@ -207,9 +215,12 @@ func formatTwoStep(
 	slog.Info("llm.format.step1.start", "chunks", len(chunks), "chunk_runes", cfg.Step1ChunkRunes, "format", sourceFormat)
 
 	step1Cfg := appconfig.LLMConfig{
-		Prompt:      cfg.Step1Prompt,
-		Temperature: cfg.Temperature,
-		MaxTokens:   cfg.MaxTokens,
+		Provider:              cfg.Provider,
+		Model:                 cfg.Model,
+		Prompt:                cfg.Step1Prompt,
+		Temperature:           cfg.Temperature,
+		DisableSamplingParams: cfg.DisableSamplingParams,
+		MaxTokens:             cfg.MaxTokens,
 	}
 	step1Results := formatChunksParallel(ctx, cm, chunks, rawText, step1Cfg, perChunkTimeout, fallback)
 	if step1Results == nil {

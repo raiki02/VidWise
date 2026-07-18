@@ -234,6 +234,7 @@
     .table th { color: var(--muted); font-size: 12px; }
     .id { color: var(--soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
     .task { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #111116; }
+    .task-knowledge { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
     .steps { display: grid; gap: 6px; margin-top: 8px; }
     .step { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
     .task-output { margin-top: 10px; }
@@ -1167,6 +1168,7 @@
         return `<div class="step"><span>${esc(step.name)}</span><span class="pill ${statusClass(step.status)}">${esc(step.status)}</span>${step.error ? `<div class="id" style="grid-column:1 / -1;">${esc(step.error)}</div>` : ""}</div>`;
       }).join("");
       const output = task.output && typeof task.output === "object" ? task.output : {};
+      const knowledge = renderTaskKnowledgeAction(task, output);
       const transcript = renderTaskTranscript(task, output, options);
       return `<div class="task">
         <div class="row" style="justify-content:space-between;">
@@ -1175,14 +1177,14 @@
         </div>
         <div class="id">${esc(task.task_id || "")}</div>
         ${task.error ? `<div style="color:var(--danger);margin-top:6px;">${esc(task.error)}</div>` : ""}
+        ${knowledge}
         <div class="steps">${steps}</div>
         ${transcript}
       </div>`;
     }
 
-    function renderTaskTranscript(task, output, options = {}) {
-      const text = typeof output.text === "string" ? output.text : "";
-      if (!text) return "";
+    function renderTaskKnowledgeAction(task, output) {
+      if (task.type !== "video_process" && !hasKnowledgeTaskOutput(output)) return "";
       const indexed = output.knowledge_indexed === true;
       const indexing = state.indexingTaskIds.has(task.task_id);
       const done = task.status === "done";
@@ -1191,23 +1193,46 @@
       const sourceIds = normalizeList(Array.isArray(output.knowledge_source_ids) ? output.knowledge_source_ids : []);
       const sourceText = sourceIds.length ? `source_ids: ${sourceIds.map(compactId).join(", ")}` : "";
       const chunkCount = Number(output.knowledge_chunk_count || 0);
-      const indexedMeta = indexed
-        ? `<span class="pill ok">已存入知识库</span>${chunkCount ? `<span class="pill">${chunkCount} chunks</span>` : ""}${sourceText ? `<span class="id">${esc(sourceText)}</span>` : ""}`
-        : done
-          ? canIndex
-            ? `<button class="primary" type="button" data-task-index="${esc(task.task_id)}"${indexing ? " disabled" : ""}>${indexing ? "入库中..." : "存入知识库"}</button>`
-            : `<button class="primary" type="button" disabled>格式化文本不可用，暂不可入库</button>`
-          : `<button class="primary" type="button" disabled>任务完成后可入库</button>`;
+      let action = "";
+      if (indexed) {
+        action = `<span class="pill ok">已存入知识库</span>${chunkCount ? `<span class="pill">${chunkCount} chunks</span>` : ""}${sourceText ? `<span class="id">${esc(sourceText)}</span>` : ""}`;
+      } else if (!done) {
+        action = `<span class="pill warn">任务完成后可判断</span>`;
+      } else if (canIndex) {
+        action = `<span class="pill warn">可存入知识库</span><button class="primary" type="button" data-task-index="${esc(task.task_id)}"${indexing ? " disabled" : ""}>${indexing ? "入库中..." : "存入知识库"}</button>`;
+      } else {
+        action = `<span class="pill err">暂不可入库</span><span class="small muted">${esc(knowledgeUnavailableReason(output))}</span>`;
+      }
+      return `<div class="task-knowledge"><span class="small muted">知识库</span>${action}<span class="small muted" data-task-index-status></span></div>`;
+    }
+
+    function hasKnowledgeTaskOutput(output) {
+      return output.knowledge_indexed === true ||
+        output.can_index_knowledge === true ||
+        output.text_formatted === true ||
+        output.formatting_required === true ||
+        typeof output.formatted_text === "string" ||
+        typeof output.raw_text === "string";
+    }
+
+    function knowledgeUnavailableReason(output) {
+      if (!output || typeof output !== "object") return "没有可入库文本。";
+      if (output.formatting_required === true) return "格式化文本不可用，请先重新生成格式化文本。";
+      if (typeof output.text !== "string" || !output.text.trim()) return "没有可入库文本。";
+      return "需要格式化后的文本。";
+    }
+
+    function renderTaskTranscript(task, output, options = {}) {
+      const text = typeof output.text === "string" ? output.text : "";
+      if (!text) return "";
+      const formattedText = typeof output.formatted_text === "string" ? output.formatted_text.trim() : "";
+      const canIndex = output.can_index_knowledge === true && output.text_formatted === true && !!formattedText;
       const lengthText = output.text_length || text.length;
       const summaryLabel = canIndex || formattedText ? "格式化文本" : "提取文本";
       const open = options.openTranscript ? " open" : "";
       return `<details class="task-output"${open}>
         <summary>${summaryLabel} · ${esc(lengthText)} length</summary>
         <textarea readonly rows="10">${esc(text)}</textarea>
-        <div class="task-actions">
-          ${indexedMeta}
-          <span class="small muted" data-task-index-status></span>
-        </div>
       </details>`;
     }
 

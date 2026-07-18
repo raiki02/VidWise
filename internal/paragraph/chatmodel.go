@@ -23,12 +23,16 @@ func NewChatModel(ctx context.Context, cfg appconfig.LLMConfig) (einomodel.BaseC
 		if apiKey == "" {
 			return nil, errors.New("llm.api_key or llm.api_key_env is required for openai")
 		}
+		var temperature *float32
+		if !cfg.SamplingParamsDisabled() {
+			temperature = &cfg.Temperature
+		}
 		return openai.NewChatModel(ctx, &openai.ChatModelConfig{
 			APIKey:              apiKey,
 			BaseURL:             cfg.BaseURL,
 			Model:               cfg.Model,
 			Timeout:             timeout,
-			Temperature:         &cfg.Temperature,
+			Temperature:         temperature,
 			MaxCompletionTokens: &cfg.MaxTokens,
 		})
 	case "ollama":
