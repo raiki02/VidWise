@@ -223,7 +223,6 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 	body := string(raw)
 	for _, want := range []string{
 		"/chat/query",
-		"/extract",
 		"/video/process",
 		"/task/",
 		"/index",
@@ -240,8 +239,9 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"rag_answer_status",
 		"rag_context_chunks",
 		"data-nav=\"sources\"",
-		"id=\"extract-type\"",
 		"id=\"task-list\"",
+		"data-task-download-text",
+		"下载格式化文本",
 		"data-task-index",
 		"class=\"task-knowledge\"",
 		"可存入知识库",
