@@ -145,6 +145,8 @@ curl -X POST http://localhost:8080/extract \
   -o demo.txt
 ```
 
+`url` 可以是纯视频链接，也可以是 bilibili、抖音、小红书复制出来的完整分享文案；当分享文案里能解析出标题时，`name` 可省略并自动用标题生成安全文件名。
+
 `type` 支持的值：`video` | `audio` | `text` | `transcript` | `summary` | `video_summary`
 
 文本提取完成后自动索引到 RAG 知识库。

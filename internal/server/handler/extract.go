@@ -407,7 +407,7 @@ func (h *ExtractHandler) indexOptions() rag.IndexOptions {
 // extractRequest for legacy endpoint.
 type extractRequest struct {
 	URL  string `form:"url" json:"url" binding:"required"`
-	Name string `form:"name" json:"name" binding:"required"`
+	Name string `form:"name" json:"name"`
 	Type string `form:"type" json:"type" binding:"required"`
 }
 
@@ -434,15 +434,16 @@ func bindExtractRequest(c *gin.Context) (extractRequest, error) {
 		return req, errors.New("url, name and type are required")
 	}
 
-	req.URL = strings.TrimSpace(req.URL)
-	req.Name = sanitizeName(req.Name)
+	normalized := normalizeVideoShareInput(req.URL, req.Name)
+	req.URL = normalized.URL
+	req.Name = normalized.Name
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 
 	if req.URL == "" {
 		return req, errors.New("url is required")
 	}
 	if req.Name == "" {
-		return req, errors.New("name is required and must contain letters, numbers, dot, underscore or dash")
+		return req, errors.New("name is required when the URL field does not include a share title")
 	}
 	return req, nil
 }
