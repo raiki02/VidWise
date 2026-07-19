@@ -128,8 +128,9 @@ class OpenAICompatibleEmbeddingBackend:
                 "input": batch,
                 "encoding_format": "float",
             }
-            if self.dimensions > 0:
-                payload["dimensions"] = self.dimensions
+            dimensions = self._dimensions_for_payload()
+            if dimensions > 0:
+                payload["dimensions"] = dimensions
 
             response = self._post_json("/embeddings", payload)
             data = response.get("data") or []
@@ -179,6 +180,9 @@ class OpenAICompatibleEmbeddingBackend:
             return json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"decode {self.provider_name} embedding response failed") from exc
+
+    def _dimensions_for_payload(self) -> int:
+        return self.dimensions
 
 
 class AliyunEmbeddingBackend(OpenAICompatibleEmbeddingBackend):
@@ -235,6 +239,22 @@ class SiliconFlowEmbeddingBackend(OpenAICompatibleEmbeddingBackend):
             config=config,
             urlopen=urlopen,
         )
+        if self.dimensions > 0 and not _siliconflow_model_supports_dimensions(self.model_name):
+            logger.warning(
+                "Ignoring embedding.dimensions=%d for SiliconFlow model %s; "
+                "this parameter is only sent for Qwen3 embedding models",
+                self.dimensions,
+                self.model_name,
+            )
+
+    def _dimensions_for_payload(self) -> int:
+        if not _siliconflow_model_supports_dimensions(self.model_name):
+            return 0
+        return self.dimensions
+
+
+def _siliconflow_model_supports_dimensions(model_name: str) -> bool:
+    return str(model_name).lower().startswith("qwen/qwen3-")
 
 
 def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:

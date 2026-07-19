@@ -208,7 +208,9 @@ embedding:
   # Leave blank for provider defaults: DASHSCOPE_API_KEY or SILICONFLOW_API_KEY.
   api_key_env: ""
   api_timeout_seconds: 120
-  # Set to 0 for provider/models that do not accept a dimensions parameter.
+  # Output dimension for providers/models that support a dimensions parameter.
+  # The SiliconFlow adapter only sends this for Qwen3 embedding models; it is
+  # omitted automatically for BGE and other SiliconFlow models.
   dimensions: 1024
   batch_size: 10
 
