@@ -184,24 +184,31 @@ rag:
 
 embedding:
   # Gateway -> local embedding adapter service. Keep this local even when the
-  # adapter itself calls Alibaba Cloud.
+  # adapter itself calls a cloud embedding provider.
   base_url: "http://localhost:8003"
   # local/sentence-transformers loads local or HF models; aliyun/dashscope calls
-  # Alibaba Cloud Model Studio embeddings.
+  # Alibaba Cloud Model Studio; siliconflow calls SiliconFlow embeddings.
   provider: "local"
   # Local: model shortcut (qwen, bge, bge-large) or local path.
   # Aliyun: text-embedding-v4.
+  # SiliconFlow: qwen shortcut maps to Qwen/Qwen3-Embedding-0.6B; you may also
+  # set Qwen/Qwen3-Embedding-4B, Qwen/Qwen3-Embedding-8B,
+  # Qwen/Qwen3-VL-Embedding-8B, BAAI/bge-m3, etc.
   # Download first:
   #   huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
   #   huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
   model: "qwen"
   device: "auto"
   timeout: "2m"
-  # Used only when provider is aliyun/dashscope.
-  api_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # Used only for cloud providers. Leave blank for provider defaults:
+  #   aliyun/dashscope -> https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   siliconflow     -> https://api.siliconflow.cn/v1
+  api_base_url: ""
   api_key: ""
-  api_key_env: "DASHSCOPE_API_KEY"
+  # Leave blank for provider defaults: DASHSCOPE_API_KEY or SILICONFLOW_API_KEY.
+  api_key_env: ""
   api_timeout_seconds: 120
+  # Set to 0 for provider/models that do not accept a dimensions parameter.
   dimensions: 1024
   batch_size: 10
 

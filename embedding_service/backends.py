@@ -1,7 +1,8 @@
 """
 Backend factory for embedding and reranking models.
-Supports local Qwen/BGE model families via sentence-transformers and Alibaba
-Cloud Model Studio embeddings via the OpenAI-compatible API.
+Supports local Qwen/BGE model families via sentence-transformers and cloud
+embedding APIs that expose an OpenAI-compatible /embeddings endpoint, including
+Alibaba Cloud Model Studio and SiliconFlow.
 
 Models are loaded via sentence-transformers which handles download/cache
 automatically. Set HF_ENDPOINT env var to use a mirror:
@@ -24,7 +25,16 @@ logger = logging.getLogger(__name__)
 ALIYUN_EMBEDDING_DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 ALIYUN_EMBEDDING_DEFAULT_MODEL = "text-embedding-v4"
 ALIYUN_EMBEDDING_DEFAULT_API_KEY_ENV = "DASHSCOPE_API_KEY"
-ALIYUN_EMBEDDING_DEFAULT_BATCH_SIZE = 10
+
+SILICONFLOW_EMBEDDING_DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
+SILICONFLOW_EMBEDDING_DEFAULT_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+SILICONFLOW_EMBEDDING_DEFAULT_API_KEY_ENV = "SILICONFLOW_API_KEY"
+
+API_EMBEDDING_DEFAULT_BATCH_SIZE = 10
+KNOWN_PROVIDER_API_KEY_ENVS = {
+    ALIYUN_EMBEDDING_DEFAULT_API_KEY_ENV,
+    SILICONFLOW_EMBEDDING_DEFAULT_API_KEY_ENV,
+}
 
 
 class EmbeddingBackend(Protocol):
@@ -72,28 +82,38 @@ class SentenceTransformerBackend:
         return [(int(idx), float(score)) for idx, score in ranked[:top_k]]
 
 
-class AliyunEmbeddingBackend:
-    """Alibaba Cloud Model Studio embeddings via the OpenAI-compatible API."""
+class OpenAICompatibleEmbeddingBackend:
+    """Embedding backend for providers exposing OpenAI-compatible embeddings."""
 
     def __init__(
         self,
         model_name: str,
+        *,
+        provider_name: str,
+        default_base_url: str,
+        default_model_name: str,
+        default_api_key_env: str,
+        model_aliases: dict[str, str] | None = None,
         config: dict[str, Any] | None = None,
         urlopen: Any = urllib.request.urlopen,
     ):
         config = config or {}
-        self.model_name = _aliyun_embedding_model_name(model_name)
+        self.provider_name = provider_name
+        self.model_name = _api_embedding_model_name(model_name, default_model_name, model_aliases or {})
         self.api_base_url = str(
             config.get("api_base_url")
             or config.get("base_url")
-            or ALIYUN_EMBEDDING_DEFAULT_BASE_URL
+            or default_base_url
         ).rstrip("/")
-        self.api_key = _resolve_api_key(config, ALIYUN_EMBEDDING_DEFAULT_API_KEY_ENV)
+        self.api_key = _resolve_api_key(config, default_api_key_env)
         if not self.api_key:
-            raise ValueError("embedding.api_key or embedding.api_key_env is required for aliyun provider")
+            raise ValueError(
+                "embedding.api_key, embedding.api_key_env, "
+                f"or {default_api_key_env} is required for {provider_name} provider"
+            )
         self.timeout = float(config.get("api_timeout_seconds") or 120)
         self.dimensions = int(config.get("dimensions") or 0)
-        self.batch_size = max(1, int(config.get("batch_size") or ALIYUN_EMBEDDING_DEFAULT_BATCH_SIZE))
+        self.batch_size = max(1, int(config.get("batch_size") or API_EMBEDDING_DEFAULT_BATCH_SIZE))
         self.urlopen = urlopen
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -114,7 +134,9 @@ class AliyunEmbeddingBackend:
             response = self._post_json("/embeddings", payload)
             data = response.get("data") or []
             if len(data) != len(batch):
-                raise RuntimeError(f"aliyun embedding count mismatch: got {len(data)}, want {len(batch)}")
+                raise RuntimeError(
+                    f"{self.provider_name} embedding count mismatch: got {len(data)}, want {len(batch)}"
+                )
             ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
             embeddings.extend([list(map(float, item["embedding"])) for item in ordered])
         return embeddings
@@ -149,14 +171,70 @@ class AliyunEmbeddingBackend:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"aliyun embedding returned HTTP {exc.code}: {detail}") from exc
+            raise RuntimeError(f"{self.provider_name} embedding returned HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"call aliyun embedding failed: {exc.reason}") from exc
+            raise RuntimeError(f"call {self.provider_name} embedding failed: {exc.reason}") from exc
 
         try:
             return json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError("decode aliyun embedding response failed") from exc
+            raise RuntimeError(f"decode {self.provider_name} embedding response failed") from exc
+
+
+class AliyunEmbeddingBackend(OpenAICompatibleEmbeddingBackend):
+    """Alibaba Cloud Model Studio embeddings via the OpenAI-compatible API."""
+
+    def __init__(
+        self,
+        model_name: str,
+        config: dict[str, Any] | None = None,
+        urlopen: Any = urllib.request.urlopen,
+    ):
+        super().__init__(
+            model_name,
+            provider_name="aliyun",
+            default_base_url=ALIYUN_EMBEDDING_DEFAULT_BASE_URL,
+            default_model_name=ALIYUN_EMBEDDING_DEFAULT_MODEL,
+            default_api_key_env=ALIYUN_EMBEDDING_DEFAULT_API_KEY_ENV,
+            config=config,
+            urlopen=urlopen,
+        )
+
+
+SILICONFLOW_EMBEDDING_MODEL_ALIASES = {
+    "qwen": "Qwen/Qwen3-Embedding-0.6B",
+    "qwen3": "Qwen/Qwen3-Embedding-0.6B",
+    "qwen3-embedding": "Qwen/Qwen3-Embedding-0.6B",
+    "qwen3-0.6b": "Qwen/Qwen3-Embedding-0.6B",
+    "qwen3-4b": "Qwen/Qwen3-Embedding-4B",
+    "qwen3-8b": "Qwen/Qwen3-Embedding-8B",
+    "qwen3-vl": "Qwen/Qwen3-VL-Embedding-8B",
+    "bge": "BAAI/bge-m3",
+    "bge-m3": "BAAI/bge-m3",
+    "bge-large": "BAAI/bge-large-zh-v1.5",
+    "pro-bge-m3": "Pro/BAAI/bge-m3",
+}
+
+
+class SiliconFlowEmbeddingBackend(OpenAICompatibleEmbeddingBackend):
+    """SiliconFlow embeddings via its OpenAI-compatible API."""
+
+    def __init__(
+        self,
+        model_name: str,
+        config: dict[str, Any] | None = None,
+        urlopen: Any = urllib.request.urlopen,
+    ):
+        super().__init__(
+            model_name,
+            provider_name="siliconflow",
+            default_base_url=SILICONFLOW_EMBEDDING_DEFAULT_BASE_URL,
+            default_model_name=SILICONFLOW_EMBEDDING_DEFAULT_MODEL,
+            default_api_key_env=SILICONFLOW_EMBEDDING_DEFAULT_API_KEY_ENV,
+            model_aliases=SILICONFLOW_EMBEDDING_MODEL_ALIASES,
+            config=config,
+            urlopen=urlopen,
+        )
 
 
 def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
@@ -164,15 +242,30 @@ def _resolve_api_key(config: dict[str, Any], default_env: str) -> str:
     if explicit:
         return explicit
     env_name = str(config.get("api_key_env") or default_env).strip()
-    if not env_name:
-        return ""
-    return os.getenv(env_name, "").strip()
+    if env_name in KNOWN_PROVIDER_API_KEY_ENVS and env_name != default_env:
+        env_candidates = [default_env, env_name]
+    else:
+        env_candidates = [env_name]
+        if default_env and default_env not in env_candidates:
+            env_candidates.append(default_env)
+    for candidate in env_candidates:
+        if not candidate:
+            continue
+        value = os.getenv(candidate, "").strip()
+        if value:
+            return value
+    return ""
 
 
-def _aliyun_embedding_model_name(raw_name: str) -> str:
+def _api_embedding_model_name(raw_name: str, default_name: str, aliases: dict[str, str]) -> str:
     name = str(raw_name or "").strip()
-    if not name or name in MODEL_MAP or name.startswith((".", "/")):
-        return ALIYUN_EMBEDDING_DEFAULT_MODEL
+    if not name or name.startswith((".", "/")):
+        return default_name
+    alias = aliases.get(name.lower())
+    if alias:
+        return alias
+    if name in MODEL_MAP:
+        return default_name
     return name
 
 
@@ -206,6 +299,7 @@ def create_backend(
 
     - provider=local/sentence-transformers loads a local or HF model.
     - provider=aliyun/dashscope calls Alibaba Cloud Model Studio.
+    - provider=siliconflow calls SiliconFlow.
     - Shortcut names (qwen, bge, bge-large) are resolved to HF model IDs.
     - Paths starting with ./ or / are treated as local directories.
     - Any other string is used directly as a HF model ID.
@@ -218,6 +312,8 @@ def create_backend(
     provider = str(provider or "local").strip().lower()
     if provider in {"aliyun", "dashscope"}:
         return AliyunEmbeddingBackend(name, config)
+    if provider in {"siliconflow", "silicon-flow", "silicon_flow", "sf"}:
+        return SiliconFlowEmbeddingBackend(name, config)
     if provider not in {"local", "sentence-transformers", "sentence_transformers", "huggingface", "hf"}:
         raise ValueError(f"Unsupported embedding provider: {provider}")
 
