@@ -117,6 +117,22 @@ func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsSetsSiliconFlowEmbeddingDefaults(t *testing.T) {
+	var cfg Config
+	cfg.Embedding.Provider = "siliconflow"
+	cfg.applyDefaults()
+
+	if cfg.Embedding.APIBaseURL != "https://api.siliconflow.cn/v1" {
+		t.Fatalf("Embedding APIBaseURL = %q", cfg.Embedding.APIBaseURL)
+	}
+	if cfg.Embedding.APIKeyEnv != "SILICONFLOW_API_KEY" {
+		t.Fatalf("Embedding APIKeyEnv = %q, want SILICONFLOW_API_KEY", cfg.Embedding.APIKeyEnv)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+}
+
 func TestApplyDefaultsSetsServerTimeoutDefaults(t *testing.T) {
 	var cfg Config
 	cfg.applyDefaults()

@@ -1,8 +1,8 @@
 """
 Embedding and Rerank Service
 FastAPI service providing /embed and /rerank endpoints.
-Supports local Qwen/BGE model backends and Alibaba Cloud Model Studio
-embedding APIs.
+Supports local Qwen/BGE model backends and OpenAI-compatible cloud embedding
+APIs such as Alibaba Cloud Model Studio and SiliconFlow.
 
 Configuration is read from config.yaml (same file used by the Go gateway),
 with environment variables as overrides:
@@ -85,7 +85,7 @@ MODEL_DEVICE = os.getenv(
 )
 EMBEDDING_API_BASE_URL = os.getenv("EMBEDDING_API_BASE_URL", _embedding_cfg.get("api_base_url", ""))
 EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", _embedding_cfg.get("api_key", ""))
-EMBEDDING_API_KEY_ENV = os.getenv("EMBEDDING_API_KEY_ENV", _embedding_cfg.get("api_key_env", "DASHSCOPE_API_KEY"))
+EMBEDDING_API_KEY_ENV = os.getenv("EMBEDDING_API_KEY_ENV", _embedding_cfg.get("api_key_env", ""))
 EMBEDDING_API_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_API_TIMEOUT_SECONDS", _embedding_cfg.get("api_timeout_seconds", 120)))
 EMBEDDING_DIMENSIONS = _get_int_env_or_cfg("EMBEDDING_DIMENSIONS", _cfg, "embedding", "dimensions", 0)
 EMBEDDING_BATCH_SIZE = _get_int_env_or_cfg("EMBEDDING_BATCH_SIZE", _cfg, "embedding", "batch_size", 10)

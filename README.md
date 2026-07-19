@@ -32,7 +32,7 @@
 │ ASR Service  │ │ Embedding    │ │ Video Summary│
 │ (:8001)      │ │ Service      │ │ (:8002)     │
 │ Whisper/     │ │ (:8003)      │ │ Marlin-2B    │
-│ FasterWhisper│ │ Qwen/BGE     │ │              │
+│ FasterWhisper│ │ Qwen/BGE/API │ │              │
 │ + Silero VAD │ │ embed+rerank │ │              │
 └──────────────┘ └──────┬───────┘ └──────────────┘
                         │
@@ -81,6 +81,10 @@ huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 如果使用阿里云模型 API，可以跳过对应的本地模型下载，在
 `config.yaml` 中把 `asr.model.provider` 或 `embedding.provider` 改为
 `aliyun`，并设置 `DASHSCOPE_API_KEY`。
+如果使用硅基流动 Embedding API，可以跳过 embedding 本地模型下载，把
+`embedding.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`；
+默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
+`Qwen/Qwen3-Embedding-0.6B`。
 如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
 `xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
 如果使用百度智能云短语音识别，把 `asr.model.provider` 改为 `baidu`，
@@ -184,7 +188,7 @@ curl http://localhost:8080/rag/health   # RAG 状态
 | `llm` | LLM 提供商 (openai/ollama/deepseek) + 格式化参数 |
 | `mysql` | MySQL 连接串 (用于会话持久化，可选) |
 | `qdrant` | Qdrant 向量数据库地址 |
-| `embedding` | Embedding 服务配置 (本地 qwen/bge 或 aliyun API) |
+| `embedding` | Embedding 服务配置 (本地 qwen/bge 或 aliyun/siliconflow API) |
 | `rerank` | 重排序参数 |
 | `mcp` | MCP Server 开关和端口 |
 

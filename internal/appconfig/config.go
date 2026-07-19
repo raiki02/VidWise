@@ -477,6 +477,7 @@ func (c *Config) applyDefaults() {
 	if c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "http://localhost:8003"
 	}
+	c.Embedding.Provider = strings.ToLower(strings.TrimSpace(c.Embedding.Provider))
 	if c.Embedding.Provider == "" {
 		c.Embedding.Provider = "local"
 	}
@@ -489,11 +490,20 @@ func (c *Config) applyDefaults() {
 	if c.Embedding.Timeout == "" {
 		c.Embedding.Timeout = "2m"
 	}
+	embeddingProvider := c.Embedding.Provider
 	if c.Embedding.APIBaseURL == "" {
-		c.Embedding.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		if isSiliconFlowProvider(embeddingProvider) {
+			c.Embedding.APIBaseURL = "https://api.siliconflow.cn/v1"
+		} else {
+			c.Embedding.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+		}
 	}
 	if c.Embedding.APIKeyEnv == "" {
-		c.Embedding.APIKeyEnv = "DASHSCOPE_API_KEY"
+		if isSiliconFlowProvider(embeddingProvider) {
+			c.Embedding.APIKeyEnv = "SILICONFLOW_API_KEY"
+		} else {
+			c.Embedding.APIKeyEnv = "DASHSCOPE_API_KEY"
+		}
 	}
 	if c.Embedding.APITimeoutSeconds == 0 {
 		c.Embedding.APITimeoutSeconds = 120
@@ -591,9 +601,9 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid video_summary.timeout: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Embedding.Provider)) {
-	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "aliyun", "dashscope":
+	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "aliyun", "dashscope", "siliconflow", "silicon-flow", "silicon_flow", "sf":
 	default:
-		return fmt.Errorf("embedding.provider must be one of: local, sentence-transformers, huggingface, aliyun, dashscope")
+		return fmt.Errorf("embedding.provider must be one of: local, sentence-transformers, huggingface, aliyun, dashscope, siliconflow")
 	}
 	if c.Embedding.BatchSize <= 0 {
 		return errors.New("embedding.batch_size must be greater than 0")
@@ -696,6 +706,15 @@ func (c TaskConfig) RetentionDuration() (time.Duration, error) {
 		return 0, errors.New("must be greater than 0")
 	}
 	return d, nil
+}
+
+func isSiliconFlowProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "siliconflow", "silicon-flow", "silicon_flow", "sf":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c QdrantConfig) Addr() string {
