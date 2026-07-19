@@ -368,13 +368,13 @@
           <form id="video-form" class="panel form-grid">
             <h3>异步视频处理</h3>
             <div>
-              <label for="video-url">视频 URL</label>
-              <input id="video-url" placeholder="https://example.com/video" />
+              <label for="video-url">视频 URL / 分享文案</label>
+              <input id="video-url" placeholder="粘贴视频链接或完整分享文案" />
             </div>
             <div class="split">
               <div>
-                <label for="video-name">名称</label>
-                <input id="video-name" placeholder="demo" />
+                <label for="video-name">名称（可选）</label>
+                <input id="video-name" placeholder="留空时尝试从分享文案提取" />
               </div>
               <div>
                 <label for="video-language">语言</label>
@@ -1027,8 +1027,8 @@
         status.style.color = "var(--danger)";
         return;
       }
-      if (!url || !name) {
-        status.textContent = "URL 和名称必填。";
+      if (!url) {
+        status.textContent = "请填写视频 URL 或分享文案。";
         status.style.color = "var(--danger)";
         return;
       }

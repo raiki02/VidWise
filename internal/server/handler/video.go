@@ -56,7 +56,7 @@ func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *back
 
 type VideoProcessRequest struct {
 	URL       string `json:"url" binding:"required"`
-	Name      string `json:"name" binding:"required"`
+	Name      string `json:"name"`
 	UserID    string `json:"user_id" binding:"required"`
 	SessionID string `json:"session_id"`
 	WorkDir   string `json:"work_dir"`
@@ -82,7 +82,19 @@ type VideoTaskIndexResponse struct {
 func (h *VideoHandler) VideoProcess(c *gin.Context) {
 	var req VideoProcessRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errorJSON(c, http.StatusBadRequest, "url, name, and user_id are required")
+		errorJSON(c, http.StatusBadRequest, "url and user_id are required")
+		return
+	}
+
+	normalized := normalizeVideoShareInput(req.URL, req.Name)
+	req.URL = normalized.URL
+	req.Name = normalized.Name
+	if req.URL == "" {
+		errorJSON(c, http.StatusBadRequest, "url is required")
+		return
+	}
+	if req.Name == "" {
+		errorJSON(c, http.StatusBadRequest, "name is required when the URL field does not include a share title")
 		return
 	}
 

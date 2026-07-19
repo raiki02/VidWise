@@ -90,6 +90,77 @@ func TestVideoProcessReturnsRequestTraceID(t *testing.T) {
 	}
 }
 
+func TestVideoProcessParsesShareTextWhenNameMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	runner := background.NewRunner(time.Second)
+	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
+
+	var gotURL string
+	var gotName string
+	h.processWithObserver = func(_ context.Context, _ *tool.Registry, url, workDir, name, userID, sessionID, taskID, language string, observer agent.VideoProcessObserver) (string, error) {
+		_ = workDir
+		_ = userID
+		_ = sessionID
+		_ = taskID
+		_ = language
+		gotURL = url
+		gotName = name
+		if outputObserver, ok := observer.(agent.VideoProcessOutputObserver); ok {
+			outputObserver.OutputUpdated(agent.VideoProcessTextOutput("formatted text", name, url, agent.VideoProcessTextStageFormatted))
+		}
+		return "formatted text", nil
+	}
+
+	router := gin.New()
+	router.POST("/video/process", h.VideoProcess)
+
+	shareText := `21 【电影视频解说 - 深夜片馆 | 小红书 - 你的生活兴趣社区】 😆 OIHLFXbU5yYT0hp 😆 https://www.xiaohongshu.com/discovery/item/6a5adafc0000000011013b62?source=webshare&xhsshare=pc_web&xsec_token=ABAS0lyqw2zJltYvQUa-wcATPs6hZgnV-PEyFg7NV01f0=&xsec_source=pc_share`
+	body, err := json.Marshal(map[string]string{
+		"url":     shareText,
+		"user_id": "u1",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/video/process", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out VideoProcessResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.Wait(waitCtx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	wantURL := "https://www.xiaohongshu.com/discovery/item/6a5adafc0000000011013b62?source=webshare&xhsshare=pc_web&xsec_token=ABAS0lyqw2zJltYvQUa-wcATPs6hZgnV-PEyFg7NV01f0=&xsec_source=pc_share"
+	wantName := "电影视频解说_-_深夜片馆"
+	if gotURL != wantURL {
+		t.Fatalf("process URL = %q, want %q", gotURL, wantURL)
+	}
+	if gotName != wantName {
+		t.Fatalf("process name = %q, want %q", gotName, wantName)
+	}
+	task, ok := h.tasks.Get(out.TaskID)
+	if !ok {
+		t.Fatalf("expected task %s to be tracked", out.TaskID)
+	}
+	if task.Output["source_url"] != wantURL {
+		t.Fatalf("task output = %#v, want parsed source_url", task.Output)
+	}
+	if task.Output["filename"] != wantName+".txt" {
+		t.Fatalf("task output = %#v, want filename from parsed title", task.Output)
+	}
+}
+
 func TestVideoProcessPublishesTranscriptWhileTaskRuns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	runner := background.NewRunner(time.Second)
