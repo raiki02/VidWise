@@ -84,7 +84,8 @@ huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 如果使用硅基流动 Embedding API，可以跳过 embedding 本地模型下载，把
 `embedding.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`；
 默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
-`Qwen/Qwen3-Embedding-0.6B`。
+`Qwen/Qwen3-Embedding-0.6B`。`embedding.dimensions` 只会发送给 SiliconFlow
+的 Qwen3 embedding 模型；使用 `BAAI/bge-m3` 等模型时适配器会自动省略该参数。
 如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
 `xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
 如果使用百度智能云短语音识别，把 `asr.model.provider` 改为 `baidu`，

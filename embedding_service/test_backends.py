@@ -142,6 +142,32 @@ class SiliconFlowEmbeddingBackendTest(unittest.TestCase):
 
         self.assertEqual(dict(requests[0].header_items())["Authorization"], "Bearer sf-env")
 
+    def test_dimensions_are_omitted_for_siliconflow_bge_models(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout: float):
+            requests.append(request)
+            return _FakeHTTPResponse({"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+        with self.assertLogs("embedding_service.backends", level="WARNING") as logs:
+            backend = SiliconFlowEmbeddingBackend(
+                "BAAI/bge-m3",
+                {
+                    "api_key": "sf-test",
+                    "dimensions": 1024,
+                    "batch_size": 10,
+                },
+                urlopen=fake_urlopen,
+            )
+
+        embeddings = backend.embed(["hello"])
+
+        self.assertIn("Ignoring embedding.dimensions=1024", logs.output[0])
+        self.assertEqual(embeddings, [[0.1, 0.2]])
+        body = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(body["model"], "BAAI/bge-m3")
+        self.assertNotIn("dimensions", body)
+
     def test_factory_accepts_siliconflow_alias_provider(self) -> None:
         backend = create_backend("qwen3-8b", provider="silicon-flow", config={"api_key": "sf-test"})
 
