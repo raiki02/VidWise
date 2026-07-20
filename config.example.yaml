@@ -201,7 +201,8 @@ embedding:
   device: "auto"
   timeout: "2m"
   # Used only for cloud providers. Leave blank for provider defaults:
-  #   aliyun/dashscope -> https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   aliyun qwen3-rerank -> https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   aliyun gte-rerank-v2 -> https://dashscope.aliyuncs.com/api/v1
   #   siliconflow     -> https://api.siliconflow.cn/v1
   api_base_url: ""
   api_key: ""
@@ -215,10 +216,38 @@ embedding:
   batch_size: 10
 
 rerank:
+  # Gateway -> local embedding/rerank adapter service.
   base_url: "http://localhost:8003"
-  model: "qwen"
+  # local/cross-encoder loads a dedicated sentence-transformers CrossEncoder.
+  # Cloud providers: aliyun/dashscope or siliconflow.
+  # Set provider to embedding/cosine only if you intentionally want the old
+  # embedding-similarity fallback instead of a dedicated reranker.
+  provider: "local"
+  # Local: bge-reranker shortcut maps to BAAI/bge-reranker-v2-m3, or use a local path.
+  # Aliyun: qwen3-rerank or gte-rerank-v2.
+  # SiliconFlow: BAAI/bge-reranker-v2-m3, netease-youdao/bce-reranker-base_v1, etc.
+  # Download local model first if using provider=local:
+  #   huggingface-cli download BAAI/bge-reranker-v2-m3 --local-dir ./models/bge-reranker-v2-m3
+  model: "BAAI/bge-reranker-v2-m3"
+  device: "auto"
   top_k: 3
   timeout: "1m"
+  # Used only for cloud providers. Leave blank for provider defaults:
+  #   aliyun/dashscope -> https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   siliconflow     -> https://api.siliconflow.cn/v1
+  # For Alibaba Cloud qwen3-rerank workspace endpoints, set the full workspace
+  # compatible API base URL, e.g. https://{workspace}.cn-beijing.maas.aliyuncs.com/compatible-api/v1
+  api_base_url: ""
+  api_key: ""
+  # Leave blank for provider defaults: DASHSCOPE_API_KEY or SILICONFLOW_API_KEY.
+  api_key_env: ""
+  api_timeout_seconds: 120
+  # Optional reranker-specific instruction. Sent as instruct for Aliyun qwen3-rerank
+  # and instruction for SiliconFlow.
+  instruction: ""
+  return_documents: false
+  max_chunks_per_doc: 0
+  overlap_tokens: 0
 
 mcp:
   enabled: true

@@ -3,7 +3,14 @@ import os
 import unittest
 from unittest.mock import patch
 
-from embedding_service.backends import AliyunEmbeddingBackend, SiliconFlowEmbeddingBackend, create_backend
+from embedding_service.backends import (
+    AliyunEmbeddingBackend,
+    AliyunRerankBackend,
+    SiliconFlowEmbeddingBackend,
+    SiliconFlowRerankBackend,
+    create_backend,
+    create_rerank_backend,
+)
 
 
 class _FakeHTTPResponse:
@@ -91,6 +98,86 @@ class AliyunEmbeddingBackendTest(unittest.TestCase):
         self.assertGreater(results[0][1], 0.9)
 
 
+class AliyunRerankBackendTest(unittest.TestCase):
+    def test_qwen3_rerank_posts_to_compatible_reranks_endpoint(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(
+                {
+                    "results": [
+                        {"index": 1, "relevance_score": 0.91},
+                        {"index": 0, "relevance_score": 0.42},
+                    ]
+                }
+            )
+
+        backend = AliyunRerankBackend(
+            "qwen3-rerank",
+            {
+                "api_base_url": "https://dashscope.example.com/compatible-api/v1",
+                "api_key": "ak-test",
+                "api_timeout_seconds": 30,
+                "instruction": "按事实相关性排序",
+            },
+            urlopen=fake_urlopen,
+        )
+
+        results = backend.rerank("query", ["doc-a", "doc-b"], 2)
+
+        self.assertEqual(results, [(1, 0.91), (0, 0.42)])
+        request, timeout = requests[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(request.get_full_url(), "https://dashscope.example.com/compatible-api/v1/reranks")
+        self.assertEqual(dict(request.header_items())["Authorization"], "Bearer ak-test")
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["model"], "qwen3-rerank")
+        self.assertEqual(body["query"], "query")
+        self.assertEqual(body["documents"], ["doc-a", "doc-b"])
+        self.assertEqual(body["top_n"], 2)
+        self.assertEqual(body["instruct"], "按事实相关性排序")
+
+    def test_gte_rerank_posts_to_dashscope_text_rerank_endpoint(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout: float):
+            requests.append(request)
+            return _FakeHTTPResponse(
+                {
+                    "output": {
+                        "results": [
+                            {"index": 0, "relevance_score": 0.81},
+                            {"index": 1, "relevance_score": 0.73},
+                        ]
+                    }
+                }
+            )
+
+        backend = AliyunRerankBackend(
+            "gte",
+            {
+                "api_base_url": "https://dashscope.example.com/api/v1",
+                "api_key": "ak-test",
+                "return_documents": True,
+            },
+            urlopen=fake_urlopen,
+        )
+
+        results = backend.rerank("query", ["doc-a", "doc-b"], 1)
+
+        self.assertEqual(results, [(0, 0.81)])
+        request = requests[0]
+        self.assertEqual(
+            request.get_full_url(),
+            "https://dashscope.example.com/api/v1/services/rerank/text-rerank/text-rerank",
+        )
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["model"], "gte-rerank-v2")
+        self.assertEqual(body["input"], {"query": "query", "documents": ["doc-a", "doc-b"]})
+        self.assertEqual(body["parameters"], {"top_n": 1, "return_documents": True})
+
+
 class SiliconFlowEmbeddingBackendTest(unittest.TestCase):
     def test_embed_posts_to_siliconflow_openai_compatible_endpoint(self) -> None:
         requests = []
@@ -173,6 +260,59 @@ class SiliconFlowEmbeddingBackendTest(unittest.TestCase):
 
         self.assertIsInstance(backend, SiliconFlowEmbeddingBackend)
         self.assertEqual(backend.model_name, "Qwen/Qwen3-Embedding-8B")
+
+
+class SiliconFlowRerankBackendTest(unittest.TestCase):
+    def test_rerank_posts_to_siliconflow_rerank_endpoint(self) -> None:
+        requests = []
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(
+                {
+                    "results": [
+                        {"index": 0, "relevance_score": 0.12},
+                        {"index": 1, "relevance_score": 0.98},
+                    ]
+                }
+            )
+
+        backend = SiliconFlowRerankBackend(
+            "bge-reranker",
+            {
+                "api_base_url": "https://siliconflow.example.com/v1",
+                "api_key": "sf-test",
+                "api_timeout_seconds": 45,
+                "instruction": "按视频转写语义相关性排序",
+                "return_documents": True,
+                "max_chunks_per_doc": 512,
+                "overlap_tokens": 80,
+            },
+            urlopen=fake_urlopen,
+        )
+
+        results = backend.rerank("query", ["doc-a", "doc-b"], 2)
+
+        self.assertEqual(results, [(1, 0.98), (0, 0.12)])
+        request, timeout = requests[0]
+        self.assertEqual(timeout, 45)
+        self.assertEqual(request.get_full_url(), "https://siliconflow.example.com/v1/rerank")
+        self.assertEqual(dict(request.header_items())["Authorization"], "Bearer sf-test")
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["model"], "BAAI/bge-reranker-v2-m3")
+        self.assertEqual(body["query"], "query")
+        self.assertEqual(body["documents"], ["doc-a", "doc-b"])
+        self.assertEqual(body["top_n"], 2)
+        self.assertEqual(body["instruction"], "按视频转写语义相关性排序")
+        self.assertTrue(body["return_documents"])
+        self.assertEqual(body["max_chunks_per_doc"], 512)
+        self.assertEqual(body["overlap_tokens"], 80)
+
+    def test_factory_accepts_siliconflow_rerank_provider(self) -> None:
+        backend = create_rerank_backend("bge", provider="sf", config={"api_key": "sf-test"})
+
+        self.assertIsInstance(backend, SiliconFlowRerankBackend)
+        self.assertEqual(backend.model_name, "BAAI/bge-reranker-v2-m3")
 
 
 if __name__ == "__main__":

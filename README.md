@@ -32,8 +32,8 @@
 │ ASR Service  │ │ Embedding    │ │ Video Summary│
 │ (:8001)      │ │ Service      │ │ (:8002)     │
 │ Whisper/     │ │ (:8003)      │ │ Marlin-2B    │
-│ FasterWhisper│ │ Qwen/BGE/API │ │              │
-│ + Silero VAD │ │ embed+rerank │ │              │
+│ FasterWhisper│ │ Embed API +  │ │              │
+│ + Silero VAD │ │ Rerank API   │ │              │
 └──────────────┘ └──────┬───────┘ └──────────────┘
                         │
                  ┌──────▼───────┐
@@ -76,16 +76,23 @@ git clone https://huggingface.co/openai/whisper-small ./models/whisper-small
 # Embedding 模型 (二选一)
 huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
 huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
+
+# Rerank 模型 (本地重排时需要)
+huggingface-cli download BAAI/bge-reranker-v2-m3 --local-dir ./models/bge-reranker-v2-m3
 ```
 
 如果使用阿里云模型 API，可以跳过对应的本地模型下载，在
 `config.yaml` 中把 `asr.model.provider` 或 `embedding.provider` 改为
 `aliyun`，并设置 `DASHSCOPE_API_KEY`。
-如果使用硅基流动 Embedding API，可以跳过 embedding 本地模型下载，把
-`embedding.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`；
+如果使用硅基流动 Embedding/Rerank API，可以跳过 embedding/rerank 本地模型下载，把
+`embedding.provider` 或 `rerank.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`；
 默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
 `Qwen/Qwen3-Embedding-0.6B`。`embedding.dimensions` 只会发送给 SiliconFlow
 的 Qwen3 embedding 模型；使用 `BAAI/bge-m3` 等模型时适配器会自动省略该参数。
+专用重排模型可使用 `BAAI/bge-reranker-v2-m3`。
+如果使用阿里云专用重排模型，把 `rerank.provider` 改为 `aliyun`；`qwen3-rerank`
+走 OpenAI-compatible `/reranks` 接口，`gte-rerank-v2` 走 DashScope
+`/services/rerank/text-rerank/text-rerank` 接口。
 如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
 `xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
 如果使用百度智能云短语音识别，把 `asr.model.provider` 改为 `baidu`，
@@ -192,7 +199,7 @@ curl http://localhost:8080/rag/health   # RAG 状态
 | `mysql` | MySQL 连接串 (用于会话持久化，可选) |
 | `qdrant` | Qdrant 向量数据库地址 |
 | `embedding` | Embedding 服务配置 (本地 qwen/bge 或 aliyun/siliconflow API) |
-| `rerank` | 重排序参数 |
+| `rerank` | 专用重排序配置 (本地 CrossEncoder 或 aliyun/siliconflow Rerank API) |
 | `mcp` | MCP Server 开关和端口 |
 
 ## 项目结构

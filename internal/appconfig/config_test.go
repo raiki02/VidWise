@@ -115,6 +115,18 @@ func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	if cfg.Embedding.BatchSize != 10 {
 		t.Fatalf("Embedding BatchSize = %d, want 10", cfg.Embedding.BatchSize)
 	}
+	if cfg.Rerank.Provider != "local" {
+		t.Fatalf("Rerank Provider = %q, want local", cfg.Rerank.Provider)
+	}
+	if cfg.Rerank.Model != "BAAI/bge-reranker-v2-m3" {
+		t.Fatalf("Rerank Model = %q, want BAAI/bge-reranker-v2-m3", cfg.Rerank.Model)
+	}
+	if cfg.Rerank.Device != "auto" {
+		t.Fatalf("Rerank Device = %q, want auto", cfg.Rerank.Device)
+	}
+	if cfg.Rerank.APITimeoutSeconds != 120 {
+		t.Fatalf("Rerank APITimeoutSeconds = %d, want 120", cfg.Rerank.APITimeoutSeconds)
+	}
 }
 
 func TestApplyDefaultsSetsSiliconFlowEmbeddingDefaults(t *testing.T) {
@@ -127,6 +139,61 @@ func TestApplyDefaultsSetsSiliconFlowEmbeddingDefaults(t *testing.T) {
 	}
 	if cfg.Embedding.APIKeyEnv != "SILICONFLOW_API_KEY" {
 		t.Fatalf("Embedding APIKeyEnv = %q, want SILICONFLOW_API_KEY", cfg.Embedding.APIKeyEnv)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+}
+
+func TestApplyDefaultsSetsSiliconFlowRerankDefaults(t *testing.T) {
+	var cfg Config
+	cfg.Rerank.Provider = "SiliconFlow"
+	cfg.applyDefaults()
+
+	if cfg.Rerank.Provider != "siliconflow" {
+		t.Fatalf("Rerank Provider = %q, want siliconflow", cfg.Rerank.Provider)
+	}
+	if cfg.Rerank.Model != "BAAI/bge-reranker-v2-m3" {
+		t.Fatalf("Rerank Model = %q, want BAAI/bge-reranker-v2-m3", cfg.Rerank.Model)
+	}
+	if cfg.Rerank.APIBaseURL != "https://api.siliconflow.cn/v1" {
+		t.Fatalf("Rerank APIBaseURL = %q", cfg.Rerank.APIBaseURL)
+	}
+	if cfg.Rerank.APIKeyEnv != "SILICONFLOW_API_KEY" {
+		t.Fatalf("Rerank APIKeyEnv = %q, want SILICONFLOW_API_KEY", cfg.Rerank.APIKeyEnv)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+}
+
+func TestApplyDefaultsSetsAliyunRerankDefaults(t *testing.T) {
+	var cfg Config
+	cfg.Rerank.Provider = "dashscope"
+	cfg.applyDefaults()
+
+	if cfg.Rerank.Model != "qwen3-rerank" {
+		t.Fatalf("Rerank Model = %q, want qwen3-rerank", cfg.Rerank.Model)
+	}
+	if cfg.Rerank.APIBaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
+		t.Fatalf("Rerank APIBaseURL = %q", cfg.Rerank.APIBaseURL)
+	}
+	if cfg.Rerank.APIKeyEnv != "DASHSCOPE_API_KEY" {
+		t.Fatalf("Rerank APIKeyEnv = %q, want DASHSCOPE_API_KEY", cfg.Rerank.APIKeyEnv)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+}
+
+func TestApplyDefaultsSetsAliyunGTERerankAPIBaseURL(t *testing.T) {
+	var cfg Config
+	cfg.Rerank.Provider = "aliyun"
+	cfg.Rerank.Model = "gte-rerank-v2"
+	cfg.applyDefaults()
+
+	if cfg.Rerank.APIBaseURL != "https://dashscope.aliyuncs.com/api/v1" {
+		t.Fatalf("Rerank APIBaseURL = %q", cfg.Rerank.APIBaseURL)
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate returned error: %v", err)
@@ -389,6 +456,27 @@ func TestValidateRejectsInvalidModelProviders(t *testing.T) {
 				cfg.Embedding.BatchSize = 0
 			},
 			wantErr: "embedding.batch_size",
+		},
+		{
+			name: "invalid rerank provider",
+			mutate: func(cfg *Config) {
+				cfg.Rerank.Provider = "unknown"
+			},
+			wantErr: "rerank.provider",
+		},
+		{
+			name: "invalid rerank top k",
+			mutate: func(cfg *Config) {
+				cfg.Rerank.TopK = 0
+			},
+			wantErr: "rerank.top_k",
+		},
+		{
+			name: "negative rerank max chunks",
+			mutate: func(cfg *Config) {
+				cfg.Rerank.MaxChunksPerDoc = -1
+			},
+			wantErr: "rerank.max_chunks_per_doc",
 		},
 	}
 
