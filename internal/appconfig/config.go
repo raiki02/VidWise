@@ -209,10 +209,20 @@ type EmbeddingConfig struct {
 }
 
 type RerankConfig struct {
-	BaseURL string `yaml:"base_url"`
-	Model   string `yaml:"model"`
-	TopK    int    `yaml:"top_k"`
-	Timeout string `yaml:"timeout"`
+	BaseURL           string `yaml:"base_url"`
+	Provider          string `yaml:"provider"`
+	Model             string `yaml:"model"`
+	Device            string `yaml:"device"`
+	TopK              int    `yaml:"top_k"`
+	Timeout           string `yaml:"timeout"`
+	APIBaseURL        string `yaml:"api_base_url"`
+	APIKey            string `yaml:"api_key"`
+	APIKeyEnv         string `yaml:"api_key_env"`
+	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
+	Instruction       string `yaml:"instruction"`
+	ReturnDocuments   bool   `yaml:"return_documents"`
+	MaxChunksPerDoc   int    `yaml:"max_chunks_per_doc"`
+	OverlapTokens     int    `yaml:"overlap_tokens"`
 }
 
 type MCPConfig struct {
@@ -515,14 +525,38 @@ func (c *Config) applyDefaults() {
 	if c.Rerank.BaseURL == "" {
 		c.Rerank.BaseURL = "http://localhost:8003"
 	}
+	c.Rerank.Provider = strings.ToLower(strings.TrimSpace(c.Rerank.Provider))
+	if c.Rerank.Provider == "" {
+		c.Rerank.Provider = "local"
+	}
 	if c.Rerank.Model == "" {
-		c.Rerank.Model = "qwen"
+		c.Rerank.Model = defaultRerankModel(c.Rerank.Provider)
+	}
+	if c.Rerank.Device == "" {
+		c.Rerank.Device = "auto"
 	}
 	if c.Rerank.TopK == 0 {
 		c.Rerank.TopK = 3
 	}
 	if c.Rerank.Timeout == "" {
 		c.Rerank.Timeout = "1m"
+	}
+	if c.Rerank.APIBaseURL == "" {
+		if isSiliconFlowProvider(c.Rerank.Provider) {
+			c.Rerank.APIBaseURL = "https://api.siliconflow.cn/v1"
+		} else if isAliyunProvider(c.Rerank.Provider) {
+			c.Rerank.APIBaseURL = defaultAliyunRerankAPIBaseURL(c.Rerank.Model)
+		}
+	}
+	if c.Rerank.APIKeyEnv == "" {
+		if isSiliconFlowProvider(c.Rerank.Provider) {
+			c.Rerank.APIKeyEnv = "SILICONFLOW_API_KEY"
+		} else if isAliyunProvider(c.Rerank.Provider) {
+			c.Rerank.APIKeyEnv = "DASHSCOPE_API_KEY"
+		}
+	}
+	if c.Rerank.APITimeoutSeconds == 0 {
+		c.Rerank.APITimeoutSeconds = 120
 	}
 	// MCP defaults
 	if c.MCP.Addr == "" {
@@ -607,6 +641,23 @@ func (c Config) validate() error {
 	}
 	if c.Embedding.BatchSize <= 0 {
 		return errors.New("embedding.batch_size must be greater than 0")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Rerank.Provider)) {
+	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "cross-encoder", "cross_encoder", "reranker", "aliyun", "dashscope", "siliconflow", "silicon-flow", "silicon_flow", "sf", "embedding", "cosine", "legacy":
+	default:
+		return fmt.Errorf("rerank.provider must be one of: local, cross-encoder, aliyun, dashscope, siliconflow, embedding")
+	}
+	if c.Rerank.TopK <= 0 {
+		return errors.New("rerank.top_k must be greater than 0")
+	}
+	if c.Rerank.APITimeoutSeconds < 0 {
+		return errors.New("rerank.api_timeout_seconds must be greater than or equal to 0")
+	}
+	if c.Rerank.MaxChunksPerDoc < 0 {
+		return errors.New("rerank.max_chunks_per_doc must be greater than or equal to 0")
+	}
+	if c.Rerank.OverlapTokens < 0 {
+		return errors.New("rerank.overlap_tokens must be greater than or equal to 0")
 	}
 	if c.RAG.Retrieval.SearchTopK <= 0 {
 		return errors.New("rag.retrieval.search_top_k must be greater than 0")
@@ -715,6 +766,29 @@ func isSiliconFlowProvider(provider string) bool {
 	default:
 		return false
 	}
+}
+
+func isAliyunProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "aliyun", "dashscope":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultRerankModel(provider string) string {
+	if isAliyunProvider(provider) {
+		return "qwen3-rerank"
+	}
+	return "BAAI/bge-reranker-v2-m3"
+}
+
+func defaultAliyunRerankAPIBaseURL(model string) string {
+	if strings.EqualFold(strings.TrimSpace(model), "qwen3-rerank") {
+		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
+	return "https://dashscope.aliyuncs.com/api/v1"
 }
 
 func (c QdrantConfig) Addr() string {
