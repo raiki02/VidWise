@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/raiki02/vidwise/internal/trace"
 )
 
 const traceIDHeader = "X-Trace-Id"
@@ -19,6 +20,7 @@ func TraceID() gin.HandlerFunc {
 		}
 		c.Header(traceIDHeader, traceID)
 		c.Set("trace_id", traceID)
+		c.Request = c.Request.WithContext(trace.WithID(c.Request.Context(), traceID))
 		c.Next()
 	}
 }

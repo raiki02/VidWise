@@ -182,6 +182,60 @@ rag:
     # Maximum retrieved context runes packed into the LLM prompt.
     max_runes: 12000
 
+search:
+  # Enables the Eino web_search tool. Tool inputs stay limited to query/freshness;
+  # providers, crawler, cache, rerank, and compression stay internal.
+  enabled: true
+  # Backward-compatible primary provider. `providers` below controls multi-source routing.
+  provider: "mock"
+  # Supported: mock, internal, bing, tavily, duckduckgo.
+  providers: ["mock"]
+  query_rewrite_provider: "mock" # mock or llm
+  query_rewrite_max_queries: 3
+  rerank_provider: "keyword" # keyword or embedding
+  cache_provider: "memory" # memory or redis
+  timeout: "10s"
+  cache_ttl: "5m"
+  max_cache_keys: 1024
+  max_results: 10
+  max_documents: 5
+  max_content_runes: 1200
+  max_total_runes: 6000
+  max_response_bytes: 2097152
+  max_concurrency: 4
+  user_agent: "VidwiseSearchBot/0.1"
+  allow_localhost: false
+  # Reserved for future robots.txt policy enforcement.
+  robots_policy: "respect"
+  bing:
+    enabled: false
+    base_url: "https://api.bing.microsoft.com/v7.0/search"
+    api_key: ""
+    api_key_env: "BING_SEARCH_API_KEY"
+    max_results: 10
+  tavily:
+    enabled: false
+    base_url: "https://api.tavily.com/search"
+    api_key: ""
+    api_key_env: "TAVILY_API_KEY"
+    max_results: 10
+    search_depth: "basic"
+  duckduckgo:
+    enabled: false
+    base_url: "https://duckduckgo.com/html/"
+    max_results: 10
+  internal:
+    enabled: false
+    search_top_k: 20
+    top_k: 8
+    min_score: 0
+  redis:
+    addr: "localhost:6379"
+    password: ""
+    db: 0
+    key_prefix: "vidwise:search:"
+    timeout: "1s"
+
 embedding:
   # Gateway -> local embedding adapter service. Keep this local even when the
   # adapter itself calls a cloud embedding provider.

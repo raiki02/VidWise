@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,40 @@ func TestRegisterToolsExposesRerankToolWhenRerankAvailable(t *testing.T) {
 	assertWrappedTool(t, registry, "rerank_documents")
 }
 
+func TestRegisterToolsExposesWebSearchWhenEnabledWithMockProvider(t *testing.T) {
+	registry := tool.NewRegistry()
+	caps := capability.FromRuntime(capability.RuntimeDeps{LLMConfig: testMainLLMConfig()})
+	cfg := appconfig.Config{
+		LLM:    testMainLLMConfig(),
+		Search: testMainSearchConfig("mock"),
+	}
+
+	registerTools(registry, cfg, nil, nil, testMainASRClient(t), caps, ragruntime.Runtime{})
+
+	assertWrappedTool(t, registry, "web_search")
+}
+
+func TestNewSearchServiceRejectsBingWithoutAPIKey(t *testing.T) {
+	cfg := testMainSearchConfig("bing")
+	cfg.Bing.APIKey = ""
+	cfg.Bing.APIKeyEnv = "VIDWISE_TEST_EMPTY_BING_KEY"
+
+	_, err := newSearchService(cfg, testMainLLMConfig(), nil, ragruntime.Runtime{})
+	if err == nil || !strings.Contains(err.Error(), "bing") {
+		t.Fatalf("newSearchService error = %v, want bing key error", err)
+	}
+}
+
+func TestNewSearchServiceRejectsEmbeddingRerankWithoutClient(t *testing.T) {
+	cfg := testMainSearchConfig("mock")
+	cfg.RerankProvider = "embedding"
+
+	_, err := newSearchService(cfg, testMainLLMConfig(), nil, ragruntime.Runtime{})
+	if err == nil || !strings.Contains(err.Error(), "rerank") {
+		t.Fatalf("newSearchService error = %v, want rerank client error", err)
+	}
+}
+
 func assertToolPresent(t *testing.T, registry *tool.Registry, name string) {
 	t.Helper()
 	if _, err := registry.Get(name); err != nil {
@@ -119,6 +154,55 @@ func assertWrappedTool(t *testing.T, registry *tool.Registry, name string) {
 func testMainLLMConfig() appconfig.LLMConfig {
 	enabled := false
 	return appconfig.LLMConfig{Enabled: &enabled}
+}
+
+func testMainSearchConfig(providers ...string) appconfig.SearchConfig {
+	if len(providers) == 0 {
+		providers = []string{"mock"}
+	}
+	return appconfig.SearchConfig{
+		Enabled:                true,
+		Provider:               providers[0],
+		Providers:              providers,
+		Timeout:                "10s",
+		QueryRewriteProvider:   "mock",
+		QueryRewriteMaxQueries: 3,
+		RerankProvider:         "keyword",
+		CacheProvider:          "memory",
+		CacheTTL:               "5m",
+		MaxCacheKeys:           1024,
+		MaxResults:             10,
+		MaxDocuments:           5,
+		MaxContentRunes:        1200,
+		MaxTotalRunes:          6000,
+		MaxResponseBytes:       2 * 1024 * 1024,
+		MaxConcurrency:         4,
+		UserAgent:              "test-agent",
+		Bing: appconfig.SearchProviderConfig{
+			BaseURL:    "https://api.bing.microsoft.com/v7.0/search",
+			APIKey:     "test-key",
+			MaxResults: 10,
+		},
+		Tavily: appconfig.SearchProviderConfig{
+			BaseURL:     "https://api.tavily.com/search",
+			APIKey:      "test-key",
+			MaxResults:  10,
+			SearchDepth: "basic",
+		},
+		DuckDuckGo: appconfig.SearchProviderConfig{
+			BaseURL:    "https://duckduckgo.com/html/",
+			MaxResults: 10,
+		},
+		Internal: appconfig.SearchInternalProviderConfig{
+			SearchTopK: 20,
+			TopK:       8,
+		},
+		Redis: appconfig.SearchRedisConfig{
+			Addr:      "localhost:6379",
+			KeyPrefix: "vidwise:search:",
+			Timeout:   "1s",
+		},
+	}
 }
 
 func testMainASRClient(t *testing.T) *asr.Client {
