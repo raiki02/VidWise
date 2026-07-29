@@ -24,6 +24,96 @@ func TestApplyDefaultsSetsRAGRetrievalDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsSetsSearchDefaults(t *testing.T) {
+	var cfg Config
+	cfg.applyDefaults()
+
+	if cfg.Search.Provider != "mock" {
+		t.Fatalf("Search Provider = %q, want mock", cfg.Search.Provider)
+	}
+	if strings.Join(cfg.Search.Providers, ",") != "mock" {
+		t.Fatalf("Search Providers = %#v, want mock", cfg.Search.Providers)
+	}
+	if cfg.Search.QueryRewriteProvider != "mock" {
+		t.Fatalf("Search QueryRewriteProvider = %q, want mock", cfg.Search.QueryRewriteProvider)
+	}
+	if cfg.Search.QueryRewriteMaxQueries != 3 {
+		t.Fatalf("Search QueryRewriteMaxQueries = %d, want 3", cfg.Search.QueryRewriteMaxQueries)
+	}
+	if cfg.Search.RerankProvider != "keyword" {
+		t.Fatalf("Search RerankProvider = %q, want keyword", cfg.Search.RerankProvider)
+	}
+	if cfg.Search.CacheProvider != "memory" {
+		t.Fatalf("Search CacheProvider = %q, want memory", cfg.Search.CacheProvider)
+	}
+	if cfg.Search.Timeout != "10s" {
+		t.Fatalf("Search Timeout = %q, want 10s", cfg.Search.Timeout)
+	}
+	if cfg.Search.CacheTTL != "5m" {
+		t.Fatalf("Search CacheTTL = %q, want 5m", cfg.Search.CacheTTL)
+	}
+	if cfg.Search.MaxResults != 10 {
+		t.Fatalf("Search MaxResults = %d, want 10", cfg.Search.MaxResults)
+	}
+	if cfg.Search.MaxDocuments != 5 {
+		t.Fatalf("Search MaxDocuments = %d, want 5", cfg.Search.MaxDocuments)
+	}
+	if cfg.Search.MaxContentRunes != 1200 {
+		t.Fatalf("Search MaxContentRunes = %d, want 1200", cfg.Search.MaxContentRunes)
+	}
+	if cfg.Search.MaxTotalRunes != 6000 {
+		t.Fatalf("Search MaxTotalRunes = %d, want 6000", cfg.Search.MaxTotalRunes)
+	}
+	if cfg.Search.MaxResponseBytes != 2*1024*1024 {
+		t.Fatalf("Search MaxResponseBytes = %d, want 2097152", cfg.Search.MaxResponseBytes)
+	}
+	if cfg.Search.MaxConcurrency != 4 {
+		t.Fatalf("Search MaxConcurrency = %d, want 4", cfg.Search.MaxConcurrency)
+	}
+	if cfg.Search.UserAgent != "VidwiseSearchBot/0.1" {
+		t.Fatalf("Search UserAgent = %q", cfg.Search.UserAgent)
+	}
+	if cfg.Search.Bing.APIKeyEnv != "BING_SEARCH_API_KEY" {
+		t.Fatalf("Search Bing APIKeyEnv = %q", cfg.Search.Bing.APIKeyEnv)
+	}
+	if cfg.Search.Tavily.APIKeyEnv != "TAVILY_API_KEY" {
+		t.Fatalf("Search Tavily APIKeyEnv = %q", cfg.Search.Tavily.APIKeyEnv)
+	}
+	if cfg.Search.DuckDuckGo.BaseURL != "https://duckduckgo.com/html/" {
+		t.Fatalf("Search DuckDuckGo BaseURL = %q", cfg.Search.DuckDuckGo.BaseURL)
+	}
+	if cfg.Search.Redis.KeyPrefix != "vidwise:search:" {
+		t.Fatalf("Search Redis KeyPrefix = %q", cfg.Search.Redis.KeyPrefix)
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate returned error: %v", err)
+	}
+}
+
+func TestApplyDefaultsUsesEnabledSearchProviders(t *testing.T) {
+	var cfg Config
+	cfg.Search.DuckDuckGo.Enabled = true
+	cfg.Search.Internal.Enabled = true
+	cfg.applyDefaults()
+
+	if strings.Join(cfg.Search.Providers, ",") != "duckduckgo,internal" {
+		t.Fatalf("Search Providers = %#v", cfg.Search.Providers)
+	}
+	if cfg.Search.Provider != "duckduckgo" {
+		t.Fatalf("Search Provider = %q, want duckduckgo", cfg.Search.Provider)
+	}
+}
+
+func TestApplyDefaultsNormalizesSearchProviders(t *testing.T) {
+	var cfg Config
+	cfg.Search.Providers = []string{" Bing ", "bing", "Tavily"}
+	cfg.applyDefaults()
+
+	if strings.Join(cfg.Search.Providers, ",") != "bing,tavily" {
+		t.Fatalf("Search Providers = %#v", cfg.Search.Providers)
+	}
+}
+
 func TestApplyDefaultsSetsModelProviderDefaults(t *testing.T) {
 	var cfg Config
 	cfg.applyDefaults()
@@ -237,6 +327,17 @@ func TestApplyDefaultsSetsTaskDefaults(t *testing.T) {
 	}
 	if retention != 24*time.Hour {
 		t.Fatalf("RetentionDuration = %s, want 24h", retention)
+	}
+}
+
+func TestValidateRejectsInvalidSearchConfig(t *testing.T) {
+	var cfg Config
+	cfg.applyDefaults()
+	cfg.Search.Provider = "unknown"
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "search.provider") {
+		t.Fatalf("validate error = %v, want search.provider error", err)
 	}
 }
 

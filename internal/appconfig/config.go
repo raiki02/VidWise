@@ -19,6 +19,7 @@ type Config struct {
 	MySQL        MySQLConfig        `yaml:"mysql"`
 	Qdrant       QdrantConfig       `yaml:"qdrant"`
 	RAG          RAGConfig          `yaml:"rag"`
+	Search       SearchConfig       `yaml:"search"`
 	Embedding    EmbeddingConfig    `yaml:"embedding"`
 	Rerank       RerankConfig       `yaml:"rerank"`
 	MCP          MCPConfig          `yaml:"mcp"`
@@ -192,6 +193,57 @@ type RAGRetrievalConfig struct {
 
 type RAGContextConfig struct {
 	MaxRunes int `yaml:"max_runes"`
+}
+
+type SearchConfig struct {
+	Enabled                bool                         `yaml:"enabled"`
+	Provider               string                       `yaml:"provider"`
+	Providers              []string                     `yaml:"providers"`
+	Timeout                string                       `yaml:"timeout"`
+	QueryRewriteProvider   string                       `yaml:"query_rewrite_provider"`
+	QueryRewriteMaxQueries int                          `yaml:"query_rewrite_max_queries"`
+	RerankProvider         string                       `yaml:"rerank_provider"`
+	CacheProvider          string                       `yaml:"cache_provider"`
+	CacheTTL               string                       `yaml:"cache_ttl"`
+	MaxCacheKeys           int                          `yaml:"max_cache_keys"`
+	MaxResults             int                          `yaml:"max_results"`
+	MaxDocuments           int                          `yaml:"max_documents"`
+	MaxContentRunes        int                          `yaml:"max_content_runes"`
+	MaxTotalRunes          int                          `yaml:"max_total_runes"`
+	MaxResponseBytes       int64                        `yaml:"max_response_bytes"`
+	MaxConcurrency         int                          `yaml:"max_concurrency"`
+	UserAgent              string                       `yaml:"user_agent"`
+	AllowLocalhost         bool                         `yaml:"allow_localhost"`
+	RobotsPolicy           string                       `yaml:"robots_policy"`
+	Bing                   SearchProviderConfig         `yaml:"bing"`
+	Tavily                 SearchProviderConfig         `yaml:"tavily"`
+	DuckDuckGo             SearchProviderConfig         `yaml:"duckduckgo"`
+	Internal               SearchInternalProviderConfig `yaml:"internal"`
+	Redis                  SearchRedisConfig            `yaml:"redis"`
+}
+
+type SearchProviderConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	BaseURL     string `yaml:"base_url"`
+	APIKey      string `yaml:"api_key"`
+	APIKeyEnv   string `yaml:"api_key_env"`
+	MaxResults  int    `yaml:"max_results"`
+	SearchDepth string `yaml:"search_depth"`
+}
+
+type SearchInternalProviderConfig struct {
+	Enabled    bool    `yaml:"enabled"`
+	SearchTopK int     `yaml:"search_top_k"`
+	TopK       int     `yaml:"top_k"`
+	MinScore   float64 `yaml:"min_score"`
+}
+
+type SearchRedisConfig struct {
+	Addr      string `yaml:"addr"`
+	Password  string `yaml:"password"`
+	DB        int    `yaml:"db"`
+	KeyPrefix string `yaml:"key_prefix"`
+	Timeout   string `yaml:"timeout"`
 }
 
 type EmbeddingConfig struct {
@@ -483,6 +535,109 @@ func (c *Config) applyDefaults() {
 	if c.RAG.Context.MaxRunes == 0 {
 		c.RAG.Context.MaxRunes = 12000
 	}
+	// Web search defaults
+	c.Search.Provider = strings.ToLower(strings.TrimSpace(c.Search.Provider))
+	normalizeStringSliceLower(&c.Search.Providers)
+	if len(c.Search.Providers) == 0 {
+		c.Search.Providers = enabledSearchProviders(c.Search)
+	}
+	if len(c.Search.Providers) == 0 && c.Search.Provider != "" {
+		c.Search.Providers = []string{c.Search.Provider}
+	}
+	if len(c.Search.Providers) == 0 {
+		c.Search.Provider = "mock"
+		c.Search.Providers = []string{"mock"}
+	}
+	if c.Search.Provider == "" && len(c.Search.Providers) > 0 {
+		c.Search.Provider = c.Search.Providers[0]
+	}
+	c.Search.QueryRewriteProvider = strings.ToLower(strings.TrimSpace(c.Search.QueryRewriteProvider))
+	if c.Search.QueryRewriteProvider == "" {
+		c.Search.QueryRewriteProvider = "mock"
+	}
+	if c.Search.QueryRewriteMaxQueries == 0 {
+		c.Search.QueryRewriteMaxQueries = 3
+	}
+	c.Search.RerankProvider = strings.ToLower(strings.TrimSpace(c.Search.RerankProvider))
+	if c.Search.RerankProvider == "" {
+		c.Search.RerankProvider = "keyword"
+	}
+	c.Search.CacheProvider = strings.ToLower(strings.TrimSpace(c.Search.CacheProvider))
+	if c.Search.CacheProvider == "" {
+		c.Search.CacheProvider = "memory"
+	}
+	if c.Search.Timeout == "" {
+		c.Search.Timeout = "10s"
+	}
+	if c.Search.CacheTTL == "" {
+		c.Search.CacheTTL = "5m"
+	}
+	if c.Search.MaxCacheKeys == 0 {
+		c.Search.MaxCacheKeys = 1024
+	}
+	if c.Search.MaxResults == 0 {
+		c.Search.MaxResults = 10
+	}
+	if c.Search.MaxDocuments == 0 {
+		c.Search.MaxDocuments = 5
+	}
+	if c.Search.MaxContentRunes == 0 {
+		c.Search.MaxContentRunes = 1200
+	}
+	if c.Search.MaxTotalRunes == 0 {
+		c.Search.MaxTotalRunes = c.Search.MaxDocuments * c.Search.MaxContentRunes
+	}
+	if c.Search.MaxResponseBytes == 0 {
+		c.Search.MaxResponseBytes = 2 * 1024 * 1024
+	}
+	if c.Search.MaxConcurrency == 0 {
+		c.Search.MaxConcurrency = 4
+	}
+	if c.Search.UserAgent == "" {
+		c.Search.UserAgent = "VidwiseSearchBot/0.1"
+	}
+	if c.Search.Bing.BaseURL == "" {
+		c.Search.Bing.BaseURL = "https://api.bing.microsoft.com/v7.0/search"
+	}
+	if c.Search.Bing.APIKeyEnv == "" {
+		c.Search.Bing.APIKeyEnv = "BING_SEARCH_API_KEY"
+	}
+	if c.Search.Bing.MaxResults == 0 {
+		c.Search.Bing.MaxResults = c.Search.MaxResults
+	}
+	if c.Search.Tavily.BaseURL == "" {
+		c.Search.Tavily.BaseURL = "https://api.tavily.com/search"
+	}
+	if c.Search.Tavily.APIKeyEnv == "" {
+		c.Search.Tavily.APIKeyEnv = "TAVILY_API_KEY"
+	}
+	if c.Search.Tavily.MaxResults == 0 {
+		c.Search.Tavily.MaxResults = c.Search.MaxResults
+	}
+	if c.Search.Tavily.SearchDepth == "" {
+		c.Search.Tavily.SearchDepth = "basic"
+	}
+	if c.Search.DuckDuckGo.BaseURL == "" {
+		c.Search.DuckDuckGo.BaseURL = "https://duckduckgo.com/html/"
+	}
+	if c.Search.DuckDuckGo.MaxResults == 0 {
+		c.Search.DuckDuckGo.MaxResults = c.Search.MaxResults
+	}
+	if c.Search.Internal.SearchTopK == 0 {
+		c.Search.Internal.SearchTopK = c.RAG.Retrieval.SearchTopK
+	}
+	if c.Search.Internal.TopK == 0 {
+		c.Search.Internal.TopK = c.RAG.Retrieval.TopK
+	}
+	if c.Search.Redis.Addr == "" {
+		c.Search.Redis.Addr = "localhost:6379"
+	}
+	if c.Search.Redis.KeyPrefix == "" {
+		c.Search.Redis.KeyPrefix = "vidwise:search:"
+	}
+	if c.Search.Redis.Timeout == "" {
+		c.Search.Redis.Timeout = "1s"
+	}
 	// Embedding defaults
 	if c.Embedding.BaseURL == "" {
 		c.Embedding.BaseURL = "http://localhost:8003"
@@ -674,6 +829,81 @@ func (c Config) validate() error {
 	if c.RAG.Context.MaxRunes <= 0 {
 		return errors.New("rag.context.max_runes must be greater than 0")
 	}
+	for _, provider := range c.Search.Providers {
+		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "mock", "bing", "tavily", "duckduckgo", "internal":
+		default:
+			return fmt.Errorf("search.providers must contain only: mock, bing, tavily, duckduckgo, internal")
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Search.Provider)) {
+	case "mock", "bing", "tavily", "duckduckgo", "internal":
+	default:
+		return fmt.Errorf("search.provider must be one of: mock, bing, tavily, duckduckgo, internal")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Search.QueryRewriteProvider)) {
+	case "mock", "llm":
+	default:
+		return fmt.Errorf("search.query_rewrite_provider must be one of: mock, llm")
+	}
+	if c.Search.QueryRewriteMaxQueries <= 0 {
+		return errors.New("search.query_rewrite_max_queries must be greater than 0")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Search.RerankProvider)) {
+	case "keyword", "embedding":
+	default:
+		return fmt.Errorf("search.rerank_provider must be one of: keyword, embedding")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Search.CacheProvider)) {
+	case "memory", "redis":
+	default:
+		return fmt.Errorf("search.cache_provider must be one of: memory, redis")
+	}
+	if _, err := c.Search.TimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid search.timeout: %w", err)
+	}
+	if _, err := c.Search.CacheTTLDuration(); err != nil {
+		return fmt.Errorf("invalid search.cache_ttl: %w", err)
+	}
+	if c.Search.MaxCacheKeys <= 0 {
+		return errors.New("search.max_cache_keys must be greater than 0")
+	}
+	if c.Search.MaxResults <= 0 {
+		return errors.New("search.max_results must be greater than 0")
+	}
+	if c.Search.MaxDocuments <= 0 {
+		return errors.New("search.max_documents must be greater than 0")
+	}
+	if c.Search.MaxContentRunes <= 0 {
+		return errors.New("search.max_content_runes must be greater than 0")
+	}
+	if c.Search.MaxTotalRunes <= 0 {
+		return errors.New("search.max_total_runes must be greater than 0")
+	}
+	if c.Search.MaxResponseBytes <= 0 {
+		return errors.New("search.max_response_bytes must be greater than 0")
+	}
+	if c.Search.MaxConcurrency <= 0 {
+		return errors.New("search.max_concurrency must be greater than 0")
+	}
+	if c.Search.Bing.MaxResults <= 0 {
+		return errors.New("search.bing.max_results must be greater than 0")
+	}
+	if c.Search.Tavily.MaxResults <= 0 {
+		return errors.New("search.tavily.max_results must be greater than 0")
+	}
+	if c.Search.DuckDuckGo.MaxResults <= 0 {
+		return errors.New("search.duckduckgo.max_results must be greater than 0")
+	}
+	if c.Search.Internal.SearchTopK <= 0 {
+		return errors.New("search.internal.search_top_k must be greater than 0")
+	}
+	if c.Search.Internal.TopK <= 0 {
+		return errors.New("search.internal.top_k must be greater than 0")
+	}
+	if _, err := c.Search.Redis.TimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid search.redis.timeout: %w", err)
+	}
 	if c.Task.MaxTracked <= 0 {
 		return errors.New("task.max_tracked must be greater than 0")
 	}
@@ -708,6 +938,18 @@ func (c ASRConfig) TimeoutDuration() (time.Duration, error) {
 }
 
 func (c VideoSummaryConfig) TimeoutDuration() (time.Duration, error) {
+	return time.ParseDuration(c.Timeout)
+}
+
+func (c SearchConfig) TimeoutDuration() (time.Duration, error) {
+	return time.ParseDuration(c.Timeout)
+}
+
+func (c SearchConfig) CacheTTLDuration() (time.Duration, error) {
+	return time.ParseDuration(c.CacheTTL)
+}
+
+func (c SearchRedisConfig) TimeoutDuration() (time.Duration, error) {
 	return time.ParseDuration(c.Timeout)
 }
 
@@ -757,6 +999,43 @@ func (c TaskConfig) RetentionDuration() (time.Duration, error) {
 		return 0, errors.New("must be greater than 0")
 	}
 	return d, nil
+}
+
+func normalizeStringSliceLower(values *[]string) {
+	if values == nil || len(*values) == 0 {
+		return
+	}
+	out := make([]string, 0, len(*values))
+	seen := map[string]struct{}{}
+	for _, value := range *values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	*values = out
+}
+
+func enabledSearchProviders(cfg SearchConfig) []string {
+	var providers []string
+	if cfg.Bing.Enabled {
+		providers = append(providers, "bing")
+	}
+	if cfg.Tavily.Enabled {
+		providers = append(providers, "tavily")
+	}
+	if cfg.DuckDuckGo.Enabled {
+		providers = append(providers, "duckduckgo")
+	}
+	if cfg.Internal.Enabled {
+		providers = append(providers, "internal")
+	}
+	return providers
 }
 
 func isSiliconFlowProvider(provider string) bool {

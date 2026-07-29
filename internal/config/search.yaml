@@ -1,0 +1,55 @@
+# Standalone search subsystem configuration template.
+# The current gateway loads the equivalent `search:` block from config.yaml.
+
+enabled: true
+provider: "mock"
+providers: ["mock"]
+query_rewrite_provider: "mock"
+query_rewrite_max_queries: 3
+rerank_provider: "keyword"
+cache_provider: "memory"
+timeout: "10s"
+cache_ttl: "5m"
+max_cache_keys: 1024
+max_results: 10
+max_documents: 5
+max_content_runes: 1200
+max_total_runes: 6000
+max_response_bytes: 2097152
+max_concurrency: 4
+user_agent: "VidwiseSearchBot/0.1"
+allow_localhost: false
+robots_policy: "respect"
+
+bing:
+  enabled: false
+  base_url: "https://api.bing.microsoft.com/v7.0/search"
+  api_key: ""
+  api_key_env: "BING_SEARCH_API_KEY"
+  max_results: 10
+
+tavily:
+  enabled: false
+  base_url: "https://api.tavily.com/search"
+  api_key: ""
+  api_key_env: "TAVILY_API_KEY"
+  max_results: 10
+  search_depth: "basic"
+
+duckduckgo:
+  enabled: false
+  base_url: "https://duckduckgo.com/html/"
+  max_results: 10
+
+internal:
+  enabled: false
+  search_top_k: 20
+  top_k: 8
+  min_score: 0
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  key_prefix: "vidwise:search:"
+  timeout: "1s"

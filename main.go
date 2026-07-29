@@ -19,12 +19,15 @@ import (
 	"github.com/raiki02/vidwise/internal/mcp"
 	"github.com/raiki02/vidwise/internal/memory"
 	"github.com/raiki02/vidwise/internal/model"
+	"github.com/raiki02/vidwise/internal/paragraph"
 	"github.com/raiki02/vidwise/internal/ragregistry"
 	"github.com/raiki02/vidwise/internal/ragruntime"
+	searchinfra "github.com/raiki02/vidwise/internal/search"
 	"github.com/raiki02/vidwise/internal/server"
 	mysqlclient "github.com/raiki02/vidwise/internal/storage/mysql"
 	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
 	"github.com/raiki02/vidwise/internal/tool"
+	webtools "github.com/raiki02/vidwise/internal/tools"
 	video_summary "github.com/raiki02/vidwise/internal/video_summary"
 )
 
@@ -285,6 +288,28 @@ func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *m
 		registry.Register("format_transcript", formatWrap, nil)
 	}
 
+	if cfg.Search.Enabled {
+		searchService, err := newSearchService(cfg.Search, cfg.LLM, rerankClient, ragRuntime)
+		if err != nil {
+			slog.Warn("gateway.tool_register_failed", "tool", "web_search", "err", err)
+		} else {
+			searchTool, err := webtools.NewWebSearchTool(searchService)
+			if err != nil {
+				slog.Warn("gateway.tool_register_failed", "tool", "web_search", "err", err)
+			} else {
+				searchTimeout, timeoutErr := cfg.Search.TimeoutDuration()
+				if timeoutErr != nil {
+					searchTimeout = 10 * time.Second
+				}
+				registry.Register("web_search", tool.NewWrapper(searchTool, tool.WrapperConfig{
+					Name:     "web_search",
+					MaxRetry: 1,
+					Timeout:  searchTimeout,
+				}), nil)
+			}
+		}
+	}
+
 	if asrClient != nil {
 		_, asrWrap, err := tool.NewASRTool(asrClient)
 		if err != nil {
@@ -344,6 +369,204 @@ func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *m
 	}
 
 	slog.Info("gateway.tools_registered", "count", len(registry.List()))
+}
+
+func newSearchService(cfg appconfig.SearchConfig, llmCfg appconfig.LLMConfig, rerankClient *model.RerankClient, ragRuntime ragruntime.Runtime) (searchinfra.SearchService, error) {
+	timeout, err := cfg.TimeoutDuration()
+	if err != nil {
+		return nil, fmt.Errorf("parse search timeout: %w", err)
+	}
+	cacheTTL, err := cfg.CacheTTLDuration()
+	if err != nil {
+		return nil, fmt.Errorf("parse search cache ttl: %w", err)
+	}
+	registrations, err := newSearchProviders(cfg, timeout, ragRuntime)
+	if err != nil {
+		return nil, err
+	}
+	cache, err := newSearchCache(cfg, cacheTTL)
+	if err != nil {
+		return nil, err
+	}
+	rewriter, err := newSearchQueryRewriter(cfg, llmCfg)
+	if err != nil {
+		return nil, err
+	}
+	reranker, err := newSearchReranker(cfg, rerankClient)
+	if err != nil {
+		return nil, err
+	}
+	router := searchinfra.NewProviderRouter(registrations...)
+	return searchinfra.NewService(searchinfra.ServiceDependencies{
+		Cache:    cache,
+		Rewriter: rewriter,
+		Router:   router,
+		Crawler: searchinfra.NewBasicCrawler(searchinfra.BasicCrawlerConfig{
+			Timeout:          timeout,
+			MaxResponseBytes: cfg.MaxResponseBytes,
+			MaxConcurrency:   cfg.MaxConcurrency,
+			UserAgent:        cfg.UserAgent,
+			AllowLocalhost:   cfg.AllowLocalhost,
+			RobotsPolicy:     cfg.RobotsPolicy,
+		}),
+		Extractor: searchinfra.NewBasicExtractor(),
+		Reranker:  reranker,
+		Compressor: searchinfra.NewBasicCompressor(searchinfra.BasicCompressorConfig{
+			MaxDocuments:    cfg.MaxDocuments,
+			MaxContentRunes: cfg.MaxContentRunes,
+			MaxTotalRunes:   cfg.MaxTotalRunes,
+		}),
+		Config: searchinfra.ServiceConfig{
+			MaxProviderResults: cfg.MaxResults,
+		},
+		Metrics: searchinfra.NewLoggingMetrics(slog.Default()),
+	})
+}
+
+func newSearchProviders(cfg appconfig.SearchConfig, timeout time.Duration, ragRuntime ragruntime.Runtime) ([]searchinfra.ProviderRegistration, error) {
+	providers := cfg.Providers
+	if len(providers) == 0 {
+		providers = []string{cfg.Provider}
+	}
+	registrations := make([]searchinfra.ProviderRegistration, 0, len(providers))
+	for _, provider := range providers {
+		switch provider {
+		case "mock":
+			registrations = append(registrations, searchinfra.ProviderRegistration{
+				Name:     searchinfra.ProviderMock,
+				Provider: searchinfra.NewMockProvider(nil),
+			})
+		case "bing":
+			p, err := searchinfra.NewBingProvider(searchinfra.HTTPProviderConfig{
+				BaseURL:    cfg.Bing.BaseURL,
+				APIKey:     cfg.Bing.APIKey,
+				APIKeyEnv:  cfg.Bing.APIKeyEnv,
+				MaxResults: cfg.Bing.MaxResults,
+				Timeout:    timeout,
+				UserAgent:  cfg.UserAgent,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create bing provider: %w", err)
+			}
+			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderBing, Provider: p})
+		case "tavily":
+			p, err := searchinfra.NewTavilyProvider(searchinfra.HTTPProviderConfig{
+				BaseURL:     cfg.Tavily.BaseURL,
+				APIKey:      cfg.Tavily.APIKey,
+				APIKeyEnv:   cfg.Tavily.APIKeyEnv,
+				MaxResults:  cfg.Tavily.MaxResults,
+				SearchDepth: cfg.Tavily.SearchDepth,
+				Timeout:     timeout,
+				UserAgent:   cfg.UserAgent,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create tavily provider: %w", err)
+			}
+			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderTavily, Provider: p})
+		case "duckduckgo":
+			p, err := searchinfra.NewDuckDuckGoProvider(searchinfra.HTTPProviderConfig{
+				BaseURL:    cfg.DuckDuckGo.BaseURL,
+				MaxResults: cfg.DuckDuckGo.MaxResults,
+				Timeout:    timeout,
+				UserAgent:  cfg.UserAgent,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create duckduckgo provider: %w", err)
+			}
+			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderDuckDuckGo, Provider: p})
+		case "internal":
+			if ragRuntime.Retriever == nil {
+				return nil, fmt.Errorf("internal search provider requires RAG retriever")
+			}
+			p, err := searchinfra.NewInternalSearchProvider(ragRuntime.Retriever, searchinfra.InternalProviderConfig{
+				SearchTopK: cfg.Internal.SearchTopK,
+				TopK:       cfg.Internal.TopK,
+				MinScore:   cfg.Internal.MinScore,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create internal search provider: %w", err)
+			}
+			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderInternal, Provider: p})
+		default:
+			return nil, fmt.Errorf("unsupported search provider: %s", provider)
+		}
+	}
+	if len(registrations) == 0 {
+		return nil, fmt.Errorf("at least one search provider is required")
+	}
+	return registrations, nil
+}
+
+func newSearchCache(cfg appconfig.SearchConfig, cacheTTL time.Duration) (searchinfra.SearchCache, error) {
+	switch cfg.CacheProvider {
+	case "memory":
+		return searchinfra.NewMemoryCache(searchinfra.MemoryCacheConfig{
+			TTL:     cacheTTL,
+			MaxKeys: cfg.MaxCacheKeys,
+		}), nil
+	case "redis":
+		redisTimeout, err := cfg.Redis.TimeoutDuration()
+		if err != nil {
+			return nil, fmt.Errorf("parse redis timeout: %w", err)
+		}
+		return searchinfra.NewRedisCache(searchinfra.RedisCacheConfig{
+			Addr:      cfg.Redis.Addr,
+			Password:  cfg.Redis.Password,
+			DB:        cfg.Redis.DB,
+			KeyPrefix: cfg.Redis.KeyPrefix,
+			TTL:       cacheTTL,
+			Timeout:   redisTimeout,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported search cache provider: %s", cfg.CacheProvider)
+	}
+}
+
+func newSearchQueryRewriter(cfg appconfig.SearchConfig, llmCfg appconfig.LLMConfig) (searchinfra.QueryRewriter, error) {
+	switch cfg.QueryRewriteProvider {
+	case "mock":
+		return searchinfra.MockQueryRewriter{}, nil
+	case "llm":
+		return searchinfra.NewLLMQueryRewriter(func(ctx context.Context) (searchinfra.QueryRewriteChatModel, error) {
+			return paragraph.NewChatModel(ctx, llmCfg)
+		}, cfg.QueryRewriteMaxQueries)
+	default:
+		return nil, fmt.Errorf("unsupported search query rewrite provider: %s", cfg.QueryRewriteProvider)
+	}
+}
+
+func newSearchReranker(cfg appconfig.SearchConfig, rerankClient *model.RerankClient) (searchinfra.Reranker, error) {
+	switch cfg.RerankProvider {
+	case "keyword":
+		return searchinfra.NewKeywordReranker(), nil
+	case "embedding":
+		if rerankClient == nil {
+			return nil, fmt.Errorf("embedding search rerank requires configured rerank client")
+		}
+		return searchinfra.NewEmbeddingReranker(searchRerankAdapter{client: rerankClient}, searchinfra.NewKeywordReranker())
+	default:
+		return nil, fmt.Errorf("unsupported search rerank provider: %s", cfg.RerankProvider)
+	}
+}
+
+type searchRerankAdapter struct {
+	client *model.RerankClient
+}
+
+func (a searchRerankAdapter) Rerank(ctx context.Context, query string, documents []string) ([]searchinfra.RerankResult, error) {
+	results, err := a.client.Rerank(ctx, query, documents)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchinfra.RerankResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, searchinfra.RerankResult{
+			Index: result.Index,
+			Score: result.Score,
+			Text:  result.Text,
+		})
+	}
+	return out, nil
 }
 
 func runWorker(cfg appconfig.Config) {

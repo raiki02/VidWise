@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/raiki02/vidwise/internal/trace"
 )
 
 func TestTraceIDPropagatesHeaderAndRequestLoggerEmitsStructuredLog(t *testing.T) {
@@ -20,6 +21,9 @@ func TestTraceIDPropagatesHeaderAndRequestLoggerEmitsStructuredLog(t *testing.T)
 	engine.Use(TraceID())
 	engine.Use(RequestLoggerWithLogger(logger))
 	engine.GET("/ping", func(c *gin.Context) {
+		if got := trace.ID(c.Request.Context()); got != "trace-123" {
+			t.Fatalf("request context trace id = %q, want trace-123", got)
+		}
 		c.JSON(http.StatusAccepted, gin.H{"ok": true})
 	})
 
