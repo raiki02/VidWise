@@ -209,6 +209,18 @@
     .message.user { align-self: flex-end; background: #12313a; border-color: rgba(45, 212, 191, .35); }
     .message.assistant { align-self: flex-start; background: var(--surface); }
     .message .meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .action-card {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111116;
+      display: grid;
+      gap: 8px;
+    }
+    .action-title { font-weight: 800; font-size: 13px; }
+    .action-summary { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+    .action-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     details { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
     summary { cursor: pointer; color: var(--muted); font-weight: 700; }
     .chunk {
@@ -479,6 +491,7 @@
       activeTaskId: "",
       pollTimer: 0,
       indexingTaskIds: new Set(),
+      suggestedIndexTaskIds: new Set(),
     };
 
     const titles = {
@@ -750,13 +763,13 @@
       $("#send-chat").disabled = true;
       try {
         const body = {
-          query,
+          message: query,
           user_id: state.userId,
           session_id: state.sessionId,
           source_ids: chatSourceIDs(),
           document_ids: documentFilters(),
         };
-        const data = await fetchJSON("/chat/query", {
+        const data = await fetchJSON("/agent/turn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -767,7 +780,9 @@
           updateScopeUI();
         }
         placeholder.innerHTML = esc(data.answer || "");
+        placeholder.innerHTML += renderAgentActions(data);
         placeholder.innerHTML += renderAnswerMeta(data);
+        bindAgentActionButtons(placeholder);
         $("#rag-diagnostics").innerHTML = renderDiagnostics(data);
         await loadSessions();
       } catch (err) {
@@ -778,12 +793,13 @@
     }
 
     function renderAnswerMeta(data) {
-      const status = data.rag_answer_status || data.rag_status || "not_applicable";
-      const chunks = data.rag_context_chunks || [];
+      const rag = data.rag_trace || {};
+      const status = rag.answer_status || data.rag_answer_status || rag.status || data.rag_status || "not_applicable";
+      const chunks = rag.context_chunks || data.rag_context_chunks || [];
       let html = `<div class="meta">`;
       html += `<span class="pill ${statusClass(status)}">answer:${esc(status)}</span>`;
-      html += `<span class="pill">retrieval:${esc(data.rag_status || "-")}</span>`;
-      html += `<span class="pill">used:${data.rag_context_used_chunks || 0}</span>`;
+      html += `<span class="pill">retrieval:${esc(rag.status || data.rag_status || "-")}</span>`;
+      html += `<span class="pill">used:${rag.context_used_chunks || data.rag_context_used_chunks || 0}</span>`;
       html += `</div>`;
       if (chunks.length) {
         html += `<details><summary>Prompt 片段 ${chunks.length}</summary>`;
@@ -802,6 +818,85 @@
       return html;
     }
 
+    function renderAgentActions(data) {
+      const pending = data.pending_actions || [];
+      const executed = data.executed_actions || [];
+      let html = "";
+      pending.forEach((action) => {
+        html += `<div class="action-card" data-action-card="${esc(action.id)}">
+          <div class="row" style="justify-content:space-between;">
+            <div class="action-title">${esc(action.title || action.type)}</div>
+            <span class="pill ${statusClass(action.risk_level)}">${esc(action.risk_level || "")}</span>
+          </div>
+          <div class="action-summary">${esc(action.summary || "")}</div>
+          <div class="action-actions">
+            <button class="primary" type="button" data-agent-action="${esc(action.id)}">确认执行</button>
+            <span class="small muted" data-agent-action-status></span>
+          </div>
+        </div>`;
+      });
+      executed.forEach((action) => {
+        html += `<div class="action-card">
+          <div class="row" style="justify-content:space-between;">
+            <div class="action-title">${esc(action.title || action.type)}</div>
+            <span class="pill ${statusClass(action.status)}">${esc(action.status || "executed")}</span>
+          </div>
+          <div class="action-summary">${esc(action.summary || "")}</div>
+        </div>`;
+      });
+      return html;
+    }
+
+    function bindAgentActionButtons(root = document) {
+      root.querySelectorAll("[data-agent-action]").forEach((button) => {
+        button.onclick = () => confirmAgentAction(button);
+      });
+    }
+
+    async function confirmAgentAction(button) {
+      const actionId = button.dataset.agentAction;
+      const card = button.closest("[data-action-card]");
+      const status = card ? card.querySelector("[data-agent-action-status]") : null;
+      if (!actionId) return;
+      button.disabled = true;
+      button.textContent = "执行中...";
+      if (status) {
+        status.textContent = "";
+        status.style.color = "";
+      }
+      try {
+        const data = await fetchJSON(`/agent/actions/${encodeURIComponent(actionId)}/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: state.userId }),
+        });
+        if (data.session_id) {
+          state.sessionId = data.session_id;
+          localStorage.setItem("vidwise.session_id", state.sessionId);
+          updateScopeUI();
+        }
+        button.textContent = "已执行";
+        if (status) {
+          status.textContent = data.answer || "完成";
+          status.style.color = "#bbf7d0";
+        }
+        if ((data.task_ids || []).length) {
+          state.activeTaskId = data.task_ids[0];
+          updateScopeUI();
+          pollTask(state.activeTaskId);
+        }
+        addMessage("assistant", data.answer || "操作已完成。", renderAgentActions(data));
+        await Promise.allSettled([loadSessions(), loadTasks(), loadSources()]);
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "确认执行";
+        if (status) {
+          status.textContent = err.message;
+          status.style.color = "var(--danger)";
+        }
+      }
+    }
+
     function renderChunk(chunk, index) {
       const source = [chunk.source_name, chunk.heading_path, chunk.document_title, chunk.source_url].filter(Boolean).join(" / ");
       const text = String(chunk.text || "");
@@ -809,14 +904,15 @@
     }
 
     function renderDiagnostics(data) {
-      const cited = (data.rag_answer_cited_snippets || []).join(", ") || "-";
-      const invalid = (data.rag_answer_invalid_snippets || []).join(", ") || "-";
-      const queries = (data.rag_queries || []).join(" | ") || data.rag_query || "-";
+      const rag = data.rag_trace || {};
+      const cited = (rag.cited_snippets || data.rag_answer_cited_snippets || []).join(", ") || "-";
+      const invalid = (rag.invalid_snippets || data.rag_answer_invalid_snippets || []).join(", ") || "-";
+      const queries = (rag.queries || data.rag_queries || []).join(" | ") || rag.query || data.rag_query || "-";
       return [
-        `RAG: ${esc(data.rag_status || "-")}`,
-        `answer: ${esc(data.rag_answer_status || "-")}`,
+        `RAG: ${esc(rag.status || data.rag_status || "-")}`,
+        `answer: ${esc(rag.answer_status || data.rag_answer_status || "-")}`,
         `query: ${esc(queries)}`,
-        `chunks: retrieved ${data.rag_chunk_count || 0}, used ${data.rag_context_used_chunks || 0}, duplicates ${data.rag_context_skipped_duplicates || 0}`,
+        `chunks: retrieved ${rag.chunk_count || data.rag_chunk_count || 0}, used ${rag.context_used_chunks || data.rag_context_used_chunks || 0}, duplicates ${rag.context_skipped_duplicates || data.rag_context_skipped_duplicates || 0}`,
         `citations: ${esc(cited)}, invalid ${esc(invalid)}`,
         `trace: ${esc(data.trace_id || "-")}`,
       ].join("<br>");
@@ -1070,11 +1166,34 @@
         if (!["done", "failed"].includes(task.status)) {
           state.pollTimer = setTimeout(() => pollTask(taskId), 1800);
         } else {
+          await suggestTaskIndexAction(task);
           await loadTasks();
           await loadSources();
         }
       } catch (err) {
         $("#active-task").textContent = err.message;
+      }
+    }
+
+    async function suggestTaskIndexAction(task) {
+      if (!task || task.status !== "done" || state.suggestedIndexTaskIds.has(task.task_id)) return;
+      const output = task.output && typeof task.output === "object" ? task.output : {};
+      if (output.knowledge_indexed === true || output.can_index_knowledge !== true || output.text_formatted !== true) return;
+      state.suggestedIndexTaskIds.add(task.task_id);
+      try {
+        const data = await fetchJSON("/agent/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: state.userId,
+            session_id: state.sessionId || task.session_id,
+            message: `把 ${task.task_id} 存入知识库`,
+          }),
+        });
+        addMessage("assistant", data.answer || "任务已完成，可以存入知识库。", renderAgentActions(data));
+        bindAgentActionButtons($("#messages"));
+      } catch {
+        state.suggestedIndexTaskIds.delete(task.task_id);
       }
     }
 
@@ -1311,6 +1430,7 @@
       $("#upload-form").addEventListener("submit", uploadSource);
       $("#video-form").addEventListener("submit", startVideoTask);
       $("#format-form").addEventListener("submit", formatText);
+      bindAgentActionButtons();
     }
 
     bindEvents();

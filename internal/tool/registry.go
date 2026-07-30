@@ -1,7 +1,9 @@
 package tool
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -25,6 +27,14 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(name string, t tool.InvokableTool, info *schema.ToolInfo) {
+	if info == nil && t != nil {
+		var err error
+		info, err = t.Info(context.Background())
+		if err != nil {
+			slog.Warn("tool.registry.info_unavailable", "name", name, "err", err)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[name] = Entry{Tool: t, Info: info}

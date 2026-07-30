@@ -86,20 +86,26 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		return
 	}
 
+	out, err := h.StartVideoProcess(c.Request.Context(), req, requestTraceID(c))
+	if err != nil {
+		errorJSON(c, statusFromError(err, http.StatusInternalServerError), err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, out)
+}
+
+func (h *VideoHandler) StartVideoProcess(_ context.Context, req VideoProcessRequest, traceID string) (VideoProcessResponse, error) {
 	normalized := normalizeVideoShareInput(req.URL, req.Name)
 	req.URL = normalized.URL
 	req.Name = normalized.Name
 	if req.URL == "" {
-		errorJSON(c, http.StatusBadRequest, "url is required")
-		return
+		return VideoProcessResponse{}, newResponseError(http.StatusBadRequest, "url is required")
 	}
 	if req.Name == "" {
-		errorJSON(c, http.StatusBadRequest, "name is required when the URL field does not include a share title")
-		return
+		return VideoProcessResponse{}, newResponseError(http.StatusBadRequest, "name is required when the URL field does not include a share title")
 	}
 
 	taskID := uuid.New().String()
-	traceID := requestTraceID(c)
 
 	if req.SessionID == "" {
 		req.SessionID = uuid.New().String()
@@ -172,66 +178,67 @@ func (h *VideoHandler) VideoProcess(c *gin.Context) {
 		tasks.Complete(taskID, completeVideoProcessOutput(tasks, taskID, result, req.Name, req.URL))
 	})
 
-	c.JSON(http.StatusAccepted, VideoProcessResponse{
+	return VideoProcessResponse{
 		TaskID:    taskID,
 		TraceID:   traceID,
 		Status:    "pending",
 		SessionID: req.SessionID,
-	})
+	}, nil
 }
 
 // IndexTaskTranscript handles POST /task/:id/index — user-triggered indexing
 // of the transcript produced by a completed async video task.
 func (h *VideoHandler) IndexTaskTranscript(c *gin.Context) {
 	taskID := strings.TrimSpace(c.Param("id"))
-	if taskID == "" {
-		errorJSON(c, http.StatusBadRequest, "task id is required")
+	out, err := h.IndexTranscriptTask(c.Request.Context(), taskID)
+	if err != nil {
+		errorJSON(c, statusFromError(err, http.StatusInternalServerError), err.Error())
 		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *VideoHandler) IndexTranscriptTask(ctx context.Context, taskID string) (VideoTaskIndexResponse, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusBadRequest, "task id is required")
 	}
 
 	tasks := h.tasks
 	if tasks == nil {
-		errorJSON(c, http.StatusNotFound, "task not found")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusNotFound, "task not found")
 	}
 	tracked, ok := tasks.Get(taskID)
 	if !ok {
-		errorJSON(c, http.StatusNotFound, "task not found")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusNotFound, "task not found")
 	}
 	if tracked.Type != "video_process" {
-		errorJSON(c, http.StatusBadRequest, "task must be a video_process task")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusBadRequest, "task must be a video_process task")
 	}
 	if tracked.Status != taskpkg.StatusDone {
-		errorJSON(c, http.StatusConflict, "task must be done before indexing")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusConflict, "task must be done before indexing")
 	}
 
 	if taskOutputBool(tracked.Output, "knowledge_indexed") {
-		c.JSON(http.StatusOK, VideoTaskIndexResponse{
+		return VideoTaskIndexResponse{
 			Status:      "already_indexed",
 			TaskID:      tracked.ID,
 			ChunkCount:  taskOutputInt(tracked.Output, "knowledge_chunk_count"),
 			ContentType: taskOutputString(tracked.Output, "knowledge_content_type"),
 			SourceIDs:   taskOutputStrings(tracked.Output, "knowledge_source_ids"),
-		})
-		return
+		}, nil
 	}
 	text := taskOutputString(tracked.Output, "formatted_text")
 	if text == "" || !taskOutputBool(tracked.Output, "text_formatted") || !taskOutputBool(tracked.Output, "can_index_knowledge") {
-		errorJSON(c, http.StatusConflict, "task transcript must be formatted before indexing")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusConflict, "task transcript must be formatted before indexing")
 	}
 
 	if h.registry == nil {
-		errorJSON(c, http.StatusServiceUnavailable, "RAG indexing is not available")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusServiceUnavailable, "RAG indexing is not available")
 	}
 	ragTool, err := h.registry.Get("rag_index")
 	if err != nil {
-		errorJSON(c, http.StatusServiceUnavailable, "RAG indexing is not available")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusServiceUnavailable, "RAG indexing is not available")
 	}
 
 	filename := taskOutputString(tracked.Output, "filename")
@@ -255,18 +262,16 @@ func (h *VideoHandler) IndexTaskTranscript(c *gin.Context) {
 		SessionID:   tracked.SessionID,
 		Metadata:    metadata,
 	})
-	resultJSON, err := ragTool.InvokableRun(c.Request.Context(), args)
+	resultJSON, err := ragTool.InvokableRun(ctx, args)
 	if err != nil {
 		slog.Warn("video.task_index_failed", "task_id", tracked.ID, "err", err)
-		errorJSON(c, http.StatusBadGateway, "indexing failed: "+err.Error())
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusBadGateway, "indexing failed: "+err.Error())
 	}
 
 	var indexed tool.RAGIndexOutput
 	if err := json.Unmarshal([]byte(resultJSON), &indexed); err != nil {
 		slog.Warn("video.task_index_decode_failed", "task_id", tracked.ID, "err", err)
-		errorJSON(c, http.StatusBadGateway, "indexing returned invalid response")
-		return
+		return VideoTaskIndexResponse{}, newResponseError(http.StatusBadGateway, "indexing returned invalid response")
 	}
 	tasks.PatchOutput(tracked.ID, map[string]any{
 		"knowledge_indexed":      true,
@@ -276,13 +281,13 @@ func (h *VideoHandler) IndexTaskTranscript(c *gin.Context) {
 		"knowledge_source_ids":   indexed.SourceIDs,
 	})
 
-	c.JSON(http.StatusOK, VideoTaskIndexResponse{
+	return VideoTaskIndexResponse{
 		Status:      "indexed",
 		TaskID:      tracked.ID,
 		ChunkCount:  indexed.ChunkCount,
 		ContentType: indexed.ContentType,
 		SourceIDs:   indexed.SourceIDs,
-	})
+	}, nil
 }
 
 type taskStepObserver struct {

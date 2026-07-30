@@ -43,6 +43,46 @@ func TestWrapperDelegatesInfo(t *testing.T) {
 	}
 }
 
+func TestRegistryLoadsInfoFromRegisteredTool(t *testing.T) {
+	inner := &failingInvokableTool{err: errors.New("boom")}
+	registry := NewRegistry()
+
+	registry.Register("failing_tool", inner, nil)
+
+	info, err := registry.GetInfo("failing_tool")
+	if err != nil {
+		t.Fatalf("GetInfo returned error: %v", err)
+	}
+	if info == nil {
+		t.Fatal("GetInfo returned nil info")
+	}
+	if info.Name != "failing_tool" {
+		t.Fatalf("Info.Name = %q, want failing_tool", info.Name)
+	}
+	if inner.infoCalls != 1 {
+		t.Fatalf("Info calls = %d, want 1", inner.infoCalls)
+	}
+}
+
+func TestRegistryKeepsExplicitInfo(t *testing.T) {
+	inner := &failingInvokableTool{err: errors.New("boom")}
+	registry := NewRegistry()
+	explicit := &schema.ToolInfo{Name: "explicit_tool", Desc: "explicit metadata"}
+
+	registry.Register("failing_tool", inner, explicit)
+
+	info, err := registry.GetInfo("failing_tool")
+	if err != nil {
+		t.Fatalf("GetInfo returned error: %v", err)
+	}
+	if info != explicit {
+		t.Fatal("GetInfo did not return the explicit info")
+	}
+	if inner.infoCalls != 0 {
+		t.Fatalf("Info calls = %d, want 0", inner.infoCalls)
+	}
+}
+
 type failingInvokableTool struct {
 	attempts  int
 	infoCalls int

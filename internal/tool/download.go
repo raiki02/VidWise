@@ -21,12 +21,13 @@ type DownloadOutput struct {
 	Stdout     string `json:"stdout"`
 }
 
-func NewDownloadTool() (tool.InvokableTool, *Wrapper, error) {
+func NewDownloadTool(cookiesPath ...string) (tool.InvokableTool, *Wrapper, error) {
+	defaultCookiesPath := optionalString(cookiesPath)
 	inner, err := utils.InferTool(
 		"download_video",
 		"Download a video from a URL using yt-dlp. Returns the output file path.",
 		func(ctx context.Context, input DownloadInput) (DownloadOutput, error) {
-			stdout, err := downloadcmd.Video(input.URL, input.OutputPath, input.CookiesPath)
+			stdout, err := downloadcmd.Video(input.URL, input.OutputPath, firstNonEmpty(input.CookiesPath, defaultCookiesPath))
 			if err != nil {
 				return DownloadOutput{}, fmt.Errorf("download video: %w", err)
 			}

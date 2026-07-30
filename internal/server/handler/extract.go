@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/raiki02/vidwise/internal/paragraph"
 	"github.com/raiki02/vidwise/internal/rag"
 	"github.com/raiki02/vidwise/internal/tool"
+	"github.com/raiki02/vidwise/internal/videoinput"
 )
 
 // ExtractHandler retains backward compatibility with the legacy /extract and /format endpoints.
@@ -448,13 +448,8 @@ func bindExtractRequest(c *gin.Context) (extractRequest, error) {
 	return req, nil
 }
 
-var safeNameRE = regexp.MustCompile(`[^\p{L}\p{N}._-]+`)
-
 func sanitizeName(name string) string {
-	name = strings.TrimSpace(name)
-	name = safeNameRE.ReplaceAllString(name, "_")
-	name = strings.Trim(name, "._-")
-	return name
+	return videoinput.SanitizeName(name)
 }
 
 func statusForExtractError(err error) int {

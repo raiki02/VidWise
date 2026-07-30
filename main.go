@@ -259,21 +259,21 @@ func runGateway(cfg appconfig.Config) {
 
 func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *model.EmbedClient, rerankClient *model.RerankClient, asrClient *asr.Client, caps capability.Snapshot, ragRuntime ragruntime.Runtime) {
 	// Download & audio extraction tools (no external dependencies)
-	_, dlWrap, err := tool.NewDownloadTool()
+	_, dlWrap, err := tool.NewDownloadTool(cfg.Download.CookiesPath)
 	if err != nil {
 		slog.Warn("gateway.tool_register_failed", "tool", "download_video", "err", err)
 	} else {
 		registry.Register("download_video", dlWrap, nil)
 	}
 
-	_, downloadAudioWrap, err := tool.NewAudioDownloadTool()
+	_, downloadAudioWrap, err := tool.NewAudioDownloadTool(cfg.Download.CookiesPath)
 	if err != nil {
 		slog.Warn("gateway.tool_register_failed", "tool", "download_audio", "err", err)
 	} else {
 		registry.Register("download_audio", downloadAudioWrap, nil)
 	}
 
-	_, audioWrap, err := tool.NewAudioExtractTool()
+	_, audioWrap, err := tool.NewAudioExtractTool(cfg.Download.CookiesPath)
 	if err != nil {
 		slog.Warn("gateway.tool_register_failed", "tool", "extract_audio", "err", err)
 	} else {

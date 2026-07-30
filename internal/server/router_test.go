@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/capability"
+	"github.com/raiki02/vidwise/internal/knowledgeagent"
 	"github.com/raiki02/vidwise/internal/model"
 	"github.com/raiki02/vidwise/internal/rag"
 	"github.com/raiki02/vidwise/internal/ragruntime"
@@ -215,6 +217,57 @@ func TestRouterMountsTaskTranscriptIndexRoute(t *testing.T) {
 	}
 }
 
+func TestRouterMountsAgentTurnRoute(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		ragruntime.Runtime{},
+		nil,
+		nil,
+		capability.FromRuntime(capability.RuntimeDeps{}),
+	)
+
+	body := bytes.NewBufferString(`{"user_id":"u1","message":"【演示视频】 https://example.com/watch?v=1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/agent/turn", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	var out knowledgeagent.TurnResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out.PendingActions) != 1 || out.PendingActions[0].Type != knowledgeagent.ActionProcessVideo {
+		t.Fatalf("pending actions = %#v, want process_video", out.PendingActions)
+	}
+}
+
+func TestRouterMountsAgentConfirmRoute(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		ragruntime.Runtime{},
+		nil,
+		nil,
+		capability.FromRuntime(capability.RuntimeDeps{}),
+	)
+
+	body := bytes.NewBufferString(`{"user_id":"u1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/agent/actions/missing/confirm", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("expected mounted route to return 404 from handler, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 	raw, err := webFS.ReadFile("web/index.html")
 	if err != nil {
@@ -222,7 +275,9 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 	}
 	body := string(raw)
 	for _, want := range []string{
-		"/chat/query",
+		"/agent/turn",
+		"/agent/actions/",
+		"/confirm",
 		"/video/process",
 		"/task/",
 		"/index",

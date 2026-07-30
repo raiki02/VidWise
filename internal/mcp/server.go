@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	einoschema "github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/raiki02/vidwise/internal/tool"
@@ -34,14 +36,7 @@ func New(addr, mode string, registry *tool.Registry) *Server {
 
 	// Register all tools from the registry as MCP tools
 	for name, entry := range registry.List() {
-		mcpTool := mcp.Tool{
-			Name:        name,
-			Description: generateDescription(name),
-			InputSchema: mcp.ToolInputSchema{
-				Type:       "object",
-				Properties: map[string]any{},
-			},
-		}
+		mcpTool := toolToMCP(name, entry)
 
 		// Capture entry in loop
 		toolEntry := entry
@@ -85,6 +80,51 @@ func (s *Server) StartAsync() {
 			slog.Error("mcp.server.failed", "err", err)
 		}
 	}()
+}
+
+func toolToMCP(name string, entry tool.Entry) mcp.Tool {
+	description := generateDescription(name)
+	if entry.Info != nil && strings.TrimSpace(entry.Info.Desc) != "" {
+		description = strings.TrimSpace(entry.Info.Desc)
+	}
+
+	mcpTool := mcp.Tool{
+		Name:        name,
+		Description: description,
+	}
+	if raw := rawInputSchema(name, entry.Info); len(raw) > 0 {
+		mcpTool.RawInputSchema = raw
+		return mcpTool
+	}
+	mcpTool.InputSchema = emptyObjectInputSchema()
+	return mcpTool
+}
+
+func rawInputSchema(name string, info *einoschema.ToolInfo) json.RawMessage {
+	if info == nil || info.ParamsOneOf == nil {
+		return nil
+	}
+	jsonSchema, err := info.ParamsOneOf.ToJSONSchema()
+	if err != nil {
+		slog.Warn("mcp.tool_schema_unavailable", "name", name, "err", err)
+		return nil
+	}
+	if jsonSchema == nil {
+		return nil
+	}
+	raw, err := json.Marshal(jsonSchema)
+	if err != nil {
+		slog.Warn("mcp.tool_schema_marshal_failed", "name", name, "err", err)
+		return nil
+	}
+	return json.RawMessage(raw)
+}
+
+func emptyObjectInputSchema() mcp.ToolInputSchema {
+	return mcp.ToolInputSchema{
+		Type:       "object",
+		Properties: map[string]any{},
+	}
 }
 
 func generateDescription(name string) string {

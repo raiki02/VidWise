@@ -59,7 +59,7 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 		return Result{Path: compatiblePath, Filename: name + ".mp4"}, cleanup, nil
 	case "audio":
 		stage := time.Now()
-		audioPath, out, err := download.Audio(url, filepath.Join(workDir, name))
+		audioPath, out, err := download.Audio(url, filepath.Join(workDir, name), s.cfg.Download.CookiesPath)
 		if err != nil {
 			cleanup()
 			return Result{}, nil, commandError("download audio failed", out, err)
@@ -69,7 +69,7 @@ func (s *Service) Extract(ctx context.Context, url, name, extractType string) (R
 		return Result{Path: audioPath, Filename: name + ".mp3"}, cleanup, nil
 	case "text", "transcript":
 		stage := time.Now()
-		audioPath, out, err := download.Audio(url, filepath.Join(workDir, name))
+		audioPath, out, err := download.Audio(url, filepath.Join(workDir, name), s.cfg.Download.CookiesPath)
 		if err != nil {
 			cleanup()
 			return Result{}, nil, commandError("download audio failed", out, err)

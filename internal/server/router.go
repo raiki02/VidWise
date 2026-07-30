@@ -12,6 +12,8 @@ import (
 	"github.com/raiki02/vidwise/internal/background"
 	"github.com/raiki02/vidwise/internal/capability"
 	"github.com/raiki02/vidwise/internal/chat"
+	"github.com/raiki02/vidwise/internal/chatagent"
+	"github.com/raiki02/vidwise/internal/knowledgeagent"
 	"github.com/raiki02/vidwise/internal/memory"
 	"github.com/raiki02/vidwise/internal/ragruntime"
 	"github.com/raiki02/vidwise/internal/server/handler"
@@ -56,7 +58,8 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
-	taskTracker := newTaskTrackerFromConfig(cfg)
+	taskTrackerOptions := taskTrackerOptionsFromConfig(cfg)
+	taskTracker := taskpkg.NewTrackerWithOptions(taskTrackerOptions)
 
 	// Handlers
 	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
@@ -75,6 +78,26 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	}
 
 	chatHandler := handler.NewChatHandlerWithBackground(chatRepo, memRepo, ragRuntime.Retriever, cfg.LLM, caps, ragRuntime.Context, backgroundRunner)
+	agentActionStore := knowledgeagent.NewActionStore(knowledgeagent.ActionStoreOptions{
+		MaxActions: taskTrackerOptions.MaxTasks,
+		RetainFor:  taskTrackerOptions.RetainFor,
+	})
+	var agentSessions knowledgeagent.SessionStore
+	if chatRepo != nil {
+		agentSessions = chatRepo
+	}
+	knowledgeAgent := knowledgeagent.NewService(knowledgeagent.ServiceConfig{
+		Sessions:         agentSessions,
+		Answerer:         chatagent.NewWithRetriever(cfg.LLM, ragRuntime.Context, ragRuntime.Retriever),
+		Sources:          ragRuntime.Sources,
+		Videos:           handler.KnowledgeVideoAdapter(videoHandler),
+		Indexer:          handler.KnowledgeTranscriptIndexer(videoHandler),
+		Formatter:        handler.KnowledgeTextFormatter(cfg.LLM),
+		Tasks:            handler.KnowledgeTaskReader(taskTracker),
+		Actions:          agentActionStore,
+		IntentClassifier: knowledgeagent.NewLLMIntentClassifier(cfg.LLM),
+	})
+	agentHandler := handler.NewKnowledgeAgentHandler(knowledgeAgent)
 
 	// Legacy endpoints (backward compatible)
 	e.GET("/extract", extractHandler.Extract)
@@ -89,6 +112,10 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	e.GET("/chat/sessions", chatHandler.ListSessions)
 	e.GET("/chat/session/:id", chatHandler.GetSession)
 	e.POST("/chat/query", chatHandler.ChatQuery)
+
+	// VidWise video knowledge agent
+	e.POST("/agent/turn", agentHandler.Turn)
+	e.POST("/agent/actions/:id/confirm", agentHandler.ConfirmAction)
 
 	// Task status
 	e.GET("/tasks", taskHandler.ListTasks)
