@@ -56,6 +56,9 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 		}
 		c.JSON(status, readiness)
 	})
+	e.GET("/api/capabilities", func(c *gin.Context) {
+		c.JSON(http.StatusOK, BuildFrontendManifest(registry, caps))
+	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
 	taskTrackerOptions := taskTrackerOptionsFromConfig(cfg)

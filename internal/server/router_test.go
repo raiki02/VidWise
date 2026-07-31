@@ -141,6 +141,39 @@ func TestRAGHealthKeepsLegacyRAGAvailableWhenCanonicalRAGIsDegraded(t *testing.T
 	}
 }
 
+func TestCapabilitiesEndpointExposesFrontendManifest(t *testing.T) {
+	engine := Router(
+		testRouterConfig(),
+		tool.NewRegistry(),
+		testRouterRAGRuntime(),
+		nil,
+		nil,
+		testRouterCapabilities(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/capabilities", nil)
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var out FrontendManifest
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Version == "" {
+		t.Fatal("manifest version is empty")
+	}
+	if len(out.Features) == 0 || len(out.ExtractTypes) == 0 || len(out.VideoProcessSteps) == 0 {
+		t.Fatalf("manifest missing core sections: %#v", out)
+	}
+	if frontendFeatureByID(t, out, "sources").Status != capability.Degraded {
+		t.Fatalf("sources feature should reflect degraded RAG: %#v", frontendFeatureByID(t, out, "sources"))
+	}
+}
+
 func TestRouterMountsRAGSourceDeleteRoute(t *testing.T) {
 	engine := Router(
 		testRouterConfig(),
@@ -290,6 +323,16 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 		"document_ids",
 		"task_ids",
 		"heading_paths",
+		"/api/capabilities",
+		"manifest-pill",
+		"feature-status-list",
+		"data-nav=\"extract\"",
+		"id=\"extract-form\"",
+		"function startExtract",
+		"contentDispositionFilename",
+		"data-nav=\"memory\"",
+		"id=\"memory-table\"",
+		"function loadMemoryFacts",
 		"data-doc-filter",
 		"rag_answer_status",
 		"rag_context_chunks",

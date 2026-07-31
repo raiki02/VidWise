@@ -81,6 +81,9 @@
       padding: 0 10px;
     }
     .nav-item.active { background: var(--surface-2); color: var(--text); }
+    .nav-item.degraded { color: #fde68a; }
+    .nav-item.unavailable { color: var(--soft); }
+    .nav-item .nav-status { float: right; font-size: 11px; color: var(--soft); }
     .side-section { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; display: grid; gap: 10px; }
     .side-title { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
     .row { display: flex; align-items: center; gap: 8px; }
@@ -259,6 +262,9 @@
       font-size: 12px;
       white-space: pre-wrap;
     }
+    .feature-list { display: grid; gap: 6px; }
+    .feature-line { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .feature-line span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
     .muted { color: var(--muted); }
     .small { font-size: 12px; }
@@ -280,13 +286,15 @@
       <h1>VidWise</h1>
       <span id="ready-dot" class="health-dot"></span>
     </div>
-    <nav>
-      <button class="nav-item active" data-nav="chat" type="button">Agent 问答</button>
-      <button class="nav-item" data-nav="video" type="button">视频任务</button>
-      <button class="nav-item" data-nav="sources" type="button">知识库</button>
-      <button class="nav-item" data-nav="upload" type="button">上传索引</button>
-      <button class="nav-item" data-nav="format" type="button">文本格式化</button>
-      <button class="nav-item" data-nav="tasks" type="button">任务列表</button>
+    <nav id="feature-nav">
+      <button class="nav-item active" data-nav="chat" data-feature="chat" type="button">Agent 问答</button>
+      <button class="nav-item" data-nav="video" data-feature="video" type="button">视频任务</button>
+      <button class="nav-item" data-nav="extract" data-feature="extract" type="button">同步提取</button>
+      <button class="nav-item" data-nav="sources" data-feature="sources" type="button">知识库</button>
+      <button class="nav-item" data-nav="upload" data-feature="upload" type="button">上传索引</button>
+      <button class="nav-item" data-nav="format" data-feature="format" type="button">文本格式化</button>
+      <button class="nav-item" data-nav="tasks" data-feature="tasks" type="button">任务列表</button>
+      <button class="nav-item" data-nav="memory" data-feature="memory" type="button">用户记忆</button>
     </nav>
 
     <section class="side-section">
@@ -315,6 +323,7 @@
       <div class="side-title">Runtime</div>
       <div class="row"><span id="rag-dot" class="health-dot"></span><span id="rag-status" class="small muted">RAG 检测中</span></div>
       <div class="row"><span id="llm-dot" class="health-dot"></span><span id="llm-status" class="small muted">LLM 检测中</span></div>
+      <div id="feature-status-list" class="feature-list"></div>
       <button id="refresh-runtime" type="button">刷新状态</button>
     </section>
 
@@ -331,6 +340,7 @@
         <span id="scope-pill" class="pill">知识库范围未保存</span>
         <span id="source-pill" class="pill">0 sources</span>
         <span id="task-pill" class="pill">0 tasks</span>
+        <span id="manifest-pill" class="pill">能力同步中</span>
       </div>
     </header>
 
@@ -343,7 +353,7 @@
             </div>
             <div class="chat-input">
               <textarea id="chat-input" rows="2" placeholder="输入问题，Shift+Enter 换行"></textarea>
-              <button id="send-chat" class="primary" type="button">发送</button>
+              <button id="send-chat" class="primary" type="button" data-feature-action="chat">发送</button>
             </div>
           </div>
           <div>
@@ -397,7 +407,7 @@
                 </select>
               </div>
             </div>
-            <button class="primary" type="submit">启动任务</button>
+            <button class="primary" type="submit" data-feature-action="video">启动任务</button>
             <div id="video-status" class="status-box"></div>
           </form>
           <div class="panel">
@@ -407,11 +417,44 @@
         </div>
       </section>
 
+      <section id="tab-extract" class="tab">
+        <div class="grid-2">
+          <form id="extract-form" class="panel form-grid">
+            <h3>同步提取</h3>
+            <div>
+              <label for="extract-url">视频 URL / 分享文案</label>
+              <textarea id="extract-url" rows="3" placeholder="粘贴视频链接或完整分享文案"></textarea>
+            </div>
+            <div class="split">
+              <div>
+                <label for="extract-name">名称（可选）</label>
+                <input id="extract-name" placeholder="留空时尝试从分享文案提取" />
+              </div>
+              <div>
+                <label for="extract-type">类型</label>
+                <select id="extract-type">
+                  <option value="video">视频 MP4</option>
+                  <option value="audio">音频 MP3</option>
+                  <option value="text">转写文本</option>
+                  <option value="summary">视频摘要</option>
+                </select>
+              </div>
+            </div>
+            <button class="primary" type="submit" data-feature-action="extract">提取并下载</button>
+            <div id="extract-status" class="status-box"></div>
+          </form>
+          <div class="panel">
+            <h3>类型状态</h3>
+            <div id="extract-type-status" class="status-box">等待后端能力同步。</div>
+          </div>
+        </div>
+      </section>
+
       <section id="tab-sources" class="tab">
         <div class="panel">
           <div class="row" style="justify-content:space-between;margin-bottom:12px;">
             <h3 style="margin:0;">知识库 Sources</h3>
-            <button id="reload-sources" type="button">刷新</button>
+            <button id="reload-sources" type="button" data-feature-action="sources">刷新</button>
           </div>
           <div id="source-status" class="status-box" style="margin-bottom:12px;"></div>
           <div style="overflow:auto;">
@@ -440,7 +483,7 @@
             <label for="upload-file">文本或 Markdown 文件</label>
             <input id="upload-file" type="file" accept=".txt,.md,.markdown,.srt,.csv,text/plain,text/markdown,text/csv" />
           </div>
-          <button class="primary" type="submit">上传</button>
+          <button class="primary" type="submit" data-feature-action="upload">上传</button>
           <div id="upload-status" class="status-box"></div>
         </form>
       </section>
@@ -452,7 +495,7 @@
             <label for="format-file">文本或 Markdown 文件</label>
             <input id="format-file" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" />
           </div>
-          <button class="primary" type="submit">格式化并下载</button>
+          <button class="primary" type="submit" data-feature-action="format">格式化并下载</button>
           <div id="format-status" class="status-box"></div>
         </form>
       </section>
@@ -465,6 +508,31 @@
           </div>
           <div id="task-status" class="status-box" style="margin-bottom:12px;"></div>
           <div id="task-list"></div>
+        </div>
+      </section>
+
+      <section id="tab-memory" class="tab">
+        <div class="panel">
+          <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+            <h3 style="margin:0;">用户记忆</h3>
+            <button id="reload-memory" type="button" data-feature-action="memory">刷新</button>
+          </div>
+          <div id="memory-status" class="status-box" style="margin-bottom:12px;"></div>
+          <div style="overflow:auto;">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>分类</th>
+                  <th>Key</th>
+                  <th>Value</th>
+                  <th>置信度</th>
+                  <th>来源</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody id="memory-table"></tbody>
+            </table>
+          </div>
         </div>
       </section>
     </div>
@@ -492,15 +560,18 @@
       pollTimer: 0,
       indexingTaskIds: new Set(),
       suggestedIndexTaskIds: new Set(),
+      manifest: null,
     };
 
     const titles = {
       chat: "Agent 问答",
       video: "视频任务",
+      extract: "同步提取",
       sources: "知识库",
       upload: "上传索引",
       format: "文本格式化",
       tasks: "任务列表",
+      memory: "用户记忆",
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -583,6 +654,127 @@
       return "";
     }
 
+    function manifestFeatures() {
+      return state.manifest && Array.isArray(state.manifest.features) ? state.manifest.features : [];
+    }
+
+    function featureById(id) {
+      return manifestFeatures().find((feature) => feature.id === id) || null;
+    }
+
+    function capabilityByName(name) {
+      return state.manifest && state.manifest.capabilities ? state.manifest.capabilities[name] : null;
+    }
+
+    function unavailableText(feature) {
+      if (!feature) return "后端能力尚未同步。";
+      return `${feature.title || feature.id} 不可用：${feature.reason || feature.status || "unknown"}`;
+    }
+
+    function ensureFeature(id, target) {
+      const feature = featureById(id);
+      if (!feature || feature.available) return true;
+      if (target) {
+        target.textContent = unavailableText(feature);
+        target.style.color = "var(--danger)";
+      }
+      return false;
+    }
+
+    function extractTypes() {
+      if (state.manifest && Array.isArray(state.manifest.extract_types) && state.manifest.extract_types.length) {
+        return state.manifest.extract_types;
+      }
+      return [
+        { value: "video", label: "视频 MP4", available: true, status: "available" },
+        { value: "audio", label: "音频 MP3", available: true, status: "available" },
+        { value: "text", label: "转写文本", available: true, status: "available" },
+        { value: "summary", label: "视频摘要", available: true, status: "available" },
+      ];
+    }
+
+    function currentExtractType() {
+      const value = $("#extract-type") ? $("#extract-type").value : "";
+      return extractTypes().find((item) => item.value === value) || null;
+    }
+
+    function visibleExtractTypes() {
+      return extractTypes().filter((item) => !item.alias_of);
+    }
+
+    function renderFeatureNav() {
+      const nav = $("#feature-nav");
+      if (!nav) return;
+      const items = manifestFeatures().filter((feature) => feature.tab && $(`#tab-${feature.tab}`));
+      if (!items.length) return;
+      nav.innerHTML = items.map((feature) => {
+        const stateClass = feature.available ? statusClass(feature.status) : "unavailable";
+        const active = feature.tab === state.tab ? " active" : "";
+        const status = feature.status && feature.status !== "available" ? `<span class="nav-status">${esc(feature.status)}</span>` : "";
+        return `<button class="nav-item ${stateClass}${active}" data-nav="${esc(feature.tab)}" data-feature="${esc(feature.id)}" title="${esc(feature.reason || "")}" type="button">${esc(feature.title)}${status}</button>`;
+      }).join("");
+      nav.querySelectorAll(".nav-item[data-nav]").forEach((btn) => {
+        btn.onclick = () => switchTab(btn.dataset.nav);
+      });
+    }
+
+    function renderFeatureStatus() {
+      const list = $("#feature-status-list");
+      if (!list) return;
+      const items = manifestFeatures();
+      if (!items.length) {
+        list.textContent = "能力清单未加载。";
+        return;
+      }
+      list.innerHTML = items.map((feature) => `
+        <div class="feature-line" title="${esc(feature.reason || "")}">
+          <span class="health-dot ${statusClass(feature.status)}"></span>
+          <span>${esc(feature.title)}</span>
+          <span class="pill ${statusClass(feature.status)}">${esc(feature.status)}</span>
+        </div>
+      `).join("");
+      const manifestPill = $("#manifest-pill");
+      if (manifestPill) {
+        manifestPill.textContent = `manifest ${state.manifest.version || "-"}`;
+        manifestPill.className = "pill ok";
+      }
+    }
+
+    function applyFeatureAvailability() {
+      $$("[data-feature-action]").forEach((el) => {
+        const feature = featureById(el.dataset.featureAction);
+        if (!feature) return;
+        el.disabled = !feature.available;
+        el.title = feature.available ? "" : unavailableText(feature);
+      });
+      renderExtractTypes();
+    }
+
+    function renderExtractTypes() {
+      const select = $("#extract-type");
+      const status = $("#extract-type-status");
+      if (!select) return;
+      const previous = select.value;
+      const types = visibleExtractTypes();
+      select.innerHTML = types.map((item) => {
+        const suffix = item.available ? "" : "（不可用）";
+        return `<option value="${esc(item.value)}" ${item.available ? "" : "disabled"}>${esc(item.label || item.value)}${suffix}</option>`;
+      }).join("");
+      const previousType = types.find((item) => item.value === previous && item.available);
+      const firstAvailable = types.find((item) => item.available);
+      if (previousType) select.value = previous;
+      else if (firstAvailable) select.value = firstAvailable.value;
+      if (status) {
+        status.innerHTML = types.map((item) => `
+          <div class="feature-line" title="${esc(item.reason || "")}">
+            <span class="health-dot ${statusClass(item.status)}"></span>
+            <span>${esc(item.label || item.value)}</span>
+            <span class="pill ${statusClass(item.status)}">${esc(item.status || "unknown")}</span>
+          </div>
+        `).join("");
+      }
+    }
+
     function saveScope() {
       state.userId = $("#scope-user").value.trim() || localUserId();
       state.sessionId = $("#scope-session").value.trim();
@@ -642,13 +834,23 @@
       return false;
     }
 
+    function requireUser(target) {
+      if (state.userId) return true;
+      target.textContent = "个人身份未初始化，请稍后重试。";
+      target.style.color = "var(--danger)";
+      return false;
+    }
+
     function switchTab(tab) {
       state.tab = tab;
       $$(".tab").forEach((el) => el.classList.toggle("active", el.id === `tab-${tab}`));
       $$(".nav-item").forEach((el) => el.classList.toggle("active", el.dataset.nav === tab));
-      $("#page-title").textContent = titles[tab] || "VidWise";
+      const feature = manifestFeatures().find((item) => item.tab === tab);
+      $("#page-title").textContent = (feature && feature.title) || titles[tab] || "VidWise";
       if (tab === "sources") loadSources();
       if (tab === "tasks") loadTasks();
+      if (tab === "memory") loadMemoryFacts();
+      if (tab === "extract") renderExtractTypes();
       if (tab === "chat") renderSelectedSources();
     }
 
@@ -661,11 +863,29 @@
 
     async function loadRuntime() {
       try {
+        state.manifest = await fetchJSON("/api/capabilities", { cache: "no-store" });
+        renderFeatureNav();
+        renderFeatureStatus();
+        applyFeatureAvailability();
+        const rag = capabilityByName("rag");
+        const llm = capabilityByName("llm");
+        if (rag) setRuntimeChip("rag", rag.status, "RAG");
+        if (llm) setRuntimeChip("llm", llm.status, "LLM");
+      } catch (err) {
+        const manifestPill = $("#manifest-pill");
+        if (manifestPill) {
+          manifestPill.textContent = "能力同步失败";
+          manifestPill.className = "pill err";
+          manifestPill.title = err.message;
+        }
+      }
+      try {
         const ready = await fetchJSON("/ready");
         $("#ready-dot").className = "health-dot " + (ready.ready ? "ok" : "err");
       } catch {
         $("#ready-dot").className = "health-dot err";
       }
+      if (state.manifest) return;
       try {
         const health = await fetchJSON("/rag/health");
         setRuntimeChip("rag", health.rag, "RAG");
@@ -754,6 +974,7 @@
     }
 
     async function sendChat() {
+      if (!ensureFeature("chat", $("#rag-diagnostics"))) return;
       const input = $("#chat-input");
       const query = input.value.trim();
       if (!query) return;
@@ -922,6 +1143,7 @@
       const status = $("#source-status");
       const table = $("#source-table");
       table.innerHTML = "";
+      if (!ensureFeature("sources", status)) return;
       if (!requireScope(status)) return;
       status.textContent = "加载中...";
       try {
@@ -1090,6 +1312,7 @@
     async function uploadSource(event) {
       event.preventDefault();
       const status = $("#upload-status");
+      if (!ensureFeature("upload", status)) return;
       if (!requireScope(status)) return;
       const file = $("#upload-file").files[0];
       if (!file) {
@@ -1116,6 +1339,7 @@
     async function startVideoTask(event) {
       event.preventDefault();
       const status = $("#video-status");
+      if (!ensureFeature("video", status)) return;
       const url = $("#video-url").value.trim();
       const name = $("#video-name").value.trim();
       if (!state.userId) {
@@ -1201,6 +1425,7 @@
       const status = $("#task-status");
       const list = $("#task-list");
       list.innerHTML = "";
+      if (!ensureFeature("tasks", status)) return;
       if (!requireScope(status)) return;
       try {
         const params = scopeParams();
@@ -1361,6 +1586,7 @@
     async function formatText(event) {
       event.preventDefault();
       const status = $("#format-status");
+      if (!ensureFeature("format", status)) return;
       const file = $("#format-file").files[0];
       if (!file) {
         status.textContent = "请选择文件。";
@@ -1398,6 +1624,89 @@
       URL.revokeObjectURL(href);
     }
 
+    function contentDispositionFilename(value) {
+      const header = String(value || "");
+      const utf8 = header.match(/filename\*=UTF-8''([^;]+)/i);
+      if (utf8) return decodeURIComponent(utf8[1].replace(/"/g, ""));
+      const ascii = header.match(/filename="?([^";]+)"?/i);
+      return ascii ? ascii[1] : "";
+    }
+
+    async function startExtract(event) {
+      event.preventDefault();
+      const status = $("#extract-status");
+      if (!ensureFeature("extract", status)) return;
+      const selectedType = currentExtractType();
+      if (selectedType && !selectedType.available) {
+        status.textContent = `${selectedType.label || selectedType.value} 不可用：${selectedType.reason || selectedType.status || "unknown"}`;
+        status.style.color = "var(--danger)";
+        return;
+      }
+      const url = $("#extract-url").value.trim();
+      const name = $("#extract-name").value.trim();
+      const type = $("#extract-type").value;
+      if (!url) {
+        status.textContent = "请填写视频 URL 或分享文案。";
+        status.style.color = "var(--danger)";
+        return;
+      }
+      status.textContent = "提取中...";
+      status.style.color = "";
+      try {
+        const params = scopeParams();
+        const resp = await fetch(`/extract${params.toString() ? `?${params}` : ""}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, name, type }),
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || data.message || `HTTP ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        const fallback = `${name || "extract"}${(selectedType && selectedType.filename_suffix) || ""}`;
+        const filename = contentDispositionFilename(resp.headers.get("Content-Disposition")) || fallback;
+        downloadBlob(blob, filename);
+        status.textContent = `已下载 ${filename}。`;
+        status.style.color = "#bbf7d0";
+        if (type === "text" || type === "transcript") {
+          await Promise.allSettled([loadSources(), loadTasks()]);
+        }
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
+    async function loadMemoryFacts() {
+      const status = $("#memory-status");
+      const table = $("#memory-table");
+      table.innerHTML = "";
+      if (!ensureFeature("memory", status)) return;
+      if (!requireUser(status)) return;
+      status.textContent = "加载中...";
+      status.style.color = "";
+      try {
+        const params = new URLSearchParams({ user_id: state.userId });
+        const data = await fetchJSON(`/user/facts?${params}`);
+        const facts = data.facts || [];
+        status.textContent = facts.length ? `已加载 ${facts.length} 条记忆。` : "暂无用户记忆。";
+        table.innerHTML = facts.map((fact) => `
+          <tr>
+            <td>${esc(fact.category || "-")}</td>
+            <td>${esc(fact.key || "-")}</td>
+            <td>${esc(fact.value || "")}</td>
+            <td><span class="pill ${statusClass(fact.confidence)}">${esc(fact.confidence || "-")}</span></td>
+            <td>${esc(fact.source || "-")}</td>
+            <td>${esc(fact.created_at || "-")}</td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        status.textContent = err.message;
+        status.style.color = "var(--danger)";
+      }
+    }
+
     async function refreshScopedData() {
       await Promise.allSettled([loadSessions(), loadSources(), loadTasks()]);
     }
@@ -1408,6 +1717,7 @@
       $("#new-session").onclick = newSession;
       $("#refresh-runtime").onclick = loadRuntime;
       $("#reload-sources").onclick = loadSources;
+      $("#reload-memory").onclick = loadMemoryFacts;
       $("#reload-chat-sources").onclick = loadSources;
       $("#clear-source-filter").onclick = () => {
         state.selectedSourceIds.clear();
@@ -1429,6 +1739,7 @@
       });
       $("#upload-form").addEventListener("submit", uploadSource);
       $("#video-form").addEventListener("submit", startVideoTask);
+      $("#extract-form").addEventListener("submit", startExtract);
       $("#format-form").addEventListener("submit", formatText);
       bindAgentActionButtons();
     }

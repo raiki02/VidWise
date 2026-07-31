@@ -9,6 +9,8 @@
 - **智能文本格式化**：LLM 驱动的错别字修正、繁简转换、段落划分
 - **RAG 知识库**：文本自动分段 → 向量化 → 存入 Qdrant，支持检索和重排序
 - **多轮对话问答**：基于视频知识库和对话历史的智能问答，会话持久化到 MySQL
+- **用户记忆**：从多轮对话中沉淀跨会话用户事实，可在问答时作为长期上下文
+- **运行时能力清单**：网关输出前端 manifest，Web UI 根据 ASR/RAG/LLM/Memory 等能力自动降级或禁用功能
 - **MCP Server**：通过 MCP 协议对外暴露工具，可被 Claude Desktop 等客户端发现和调用
 
 ## 架构
@@ -18,8 +20,9 @@
         │
         ▼
 ┌─────────────── Gin API Gateway (:8080) ───────────────┐
-│  /extract  /format  /chat/query  /chat/sessions       │
-│  /video/process  /rag/health  /mcp (SSE :8082)       │
+│  /extract  /format  /chat/query  /agent/turn          │
+│  /video/process  /tasks  /api/capabilities            │
+│  /rag/health  /user/facts  /mcp (SSE :8082)           │
 │                                                        │
 │  ┌─ Eino Agent/Tool 编排 ─┐  ┌─ Chat Session 管理 ─┐  │
 │  │ download → asr → format│  │ MySQL (GORM)         │  │
@@ -135,6 +138,10 @@ make run            # API 网关 :8080
 open http://localhost:8080
 ```
 
+Web UI 默认打开可对话的 Agent 问答界面，侧边栏会从 `/api/capabilities`
+同步当前后端能力，并按可用性展示或禁用功能。页面包含同步提取、视频任务、
+知识库 source 管理、上传索引、文本格式化、任务列表和用户记忆查看。
+
 停止所有服务：
 
 ```bash
@@ -156,7 +163,23 @@ curl -X POST http://localhost:8080/extract \
 
 `type` 支持的值：`video` | `audio` | `text` | `transcript` | `summary` | `video_summary`
 
-文本提取完成后自动索引到 RAG 知识库。
+文本提取完成后会在 RAG 可用且请求带有 `user_id` 或 `session_id` 时自动索引到知识库。
+同样的能力也暴露在 Web UI 的「同步提取」页；页面会按 `/api/capabilities`
+返回的 `extract_types` 禁用不可用类型。
+
+### 运行时能力清单
+
+```bash
+curl http://localhost:8080/api/capabilities
+```
+
+返回内容包括：
+
+- `capabilities`：ASR、RAG、LLM、Memory、Embedding、Rerank 等运行时能力状态
+- `features`：Web UI 功能、对应 tab、依赖能力和后端路由
+- `extract_types`：同步提取支持的类型及其依赖能力
+- `video_process_steps`：异步视频处理 DAG 步骤名称
+- `tools`：当前注册到工具中心的工具名
 
 ### 会话式问答
 
@@ -178,13 +201,23 @@ curl http://localhost:8080/chat/sessions
 curl http://localhost:8080/chat/session/<session_id>
 ```
 
+### 用户记忆
+
+```bash
+curl "http://localhost:8080/user/facts?user_id=<user_id>"
+```
+
+当 MySQL memory store 可用时，该接口返回用户长期事实列表；Web UI 的「用户记忆」页也使用同一接口。
+
 ### 健康检查
 
 ```bash
-curl http://localhost:8080/health       # 网关
-curl http://localhost:8001/health       # ASR
-curl http://localhost:8003/health       # Embedding
-curl http://localhost:8080/rag/health   # RAG 状态
+curl http://localhost:8080/health             # 网关与 canonical capabilities
+curl http://localhost:8080/ready              # 生产流量就绪状态
+curl http://localhost:8080/api/capabilities   # 前端能力 manifest
+curl http://localhost:8001/health             # ASR
+curl http://localhost:8003/health             # Embedding
+curl http://localhost:8080/rag/health         # RAG 兼容健康状态
 ```
 
 ## 配置说明
@@ -218,7 +251,7 @@ vidwise/
 │   ├── model/               # Embed/Rerank HTTP 客户端
 │   ├── paragraph/           # LLM 文本格式化
 │   ├── rag/                 # RAG: chunker, indexer, retriever
-│   ├── server/              # Gin 路由、中间件、Handler、Web UI
+│   ├── server/              # Gin 路由、中间件、Handler、前端 manifest、Web UI
 │   ├── storage/             # MySQL + Qdrant 客户端
 │   ├── task/                # 异步任务模型
 │   ├── tool/                # Eino 工具注册中心 + 各工具实现
