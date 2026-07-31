@@ -66,7 +66,8 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 
 	// Handlers
 	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
-	videoHandler := handler.NewVideoHandlerWithBackgroundAndTasks(registry, nil, taskTracker)
+	videoRunner := handler.NewVideoProcessRunner(cfg.Task.MaxConcurrentVideo)
+	videoHandler := handler.NewVideoHandlerWithBackgroundAndTasks(registry, videoRunner, taskTracker)
 	taskHandler := handler.NewTaskHandlerWithTracker(taskTracker)
 
 	if ragRuntime.Usable() {

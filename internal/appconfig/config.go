@@ -290,8 +290,9 @@ type UploadConfig struct {
 }
 
 type TaskConfig struct {
-	MaxTracked int    `yaml:"max_tracked"`
-	RetainFor  string `yaml:"retain_for"`
+	MaxTracked         int    `yaml:"max_tracked"`
+	MaxConcurrentVideo int    `yaml:"max_concurrent_video"`
+	RetainFor          string `yaml:"retain_for"`
 }
 
 func Load(path string) (Config, error) {
@@ -906,6 +907,9 @@ func (c Config) validate() error {
 	}
 	if c.Task.MaxTracked <= 0 {
 		return errors.New("task.max_tracked must be greater than 0")
+	}
+	if c.Task.MaxConcurrentVideo < 0 {
+		return errors.New("task.max_concurrent_video must be greater than or equal to 0")
 	}
 	if _, err := c.Task.RetentionDuration(); err != nil {
 		return fmt.Errorf("invalid task.retain_for: %w", err)

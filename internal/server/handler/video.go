@@ -40,7 +40,7 @@ func NewVideoHandlerWithBackground(registry *tool.Registry, runner *background.R
 
 func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *background.Runner, tasks *taskpkg.Tracker) *VideoHandler {
 	if runner == nil {
-		runner = background.NewRunner(videoProcessTimeout)
+		runner = NewVideoProcessRunner(0)
 	}
 	if tasks == nil {
 		tasks = taskpkg.NewTracker()
@@ -52,6 +52,13 @@ func NewVideoHandlerWithBackgroundAndTasks(registry *tool.Registry, runner *back
 		processWithObserver: agent.ExecuteVideoProcessWithObserver,
 		tasks:               tasks,
 	}
+}
+
+func NewVideoProcessRunner(maxConcurrent int) *background.Runner {
+	return background.NewRunnerWithOptions(background.Options{
+		Timeout:       videoProcessTimeout,
+		MaxConcurrent: maxConcurrent,
+	})
 }
 
 type VideoProcessRequest struct {
@@ -134,9 +141,9 @@ func (h *VideoHandler) StartVideoProcess(_ context.Context, req VideoProcessRequ
 	process := h.process
 	runner := h.runner
 	if runner == nil {
-		runner = background.NewRunner(videoProcessTimeout)
+		runner = NewVideoProcessRunner(0)
 	}
-	runner.Go("video.process", func(ctx context.Context) {
+	if ok := runner.Go("video.process", func(ctx context.Context) {
 		tasks.Start(taskID)
 		observer := taskStepObserver{tasks: tasks, taskID: taskID}
 		var result string
@@ -176,7 +183,10 @@ func (h *VideoHandler) StartVideoProcess(_ context.Context, req VideoProcessRequ
 			return
 		}
 		tasks.Complete(taskID, completeVideoProcessOutput(tasks, taskID, result, req.Name, req.URL))
-	})
+	}); !ok {
+		tasks.Fail(taskID, "video processor is busy")
+		return VideoProcessResponse{}, newResponseError(http.StatusServiceUnavailable, "video processor is busy")
+	}
 
 	return VideoProcessResponse{
 		TaskID:    taskID,

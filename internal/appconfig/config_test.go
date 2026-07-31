@@ -318,6 +318,9 @@ func TestApplyDefaultsSetsTaskDefaults(t *testing.T) {
 	if cfg.Task.MaxTracked != 1000 {
 		t.Fatalf("MaxTracked = %d, want 1000", cfg.Task.MaxTracked)
 	}
+	if cfg.Task.MaxConcurrentVideo != 0 {
+		t.Fatalf("MaxConcurrentVideo = %d, want 0", cfg.Task.MaxConcurrentVideo)
+	}
 	if cfg.Task.RetainFor != "24h" {
 		t.Fatalf("RetainFor = %q, want 24h", cfg.Task.RetainFor)
 	}
@@ -661,6 +664,13 @@ func TestValidateRejectsInvalidTaskConfig(t *testing.T) {
 				cfg.Task.MaxTracked = -1
 			},
 			wantErr: "task.max_tracked",
+		},
+		{
+			name: "invalid max concurrent video",
+			mutate: func(cfg *Config) {
+				cfg.Task.MaxConcurrentVideo = -1
+			},
+			wantErr: "task.max_concurrent_video",
 		},
 		{
 			name: "invalid retention duration",

@@ -290,6 +290,70 @@ func TestVideoProcessUsesDetachedBackgroundContext(t *testing.T) {
 	}
 }
 
+func TestVideoProcessReturnsBusyWhenRunnerLimitIsFull(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	runner := background.NewRunnerWithOptions(background.Options{
+		Timeout:       time.Second,
+		MaxConcurrent: 1,
+	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	h := NewVideoHandlerWithBackground(tool.NewRegistry(), runner)
+	h.processWithObserver = func(_ context.Context, _ *tool.Registry, _, _, _, _, _, _, _ string, _ agent.VideoProcessObserver) (string, error) {
+		close(started)
+		<-release
+		return "formatted text", nil
+	}
+
+	router := gin.New()
+	router.POST("/video/process", h.VideoProcess)
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/video/process", bytes.NewBufferString(`{"url":"https://example.com/video","name":"demo","user_id":"u1"}`))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstResp := httptest.NewRecorder()
+	router.ServeHTTP(firstResp, firstReq)
+	if firstResp.Code != http.StatusAccepted {
+		t.Fatalf("expected first status 202, got %d: %s", firstResp.Code, firstResp.Body.String())
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background video process did not start")
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/video/process", bytes.NewBufferString(`{"url":"https://example.com/other","name":"other","user_id":"u1"}`))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondResp := httptest.NewRecorder()
+	router.ServeHTTP(secondResp, secondReq)
+	if secondResp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected second status 503, got %d: %s", secondResp.Code, secondResp.Body.String())
+	}
+	if !strings.Contains(secondResp.Body.String(), "video processor is busy") {
+		t.Fatalf("unexpected busy response: %s", secondResp.Body.String())
+	}
+
+	failed := h.tasks.List(taskpkg.TrackListRequest{Status: taskpkg.StatusFailed, Limit: 10})
+	if len(failed) != 1 || failed[0].Error != "video processor is busy" {
+		t.Fatalf("failed tasks = %#v, want busy task", failed)
+	}
+
+	close(release)
+	released = true
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.Wait(waitCtx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+}
+
 func TestVideoProcessMarksTaskFailedWhenPipelineFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	runner := background.NewRunner(time.Second)
