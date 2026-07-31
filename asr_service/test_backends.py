@@ -163,6 +163,163 @@ class AliyunASRBackendTest(unittest.TestCase):
 
 
 class XFYunASRBackendTest(unittest.TestCase):
+    def test_transcribe_returns_empty_result_for_silent_file(self) -> None:
+        responses = [
+            {"code": "000000", "content": {"orderId": "order-1"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {
+                        "orderId": "order-1",
+                        "status": -1,
+                        "failType": 6,
+                        "originalDuration": 100,
+                    },
+                    "orderResult": "",
+                    "taskEstimateTime": 0,
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            return _FakeHTTPResponse(responses.pop(0))
+
+        backend = XFYunASRBackend(
+            {
+                "provider": "xfyun",
+                "xfyun_api_base_url": "https://office.example.com/v2",
+                "xfyun_app_id": "app-id",
+                "xfyun_access_key_id": "access-key-id",
+                "xfyun_access_key_secret": "access-key-secret",
+                "xfyun_poll_interval_seconds": 0,
+                "xfyun_max_poll_seconds": 1,
+            },
+            urlopen=fake_urlopen,
+            sleep=lambda seconds: None,
+        )
+
+        result = backend.transcribe(
+            np.zeros(1600, dtype=np.float32),
+            language="zh",
+            beam_size=5,
+            vad_filter=False,
+            initial_prompt="",
+            sample_rate=16000,
+        )
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.duration, 0.1)
+        self.assertEqual(result.segments, [])
+
+    def test_transcribe_skips_silent_xfyun_chunks(self) -> None:
+        def order_result(text: str, end_ms: str) -> str:
+            return json.dumps(
+                {
+                    "lattice": [
+                        {
+                            "json_1best": json.dumps(
+                                {
+                                    "st": {
+                                        "bg": "0",
+                                        "ed": end_ms,
+                                        "rt": [{"ws": [{"cw": [{"w": text}]}]}],
+                                    }
+                                }
+                            )
+                        }
+                    ]
+                }
+            )
+
+        responses = [
+            {"code": "000000", "content": {"orderId": "order-1"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {
+                        "orderId": "order-1",
+                        "status": -1,
+                        "failType": 6,
+                        "originalDuration": 60000,
+                    },
+                    "orderResult": "",
+                    "taskEstimateTime": 0,
+                },
+            },
+            {"code": "000000", "content": {"orderId": "order-2"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {"orderId": "order-2", "status": 4, "failType": 0},
+                    "orderResult": order_result("有声音", "2000"),
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            return _FakeHTTPResponse(responses.pop(0))
+
+        old_split_audio_file = backends_module._split_audio_file
+        old_audio_duration = backends_module._audio_duration
+
+        def fake_split_audio_file(audio: str, tmpdir: str, chunk_seconds: float, sample_rate: int):
+            self.assertEqual(chunk_seconds, 60)
+            chunk_1 = os.path.join(tmpdir, "chunk-00000.wav")
+            chunk_2 = os.path.join(tmpdir, "chunk-00001.wav")
+            with open(chunk_1, "wb") as f:
+                f.write(b"silent chunk")
+            with open(chunk_2, "wb") as f:
+                f.write(b"speech chunk")
+            return [(chunk_1, 60.0), (chunk_2, 2.0)]
+
+        def fake_audio_duration(path: str) -> float:
+            if path.endswith("source.mp3"):
+                return 62.0
+            if path.endswith("chunk-00000.wav"):
+                return 60.0
+            if path.endswith("chunk-00001.wav"):
+                return 2.0
+            return 0.0
+
+        backends_module._split_audio_file = fake_split_audio_file
+        backends_module._audio_duration = fake_audio_duration
+        try:
+            backend = XFYunASRBackend(
+                {
+                    "provider": "xfyun",
+                    "xfyun_api_base_url": "https://office.example.com/v2",
+                    "xfyun_app_id": "app-id",
+                    "xfyun_access_key_id": "access-key-id",
+                    "xfyun_access_key_secret": "access-key-secret",
+                    "xfyun_poll_interval_seconds": 0,
+                    "xfyun_max_poll_seconds": 1,
+                    "xfyun_chunk_seconds": 60,
+                },
+                urlopen=fake_urlopen,
+                sleep=lambda seconds: None,
+            )
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source_path = os.path.join(tmpdir, "source.mp3")
+                with open(source_path, "wb") as f:
+                    f.write(b"source")
+                result = backend.transcribe(
+                    source_path,
+                    language="zh",
+                    beam_size=5,
+                    vad_filter=False,
+                    initial_prompt="",
+                )
+        finally:
+            backends_module._split_audio_file = old_split_audio_file
+            backends_module._audio_duration = old_audio_duration
+
+        self.assertEqual(result.text, "有声音")
+        self.assertEqual(result.duration, 62.0)
+        self.assertEqual(len(result.segments), 1)
+        self.assertEqual(result.segments[0].start, 60.0)
+        self.assertEqual(result.segments[0].end, 62.0)
+
     def test_transcribe_can_chunk_long_local_files(self) -> None:
         requests = []
 

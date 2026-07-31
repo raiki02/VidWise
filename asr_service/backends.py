@@ -38,6 +38,21 @@ XFYUN_ASR_DEFAULT_LANGUAGE = "autodialect"
 XFYUN_ASR_DEFAULT_RESULT_TYPE = "transfer"
 XFYUN_ASR_DEFAULT_MAX_FILE_BYTES = 500_000_000
 XFYUN_ASR_DEFAULT_CHUNK_SECONDS = 0.0
+XFYUN_SILENT_FAIL_TYPE = "6"
+XFYUN_FAIL_TYPE_DESCRIPTIONS = {
+    "1": "audio upload failed",
+    "2": "audio transcode failed",
+    "3": "audio recognition failed",
+    "4": "audio duration exceeds the 5 hour limit",
+    "5": "audio duration check failed",
+    "6": "silent audio",
+    "7": "translation failed",
+    "8": "account has no translation permission",
+    "9": "quality inspection failed",
+    "10": "quality inspection found no matching keyword",
+    "11": "quality inspection or translation is not enabled for this account",
+    "99": "other failure",
+}
 BAIDU_ASR_DEFAULT_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
 BAIDU_ASR_DEFAULT_API_BASE_URL = "https://vop.baidu.com"
 BAIDU_ASR_DEFAULT_API_KEY_ENV = "BAIDU_ASR_API_KEY"
@@ -78,6 +93,38 @@ class ASRBackend(Protocol):
         sample_rate: int = 16000,
     ) -> TranscriptionResult:
         ...
+
+
+class XFYunTranscriptionError(RuntimeError):
+    def __init__(self, response: dict[str, Any], fallback_order_id: str = "") -> None:
+        self.response = response
+        content = response.get("content") or {}
+        order_info = content.get("orderInfo") or {}
+        self.order_id = str(order_info.get("orderId") or fallback_order_id)
+        self.status = str(order_info.get("status", ""))
+        self.fail_type = str(order_info.get("failType", ""))
+        self.description = XFYUN_FAIL_TYPE_DESCRIPTIONS.get(self.fail_type, "unknown failure")
+
+        parts = ["xfyun transcription failed"]
+        if self.order_id:
+            parts.append(f"orderId={self.order_id}")
+        if self.status:
+            parts.append(f"status={self.status}")
+        if self.fail_type:
+            parts.append(f"failType={self.fail_type} ({self.description})")
+        if self.fail_type == XFYUN_SILENT_FAIL_TYPE:
+            parts.append("the submitted audio chunk contains no speech")
+        super().__init__(" ".join(parts) + f"; response={response}")
+
+
+def _empty_transcription_result(language: str, fallback_language: str, duration: float) -> TranscriptionResult:
+    return TranscriptionResult(
+        text="",
+        language=language or fallback_language or "auto",
+        language_probability=1.0,
+        duration=duration,
+        segments=[],
+    )
 
 
 class WhisperBackend:
@@ -639,7 +686,12 @@ class XFYunASRBackend:
                 return self._transcribe_file_chunks(audio, language, sample_rate, duration)
 
         order_id, duration = self._upload(audio, language, sample_rate)
-        payload = self._wait_for_result(order_id)
+        try:
+            payload = self._wait_for_result(order_id)
+        except XFYunTranscriptionError as exc:
+            if exc.fail_type == XFYUN_SILENT_FAIL_TYPE:
+                return _empty_transcription_result(language, self.language, duration)
+            raise
         segments = _parse_xfyun_segments(payload)
         text = "\n".join(segment.text for segment in segments if segment.text).strip()
         if segments:
@@ -666,7 +718,13 @@ class XFYunASRBackend:
         with tempfile.TemporaryDirectory() as tmpdir:
             for chunk_path, chunk_duration in _split_audio_file(audio, tmpdir, self.chunk_seconds, sample_rate):
                 order_id, _ = self._upload(chunk_path, language, sample_rate)
-                payload = self._wait_for_result(order_id)
+                try:
+                    payload = self._wait_for_result(order_id)
+                except XFYunTranscriptionError as exc:
+                    if exc.fail_type == XFYUN_SILENT_FAIL_TYPE:
+                        offset += chunk_duration if chunk_duration > 0 else self.chunk_seconds
+                        continue
+                    raise
                 chunk_segments = _parse_xfyun_segments(payload)
                 for segment in chunk_segments:
                     shifted = TranscriptionSegment(
@@ -746,7 +804,7 @@ class XFYunASRBackend:
             if order_result:
                 return _decode_xfyun_order_result(order_result)
             if status in {"-1", "5"} or (fail_type not in {"", "0", "None"} and status not in {"3", "4"}):
-                raise RuntimeError(f"xfyun transcription failed: {response}")
+                raise XFYunTranscriptionError(response, order_id)
             if time.monotonic() >= deadline:
                 break
             self.sleep(self.poll_interval_seconds)

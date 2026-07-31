@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"log/slog"
@@ -159,10 +160,48 @@ func newTaskTrackerFromConfig(cfg appconfig.Config) *taskpkg.Tracker {
 func newTaskTrackerFromConfigAndRepo(cfg appconfig.Config, repo *taskpkg.Repo) *taskpkg.Tracker {
 	opts := taskTrackerOptionsFromConfig(cfg)
 	if repo != nil {
+		importTaskFallbackStore(repo, opts.StoragePath)
 		opts.Store = repo
 		opts.StoragePath = ""
 	}
 	return taskpkg.NewTrackerWithOptions(opts)
+}
+
+func importTaskFallbackStore(repo *taskpkg.Repo, storagePath string) {
+	storagePath = strings.TrimSpace(storagePath)
+	if repo == nil || storagePath == "" {
+		return
+	}
+
+	ctx := context.Background()
+	existing, err := repo.Load(ctx)
+	if err != nil {
+		slog.Warn("gateway.task_fallback_import_skipped", "reason", "mysql_load_failed", "err", err)
+		return
+	}
+	if len(existing) > 0 {
+		return
+	}
+
+	tasks, err := taskpkg.NewFileTrackerStore(storagePath).Load(ctx)
+	if err != nil {
+		slog.Warn("gateway.task_fallback_import_skipped", "path", storagePath, "err", err)
+		return
+	}
+	imported := 0
+	for _, task := range tasks {
+		if strings.TrimSpace(task.ID) == "" {
+			continue
+		}
+		if err := repo.SaveTask(ctx, task); err != nil {
+			slog.Warn("gateway.task_fallback_import_task_failed", "task_id", task.ID, "err", err)
+			continue
+		}
+		imported++
+	}
+	if imported > 0 {
+		slog.Info("gateway.task_fallback_imported", "path", storagePath, "tasks", imported)
+	}
 }
 
 func taskTrackerOptionsFromConfig(cfg appconfig.Config) taskpkg.TrackerOptions {
