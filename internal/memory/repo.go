@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Repo provides CRUD operations for cross-session user memory facts.
@@ -28,11 +29,18 @@ func (r *Repo) GetFactsByUser(ctx context.Context, userID string) ([]MemoryFact,
 	var facts []MemoryFact
 	if err := r.db.WithContext(ctx).
 		Where("user_id = ? AND superseded_by IS NULL", userID).
-		Order("category ASC, key ASC").
+		Order(memoryFactOrderBy()).
 		Find(&facts).Error; err != nil {
 		return nil, fmt.Errorf("get memory facts: %w", err)
 	}
 	return facts, nil
+}
+
+func memoryFactOrderBy() clause.OrderBy {
+	return clause.OrderBy{Columns: []clause.OrderByColumn{
+		{Column: clause.Column{Name: "category"}},
+		{Column: clause.Column{Name: "key"}},
+	}}
 }
 
 // GetFactSummaries returns lightweight views for the LLM prompt.

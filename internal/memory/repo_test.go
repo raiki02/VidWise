@@ -4,7 +4,13 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type fakeFactApplier struct {
@@ -88,4 +94,46 @@ func TestApplyExtractedFactsStopsOnAdapterError(t *testing.T) {
 	if got.Applied != 0 || got.Skipped != 0 {
 		t.Fatalf("ApplyResult = %#v, want zero result on first error", got)
 	}
+}
+
+func TestMemoryFactOrderByQuotesReservedKeyColumn(t *testing.T) {
+	capture := &sqlCaptureLogger{}
+	db, err := gorm.Open(gormmysql.New(gormmysql.Config{
+		DSN:                       "user:pass@tcp(127.0.0.1:3306)/vidwise?charset=utf8mb4&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true, Logger: capture})
+	if err != nil {
+		t.Fatalf("open dry-run db: %v", err)
+	}
+
+	if _, err := NewRepo(db).GetFactsByUser(context.Background(), "user-1"); err != nil {
+		t.Fatalf("get facts by user: %v", err)
+	}
+
+	sql := capture.sql
+	if !strings.Contains(sql, "ORDER BY `category`,`key`") {
+		t.Fatalf("generated SQL = %q, want quoted key column in ORDER BY", sql)
+	}
+	if strings.Contains(sql, " key ") || strings.Contains(sql, " key,") {
+		t.Fatalf("generated SQL = %q, contains unquoted key column", sql)
+	}
+}
+
+type sqlCaptureLogger struct {
+	sql string
+}
+
+func (l *sqlCaptureLogger) LogMode(gormlogger.LogLevel) gormlogger.Interface {
+	return l
+}
+
+func (l *sqlCaptureLogger) Info(context.Context, string, ...any) {}
+
+func (l *sqlCaptureLogger) Warn(context.Context, string, ...any) {}
+
+func (l *sqlCaptureLogger) Error(context.Context, string, ...any) {}
+
+func (l *sqlCaptureLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
+	sql, _ := fc()
+	l.sql = sql
 }
