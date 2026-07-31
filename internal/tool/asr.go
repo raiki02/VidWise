@@ -19,6 +19,6 @@ func NewASRTool(client *asr.Client) (tool.InvokableTool, *Wrapper, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	wrapper := NewWrapper(inner, WrapperConfig{Name: "transcribe_audio", Timeout: 0}) // ASR timeout from config
+	wrapper := NewWrapper(inner, WrapperConfig{Name: "transcribe_audio", Timeout: client.Timeout()})
 	return inner, wrapper, nil
 }

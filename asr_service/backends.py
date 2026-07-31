@@ -37,6 +37,7 @@ XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV = "XFYUN_API_SECRET"
 XFYUN_ASR_DEFAULT_LANGUAGE = "autodialect"
 XFYUN_ASR_DEFAULT_RESULT_TYPE = "transfer"
 XFYUN_ASR_DEFAULT_MAX_FILE_BYTES = 500_000_000
+XFYUN_ASR_DEFAULT_CHUNK_SECONDS = 0.0
 BAIDU_ASR_DEFAULT_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
 BAIDU_ASR_DEFAULT_API_BASE_URL = "https://vop.baidu.com"
 BAIDU_ASR_DEFAULT_API_KEY_ENV = "BAIDU_ASR_API_KEY"
@@ -613,6 +614,7 @@ class XFYunASRBackend:
         self.poll_interval_seconds = float(model_config.get("xfyun_poll_interval_seconds") or 3)
         self.max_poll_seconds = float(model_config.get("xfyun_max_poll_seconds") or 600)
         self.max_file_bytes = int(model_config.get("xfyun_max_file_bytes") or XFYUN_ASR_DEFAULT_MAX_FILE_BYTES)
+        self.chunk_seconds = float(model_config.get("xfyun_chunk_seconds") or XFYUN_ASR_DEFAULT_CHUNK_SECONDS)
         self.language = str(model_config.get("xfyun_language") or XFYUN_ASR_DEFAULT_LANGUAGE)
         self.result_type = str(model_config.get("xfyun_result_type") or XFYUN_ASR_DEFAULT_RESULT_TYPE)
         self.duration_check_disable = bool(model_config.get("xfyun_duration_check_disable", True))
@@ -631,6 +633,11 @@ class XFYunASRBackend:
     ) -> TranscriptionResult:
         del beam_size, vad_filter, initial_prompt
 
+        if isinstance(audio, str) and not audio.startswith(("http://", "https://")) and self.chunk_seconds > 0:
+            duration = _audio_duration(audio)
+            if duration > self.chunk_seconds:
+                return self._transcribe_file_chunks(audio, language, sample_rate, duration)
+
         order_id, duration = self._upload(audio, language, sample_rate)
         payload = self._wait_for_result(order_id)
         segments = _parse_xfyun_segments(payload)
@@ -643,6 +650,41 @@ class XFYunASRBackend:
             language_probability=1.0,
             duration=duration,
             segments=segments,
+        )
+
+    def _transcribe_file_chunks(
+        self,
+        audio: str,
+        language: str,
+        sample_rate: int,
+        total_duration: float,
+    ) -> TranscriptionResult:
+        all_segments: list[TranscriptionSegment] = []
+        text_parts: list[str] = []
+        offset = 0.0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for chunk_path, chunk_duration in _split_audio_file(audio, tmpdir, self.chunk_seconds, sample_rate):
+                order_id, _ = self._upload(chunk_path, language, sample_rate)
+                payload = self._wait_for_result(order_id)
+                chunk_segments = _parse_xfyun_segments(payload)
+                for segment in chunk_segments:
+                    shifted = TranscriptionSegment(
+                        start=segment.start + offset,
+                        end=segment.end + offset,
+                        text=segment.text,
+                    )
+                    all_segments.append(shifted)
+                    if segment.text:
+                        text_parts.append(segment.text)
+                offset += max(chunk_duration, max((segment.end for segment in chunk_segments), default=0.0))
+
+        return TranscriptionResult(
+            text="\n".join(part for part in text_parts if part).strip(),
+            language=language or self.language or "auto",
+            language_probability=1.0,
+            duration=max(total_duration, offset),
+            segments=all_segments,
         )
 
     def _upload(self, audio: str | np.ndarray, language: str, sample_rate: int) -> tuple[str, float]:
@@ -674,7 +716,7 @@ class XFYunASRBackend:
                 )
             with open(audio, "rb") as f:
                 file_bytes = f.read()
-            duration = _wav_duration(audio)
+            duration = _audio_duration(audio)
             params = self._upload_file_params(file_name, stat.st_size, language, duration)
             response = self._post("/upload", params, file_bytes, "application/octet-stream")
 
@@ -1101,6 +1143,78 @@ def _wav_duration(path: str) -> float:
         return float(frames) / float(rate) if rate else 0.0
     except (wave.Error, OSError, EOFError):
         return 0.0
+
+
+def _audio_duration(path: str) -> float:
+    duration = _wav_duration(path)
+    if duration > 0:
+        return duration
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    try:
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return 0.0
+    try:
+        return float(result.stdout.strip() or "0")
+    except ValueError:
+        return 0.0
+
+
+def _split_audio_file(
+    audio: str,
+    tmpdir: str,
+    chunk_seconds: float,
+    sample_rate: int,
+) -> list[tuple[str, float]]:
+    output_pattern = os.path.join(tmpdir, "chunk-%05d.wav")
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        audio,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "segment",
+        "-segment_time",
+        f"{chunk_seconds:g}",
+        "-reset_timestamps",
+        "1",
+        output_pattern,
+    ]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required for xfyun ASR audio chunking") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg failed to prepare xfyun ASR audio chunks: {detail}") from exc
+
+    chunk_paths = sorted(
+        os.path.join(tmpdir, name)
+        for name in os.listdir(tmpdir)
+        if name.endswith(".wav")
+    )
+    if not chunk_paths:
+        raise RuntimeError("ffmpeg did not produce any xfyun ASR audio chunks")
+    return [(chunk_path, _audio_duration(chunk_path)) for chunk_path in chunk_paths]
 
 
 def _parse_baidu_asr_response(payload: dict[str, Any]) -> str:

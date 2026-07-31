@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,11 @@ var webFS embed.FS
 // Router assembles all HTTP routes for the gateway.
 // Pass nil for optional dependencies if not available.
 func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime.Runtime, chatRepo *chat.Repo, memRepo *memory.Repo, caps capability.Snapshot) *gin.Engine {
+	return RouterWithTaskRepo(cfg, registry, ragRuntime, chatRepo, memRepo, nil, caps)
+}
+
+// RouterWithTaskRepo assembles routes with an optional MySQL-backed task store.
+func RouterWithTaskRepo(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime.Runtime, chatRepo *chat.Repo, memRepo *memory.Repo, taskRepo *taskpkg.Repo, caps capability.Snapshot) *gin.Engine {
 	e := gin.Default()
 
 	e.Use(TraceID())
@@ -61,8 +67,8 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 	})
 
 	backgroundRunner := background.NewRunner(30 * time.Second)
+	taskTracker := newTaskTrackerFromConfigAndRepo(cfg, taskRepo)
 	taskTrackerOptions := taskTrackerOptionsFromConfig(cfg)
-	taskTracker := taskpkg.NewTrackerWithOptions(taskTrackerOptions)
 
 	// Handlers
 	extractHandler := handler.NewExtractHandlerWithSourceManagerAndBackground(cfg, registry, ragRuntime.Sources, caps, backgroundRunner)
@@ -147,7 +153,16 @@ func Router(cfg appconfig.Config, registry *tool.Registry, ragRuntime ragruntime
 }
 
 func newTaskTrackerFromConfig(cfg appconfig.Config) *taskpkg.Tracker {
-	return taskpkg.NewTrackerWithOptions(taskTrackerOptionsFromConfig(cfg))
+	return newTaskTrackerFromConfigAndRepo(cfg, nil)
+}
+
+func newTaskTrackerFromConfigAndRepo(cfg appconfig.Config, repo *taskpkg.Repo) *taskpkg.Tracker {
+	opts := taskTrackerOptionsFromConfig(cfg)
+	if repo != nil {
+		opts.Store = repo
+		opts.StoragePath = ""
+	}
+	return taskpkg.NewTrackerWithOptions(opts)
 }
 
 func taskTrackerOptionsFromConfig(cfg appconfig.Config) taskpkg.TrackerOptions {
@@ -155,11 +170,13 @@ func taskTrackerOptionsFromConfig(cfg appconfig.Config) taskpkg.TrackerOptions {
 	if err != nil {
 		slog.Warn("gateway.task_tracker_config_invalid", "retain_for", cfg.Task.RetainFor, "err", err)
 		return taskpkg.TrackerOptions{
-			MaxTasks: cfg.Task.MaxTracked,
+			MaxTasks:    cfg.Task.MaxTracked,
+			StoragePath: strings.TrimSpace(cfg.Task.StoragePath),
 		}
 	}
 	return taskpkg.TrackerOptions{
-		MaxTasks:  cfg.Task.MaxTracked,
-		RetainFor: retainFor,
+		MaxTasks:    cfg.Task.MaxTracked,
+		RetainFor:   retainFor,
+		StoragePath: strings.TrimSpace(cfg.Task.StoragePath),
 	}
 }

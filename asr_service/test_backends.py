@@ -7,6 +7,7 @@ import urllib.parse
 
 import numpy as np
 
+import asr_service.backends as backends_module
 from asr_service.backends import AliyunASRBackend, BaiduASRBackend, XFYunASRBackend, _build_whisper_generation_kwargs
 
 
@@ -162,6 +163,117 @@ class AliyunASRBackendTest(unittest.TestCase):
 
 
 class XFYunASRBackendTest(unittest.TestCase):
+    def test_transcribe_can_chunk_long_local_files(self) -> None:
+        requests = []
+
+        def order_result(text: str, end_ms: str) -> str:
+            return json.dumps(
+                {
+                    "lattice": [
+                        {
+                            "json_1best": json.dumps(
+                                {
+                                    "st": {
+                                        "bg": "0",
+                                        "ed": end_ms,
+                                        "rt": [{"ws": [{"cw": [{"w": text}]}]}],
+                                    }
+                                }
+                            )
+                        }
+                    ]
+                }
+            )
+
+        responses = [
+            {"code": "000000", "content": {"orderId": "order-1"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {"orderId": "order-1", "status": 4, "failType": 0},
+                    "orderResult": order_result("第一段", "1000"),
+                },
+            },
+            {"code": "000000", "content": {"orderId": "order-2"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {"orderId": "order-2", "status": 4, "failType": 0},
+                    "orderResult": order_result("第二段", "2000"),
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            requests.append((request, timeout))
+            return _FakeHTTPResponse(responses.pop(0))
+
+        old_split_audio_file = backends_module._split_audio_file
+        old_audio_duration = backends_module._audio_duration
+
+        def fake_split_audio_file(audio: str, tmpdir: str, chunk_seconds: float, sample_rate: int):
+            self.assertEqual(chunk_seconds, 240)
+            self.assertEqual(sample_rate, 16000)
+            chunk_1 = os.path.join(tmpdir, "chunk-00000.wav")
+            chunk_2 = os.path.join(tmpdir, "chunk-00001.wav")
+            with open(chunk_1, "wb") as f:
+                f.write(b"chunk one")
+            with open(chunk_2, "wb") as f:
+                f.write(b"chunk two")
+            return [(chunk_1, 240.0), (chunk_2, 20.0)]
+
+        def fake_audio_duration(path: str) -> float:
+            if path.endswith("source.mp3"):
+                return 260.0
+            if path.endswith("chunk-00000.wav"):
+                return 240.0
+            if path.endswith("chunk-00001.wav"):
+                return 20.0
+            return 0.0
+
+        backends_module._split_audio_file = fake_split_audio_file
+        backends_module._audio_duration = fake_audio_duration
+        try:
+            backend = XFYunASRBackend(
+                {
+                    "provider": "xfyun",
+                    "xfyun_api_base_url": "https://office.example.com/v2",
+                    "xfyun_app_id": "app-id",
+                    "xfyun_access_key_id": "access-key-id",
+                    "xfyun_access_key_secret": "access-key-secret",
+                    "xfyun_poll_interval_seconds": 0,
+                    "xfyun_max_poll_seconds": 1,
+                    "xfyun_chunk_seconds": 240,
+                },
+                urlopen=fake_urlopen,
+                sleep=lambda seconds: None,
+            )
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                source_path = os.path.join(tmpdir, "source.mp3")
+                with open(source_path, "wb") as f:
+                    f.write(b"source")
+                result = backend.transcribe(
+                    source_path,
+                    language="zh",
+                    beam_size=5,
+                    vad_filter=False,
+                    initial_prompt="",
+                )
+        finally:
+            backends_module._split_audio_file = old_split_audio_file
+            backends_module._audio_duration = old_audio_duration
+
+        self.assertEqual(result.text, "第一段\n第二段")
+        self.assertEqual(result.duration, 260.0)
+        self.assertEqual(len(result.segments), 2)
+        self.assertEqual(result.segments[0].start, 0.0)
+        self.assertEqual(result.segments[0].end, 1.0)
+        self.assertEqual(result.segments[1].start, 240.0)
+        self.assertEqual(result.segments[1].end, 242.0)
+        upload_requests = [request for request, _ in requests if "/upload?" in request.get_full_url()]
+        self.assertEqual(len(upload_requests), 2)
+
     def test_transcribe_uploads_file_and_polls_result(self) -> None:
         requests = []
         order_result = json.dumps(

@@ -8,6 +8,7 @@ import (
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/raiki02/vidwise/internal/asr"
 )
 
 func TestWrapperHonorsMaxRetry(t *testing.T) {
@@ -40,6 +41,21 @@ func TestWrapperDelegatesInfo(t *testing.T) {
 	}
 	if inner.infoCalls != 1 {
 		t.Fatalf("Info calls = %d, want 1", inner.infoCalls)
+	}
+}
+
+func TestNewASRToolUsesClientTimeout(t *testing.T) {
+	client, err := asr.NewClient("http://asr.local", "zh", 17*time.Minute, asr.TranscribeOptions{})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	_, wrapper, err := NewASRTool(client)
+	if err != nil {
+		t.Fatalf("NewASRTool returned error: %v", err)
+	}
+	if wrapper.timeout != 17*time.Minute {
+		t.Fatalf("wrapper timeout = %v, want 17m", wrapper.timeout)
 	}
 }
 

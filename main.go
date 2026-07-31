@@ -26,6 +26,7 @@ import (
 	"github.com/raiki02/vidwise/internal/server"
 	mysqlclient "github.com/raiki02/vidwise/internal/storage/mysql"
 	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
+	taskpkg "github.com/raiki02/vidwise/internal/task"
 	"github.com/raiki02/vidwise/internal/tool"
 	webtools "github.com/raiki02/vidwise/internal/tools"
 	video_summary "github.com/raiki02/vidwise/internal/video_summary"
@@ -138,6 +139,7 @@ func runGateway(cfg appconfig.Config) {
 	var chatRepo *chat.Repo
 	var memRepo *memory.Repo
 	var sourceRegistry *ragregistry.Repo
+	var taskRepo *taskpkg.Repo
 	if cfg.MySQL.DSN != "" {
 		mysqlCtx, mysqlCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer mysqlCancel()
@@ -165,6 +167,14 @@ func runGateway(cfg appconfig.Config) {
 				sourceRegistry = nil
 			} else {
 				slog.Info("gateway.rag_source_registry_ready")
+			}
+
+			taskRepo = taskpkg.NewRepoFromDB(mc.DB)
+			if err := taskRepo.AutoMigrate(); err != nil {
+				slog.Warn("gateway.task_store_migration_failed", "err", err, "fallback", cfg.Task.StoragePath)
+				taskRepo = nil
+			} else {
+				slog.Info("gateway.task_store_ready")
 			}
 			// Clean up mysql context
 			_ = mysqlCtx
@@ -205,7 +215,7 @@ func runGateway(cfg appconfig.Config) {
 	}
 
 	// Build and start Gin engine
-	e := server.Router(cfg, registry, ragBuild.Runtime, chatRepo, memRepo, caps)
+	e := server.RouterWithTaskRepo(cfg, registry, ragBuild.Runtime, chatRepo, memRepo, taskRepo, caps)
 	httpServer, err := server.NewHTTPServer(cfg.Server, e)
 	if err != nil {
 		panic(fmt.Errorf("build http server: %w", err))
@@ -217,6 +227,7 @@ func runGateway(cfg appconfig.Config) {
 		"asr", asrReady,
 		"video_summary", videoSummaryReady,
 		"mysql", chatRepo != nil,
+		"task_store_mysql", taskRepo != nil,
 		"memory", memRepo != nil,
 		"mcp_enabled", cfg.MCP.Enabled,
 	)

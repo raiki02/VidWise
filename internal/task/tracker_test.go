@@ -1,6 +1,7 @@
 package task
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -301,6 +302,144 @@ func TestTrackerListsTasksWithFiltersAndLimit(t *testing.T) {
 	}
 }
 
+func TestTrackerPersistsTasksAcrossInstances(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	storagePath := t.TempDir() + "/tasks.json"
+	opts := TrackerOptions{
+		MaxTasks:    10,
+		RetainFor:   time.Hour,
+		StoragePath: storagePath,
+		Now: func() time.Time {
+			return now
+		},
+	}
+
+	first := NewTrackerWithOptions(opts)
+	first.Create(TrackCreateRequest{
+		ID:        "task-1",
+		Type:      "video_process",
+		UserID:    "u1",
+		SessionID: "s1",
+		Steps:     []string{"download_audio", "transcribe_audio"},
+	})
+	first.PatchOutput("task-1", map[string]any{
+		"text":           "raw transcript",
+		"formatted_text": "formatted transcript",
+	})
+	first.Complete("task-1", map[string]any{
+		"text":           "formatted transcript",
+		"raw_text":       "raw transcript",
+		"formatted_text": "formatted transcript",
+	})
+
+	second := NewTrackerWithOptions(opts)
+	got, ok := second.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to be restored from storage")
+	}
+	if got.Status != StatusDone {
+		t.Fatalf("status = %q, want done", got.Status)
+	}
+	if got.Output["formatted_text"] != "formatted transcript" || got.Output["raw_text"] != "raw transcript" {
+		t.Fatalf("restored output = %#v, want transcript text", got.Output)
+	}
+}
+
+func TestTrackerRestoresTasksFromConfiguredStore(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	store := newFakeTrackerStore()
+	opts := TrackerOptions{
+		MaxTasks:  10,
+		RetainFor: time.Hour,
+		Store:     store,
+		Now: func() time.Time {
+			return now
+		},
+	}
+
+	first := NewTrackerWithOptions(opts)
+	first.Create(TrackCreateRequest{
+		ID:        "task-1",
+		Type:      "video_process",
+		UserID:    "u1",
+		SessionID: "s1",
+	})
+	first.Complete("task-1", map[string]any{
+		"text":                "formatted transcript",
+		"raw_text":            "raw transcript",
+		"formatted_text":      "formatted transcript",
+		"text_formatted":      true,
+		"can_index_knowledge": true,
+	})
+
+	second := NewTrackerWithOptions(opts)
+	got, ok := second.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to be restored from configured store")
+	}
+	if got.Output["formatted_text"] != "formatted transcript" || got.Output["raw_text"] != "raw transcript" {
+		t.Fatalf("restored output = %#v, want transcript text", got.Output)
+	}
+}
+
+func TestTrackerDeletesPrunedTasksFromConfiguredStore(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	store := newFakeTrackerStore()
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		MaxTasks:  10,
+		RetainFor: time.Minute,
+		Store:     store,
+		Now: func() time.Time {
+			return now
+		},
+	})
+
+	tracker.Create(TrackCreateRequest{ID: "old-done"})
+	tracker.Complete("old-done", nil)
+	now = now.Add(time.Minute + time.Second)
+
+	if removed := tracker.Prune(); removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if !store.deleted["old-done"] {
+		t.Fatalf("deleted ids = %#v, want old-done", store.deleted)
+	}
+}
+
+func TestTrackerMarksRestoredInFlightTasksFailed(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	storagePath := t.TempDir() + "/tasks.json"
+	opts := TrackerOptions{
+		MaxTasks:    10,
+		RetainFor:   time.Hour,
+		StoragePath: storagePath,
+		Now: func() time.Time {
+			return now
+		},
+	}
+
+	first := NewTrackerWithOptions(opts)
+	first.Create(TrackCreateRequest{ID: "task-1", Steps: []string{"download_audio"}})
+	first.Start("task-1")
+	first.PatchOutput("task-1", map[string]any{"text": "partial transcript"})
+
+	now = now.Add(time.Minute)
+	second := NewTrackerWithOptions(opts)
+	got, ok := second.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to be restored from storage")
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed after restart", got.Status)
+	}
+	if got.Error == "" {
+		t.Fatal("expected interrupted task to explain why it failed")
+	}
+	if got.Output["text"] != "partial transcript" {
+		t.Fatalf("restored output = %#v, want partial transcript retained", got.Output)
+	}
+}
+
 func TestTrackerListReturnsCopies(t *testing.T) {
 	tracker := NewTracker()
 	tracker.Create(TrackCreateRequest{ID: "task-1", Steps: []string{"download_audio"}})
@@ -330,4 +469,38 @@ func TestNormalizeTaskListLimit(t *testing.T) {
 	if got := normalizeTaskListLimit(7); got != 7 {
 		t.Fatalf("limit = %d, want 7", got)
 	}
+}
+
+type fakeTrackerStore struct {
+	tasks   map[string]TrackedTask
+	deleted map[string]bool
+}
+
+func newFakeTrackerStore() *fakeTrackerStore {
+	return &fakeTrackerStore{
+		tasks:   make(map[string]TrackedTask),
+		deleted: make(map[string]bool),
+	}
+}
+
+func (s *fakeTrackerStore) Load(_ context.Context) ([]TrackedTask, error) {
+	tasks := make([]TrackedTask, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		tasks = append(tasks, copyTrackedTask(task))
+	}
+	return tasks, nil
+}
+
+func (s *fakeTrackerStore) SaveTask(_ context.Context, task TrackedTask) error {
+	s.tasks[task.ID] = copyTrackedTask(task)
+	delete(s.deleted, task.ID)
+	return nil
+}
+
+func (s *fakeTrackerStore) DeleteTasks(_ context.Context, ids []string) error {
+	for _, id := range ids {
+		delete(s.tasks, id)
+		s.deleted[id] = true
+	}
+	return nil
 }

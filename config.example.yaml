@@ -51,6 +51,9 @@ asr:
     xfyun_poll_interval_seconds: 3
     xfyun_max_poll_seconds: 600
     xfyun_max_file_bytes: 500000000
+    # 0 disables chunking. Set to 240-300 when free/trial quota rejects long
+    # autodialect uploads but accepts short files.
+    xfyun_chunk_seconds: 0
     xfyun_duration_check_disable: true
     # Used only when provider is baidu/baiducloud.
     # The backend uses Baidu short speech REST API, converts local audio to
@@ -314,9 +317,12 @@ upload:
   max_file_bytes: 10485760 # 10 MB
 
 task:
-  # Maximum in-memory async task records retained by the gateway.
+  # Maximum async task records retained by the gateway.
   max_tracked: 1000
   # Maximum concurrently running video_process jobs. 0 means unlimited.
   max_concurrent_video: 0
   # Terminal task statuses are retained for this duration before pruning.
   retain_for: "24h"
+  # Local JSON fallback used when mysql.dsn is empty. When MySQL is configured,
+  # task list and transcript outputs are restored from the tasks tables instead.
+  storage_path: ".vidwise/tasks.json"

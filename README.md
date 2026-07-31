@@ -229,11 +229,12 @@ curl http://localhost:8080/rag/health         # RAG 兼容健康状态
 | `server` | 网关监听地址 |
 | `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun/xfyun/baidu) |
 | `llm` | LLM 提供商 (openai/ollama/deepseek) + 格式化参数 |
-| `mysql` | MySQL 连接串 (用于会话持久化，可选) |
+| `mysql` | MySQL 连接串 (用于会话、记忆、source registry 和异步任务持久化，可选) |
 | `qdrant` | Qdrant 向量数据库地址 |
 | `embedding` | Embedding 服务配置 (本地 qwen/bge 或 aliyun/siliconflow API) |
 | `rerank` | 专用重排序配置 (本地 CrossEncoder 或 aliyun/siliconflow Rerank API) |
 | `mcp` | MCP Server 开关和端口 |
+| `task` | 异步任务保留策略；未配置 MySQL 时使用本地 JSON fallback |
 
 ## 项目结构
 

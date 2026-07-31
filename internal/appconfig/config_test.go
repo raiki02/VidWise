@@ -324,6 +324,9 @@ func TestApplyDefaultsSetsTaskDefaults(t *testing.T) {
 	if cfg.Task.RetainFor != "24h" {
 		t.Fatalf("RetainFor = %q, want 24h", cfg.Task.RetainFor)
 	}
+	if cfg.Task.StoragePath != ".vidwise/tasks.json" {
+		t.Fatalf("StoragePath = %q, want .vidwise/tasks.json", cfg.Task.StoragePath)
+	}
 	retention, err := cfg.Task.RetentionDuration()
 	if err != nil {
 		t.Fatalf("RetentionDuration returned error: %v", err)
@@ -685,6 +688,13 @@ func TestValidateRejectsInvalidTaskConfig(t *testing.T) {
 				cfg.Task.RetainFor = "0s"
 			},
 			wantErr: "task.retain_for",
+		},
+		{
+			name: "empty storage path",
+			mutate: func(cfg *Config) {
+				cfg.Task.StoragePath = " "
+			},
+			wantErr: "task.storage_path",
 		},
 	}
 

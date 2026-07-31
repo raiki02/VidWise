@@ -59,6 +59,8 @@ asr:
     xfyun_language: "autodialect"
     xfyun_result_type: "transfer"
     xfyun_max_poll_seconds: 600
+    # 0 disables chunking. Set to 240-300 if free/trial quota rejects long files.
+    xfyun_chunk_seconds: 0
   stream:
     enabled: false
 ```

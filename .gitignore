@@ -40,3 +40,4 @@ models/*
 !models/README.md
 .claude
 .codex
+.vidwise/

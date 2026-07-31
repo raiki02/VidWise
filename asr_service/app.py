@@ -50,6 +50,7 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "xfyun_poll_interval_seconds": 3,
         "xfyun_max_poll_seconds": 600,
         "xfyun_max_file_bytes": 500000000,
+        "xfyun_chunk_seconds": 0,
         "xfyun_duration_check_disable": True,
         "baidu_token_url": "https://aip.baidubce.com/oauth/2.0/token",
         "baidu_api_base_url": "https://vop.baidu.com",
@@ -617,6 +618,9 @@ def load_asr_config() -> dict[str, Any]:
     )
     model_config["xfyun_max_file_bytes"] = int(
         os.getenv("ASR_XFYUN_MAX_FILE_BYTES", model_config.get("xfyun_max_file_bytes", 500000000))
+    )
+    model_config["xfyun_chunk_seconds"] = float(
+        os.getenv("ASR_XFYUN_CHUNK_SECONDS", model_config.get("xfyun_chunk_seconds", 0))
     )
     model_config["xfyun_duration_check_disable"] = _bool_env_or_cfg(
         "ASR_XFYUN_DURATION_CHECK_DISABLE",

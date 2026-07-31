@@ -1,7 +1,10 @@
 package task
 
 import (
+	"context"
+	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,9 +61,18 @@ type TrackListRequest struct {
 }
 
 type TrackerOptions struct {
-	MaxTasks  int
-	RetainFor time.Duration
-	Now       func() time.Time
+	MaxTasks    int
+	RetainFor   time.Duration
+	Now         func() time.Time
+	StoragePath string
+	Store       TrackerStore
+}
+
+// TrackerStore persists tracked task state outside the gateway process.
+type TrackerStore interface {
+	Load(ctx context.Context) ([]TrackedTask, error)
+	SaveTask(ctx context.Context, task TrackedTask) error
+	DeleteTasks(ctx context.Context, ids []string) error
 }
 
 // Tracker records in-process task state for async work launched by the gateway.
@@ -70,6 +82,7 @@ type Tracker struct {
 	now       func() time.Time
 	maxTasks  int
 	retainFor time.Duration
+	store     TrackerStore
 }
 
 func NewTracker() *Tracker {
@@ -78,12 +91,17 @@ func NewTracker() *Tracker {
 
 func NewTrackerWithOptions(opts TrackerOptions) *Tracker {
 	opts = normalizeTrackerOptions(opts)
-	return &Tracker{
+	tracker := &Tracker{
 		tasks:     make(map[string]TrackedTask),
 		now:       opts.Now,
 		maxTasks:  opts.MaxTasks,
 		retainFor: opts.RetainFor,
+		store:     opts.Store,
 	}
+	if err := tracker.restore(); err != nil {
+		slog.Warn("task.tracker_restore_failed", "err", err)
+	}
+	return tracker
 }
 
 func (t *Tracker) Create(req TrackCreateRequest) TrackedTask {
@@ -108,12 +126,14 @@ func (t *Tracker) Create(req TrackCreateRequest) TrackedTask {
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.tasks == nil {
 		t.tasks = make(map[string]TrackedTask)
 	}
 	t.tasks[id] = task
-	t.pruneLocked(now)
+	removed := t.pruneLocked(now)
+	t.persistTaskLocked(task)
+	t.deleteTasksLocked(removed)
+	t.mu.Unlock()
 	return copyTrackedTask(task)
 }
 
@@ -223,7 +243,8 @@ func (t *Tracker) List(req TrackListRequest) []TrackedTask {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.pruneLocked(now)
+	removed := t.pruneLocked(now)
+	t.deleteTasksLocked(removed)
 
 	matches := make([]TrackedTask, 0, len(t.tasks))
 	for _, task := range t.tasks {
@@ -256,19 +277,22 @@ func (t *Tracker) updateStep(taskID, stepName string, mutate func(TrackedStep, t
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	task, ok := t.tasks[taskID]
 	if !ok {
+		t.mu.Unlock()
 		return TrackedTask{}, false
 	}
 	idx := findTrackedStep(task.Steps, stepName)
 	if idx < 0 {
+		t.mu.Unlock()
 		return TrackedTask{}, false
 	}
 	now := t.currentTime()
 	task.Steps[idx] = mutate(task.Steps[idx], now)
 	task.UpdatedAt = now
 	t.tasks[taskID] = task
+	t.persistTaskLocked(task)
+	t.mu.Unlock()
 	return copyTrackedTask(task), true
 }
 
@@ -278,13 +302,15 @@ func (t *Tracker) update(id string, mutate func(TrackedTask, time.Time) TrackedT
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	task, ok := t.tasks[id]
 	if !ok {
+		t.mu.Unlock()
 		return TrackedTask{}, false
 	}
 	task = mutate(task, t.currentTime())
 	t.tasks[id] = task
+	t.persistTaskLocked(task)
+	t.mu.Unlock()
 	return copyTrackedTask(task), true
 }
 
@@ -295,8 +321,10 @@ func (t *Tracker) Prune() int {
 
 	now := t.currentTime()
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.pruneLocked(now)
+	removed := t.pruneLocked(now)
+	t.deleteTasksLocked(removed)
+	t.mu.Unlock()
+	return len(removed)
 }
 
 func (t *Tracker) currentTime() time.Time {
@@ -306,13 +334,13 @@ func (t *Tracker) currentTime() time.Time {
 	return t.now()
 }
 
-func (t *Tracker) pruneLocked(now time.Time) int {
+func (t *Tracker) pruneLocked(now time.Time) []string {
 	if len(t.tasks) == 0 {
-		return 0
+		return nil
 	}
 	t.normalizeOptionsLocked()
 
-	removed := 0
+	removed := []string{}
 	if t.retainFor > 0 {
 		for id, task := range t.tasks {
 			if !isTerminalTaskStatus(task.Status) {
@@ -320,7 +348,7 @@ func (t *Tracker) pruneLocked(now time.Time) int {
 			}
 			if now.Sub(taskTerminalTime(task)) >= t.retainFor {
 				delete(t.tasks, id)
-				removed++
+				removed = append(removed, id)
 			}
 		}
 	}
@@ -332,11 +360,92 @@ func (t *Tracker) pruneLocked(now time.Time) int {
 				break
 			}
 			delete(t.tasks, candidate.id)
-			removed++
+			removed = append(removed, candidate.id)
 		}
 	}
 
 	return removed
+}
+
+func (t *Tracker) restore() error {
+	if t == nil || t.store == nil {
+		return nil
+	}
+	tasks, err := t.store.Load(context.Background())
+	if err != nil {
+		return err
+	}
+
+	now := t.currentTime()
+	t.mu.Lock()
+	if t.tasks == nil {
+		t.tasks = make(map[string]TrackedTask)
+	}
+	for _, task := range tasks {
+		if strings.TrimSpace(task.ID) == "" {
+			continue
+		}
+		t.tasks[task.ID] = copyTrackedTask(task)
+	}
+	changed := t.failInterruptedTasksLocked(now)
+	removed := t.pruneLocked(now)
+	t.persistTasksLocked(changed)
+	t.deleteTasksLocked(removed)
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *Tracker) persistTaskLocked(task TrackedTask) {
+	if t == nil || t.store == nil || task.ID == "" {
+		return
+	}
+	if err := t.store.SaveTask(context.Background(), copyTrackedTask(task)); err != nil {
+		slog.Warn("task.tracker_persist_failed", "task_id", task.ID, "err", err)
+	}
+}
+
+func (t *Tracker) persistTasksLocked(tasks []TrackedTask) {
+	for _, task := range tasks {
+		t.persistTaskLocked(task)
+	}
+}
+
+func (t *Tracker) deleteTasksLocked(ids []string) {
+	if t == nil || t.store == nil || len(ids) == 0 {
+		return
+	}
+	if err := t.store.DeleteTasks(context.Background(), ids); err != nil {
+		slog.Warn("task.tracker_delete_failed", "task_ids", ids, "err", err)
+	}
+}
+
+func (t *Tracker) failInterruptedTasksLocked(now time.Time) []TrackedTask {
+	changed := []TrackedTask{}
+	for id, task := range t.tasks {
+		if isTerminalTaskStatus(task.Status) {
+			continue
+		}
+		task.Status = StatusFailed
+		if task.Error == "" {
+			task.Error = "task interrupted by gateway restart"
+		}
+		task.UpdatedAt = now
+		task.FinishedAt = timePtr(now)
+		for i := range task.Steps {
+			if isTerminalStepStatus(task.Steps[i].Status) {
+				continue
+			}
+			task.Steps[i].Status = StatusFailed
+			if task.Steps[i].Error == "" {
+				task.Steps[i].Error = "task interrupted by gateway restart"
+			}
+			task.Steps[i].UpdatedAt = now
+			task.Steps[i].FinishedAt = timePtr(now)
+		}
+		t.tasks[id] = task
+		changed = append(changed, copyTrackedTask(task))
+	}
+	return changed
 }
 
 func (t *Tracker) normalizeOptionsLocked() {
@@ -412,6 +521,9 @@ func normalizeTrackerOptions(opts TrackerOptions) TrackerOptions {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Store == nil && strings.TrimSpace(opts.StoragePath) != "" {
+		opts.Store = NewFileTrackerStore(opts.StoragePath)
+	}
 	return opts
 }
 
@@ -456,6 +568,10 @@ func isTerminalTaskStatus(status Status) bool {
 	return status == StatusDone || status == StatusFailed
 }
 
+func isTerminalStepStatus(status Status) bool {
+	return status == StatusDone || status == StatusFailed || status == StatusSkipped
+}
+
 func taskTerminalTime(task TrackedTask) time.Time {
 	if task.FinishedAt != nil {
 		return *task.FinishedAt
@@ -464,4 +580,8 @@ func taskTerminalTime(task TrackedTask) time.Time {
 		return task.UpdatedAt
 	}
 	return task.CreatedAt
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }

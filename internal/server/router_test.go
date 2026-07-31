@@ -387,8 +387,9 @@ func TestStaticIndexExposesCurrentRAGAgentWorkflows(t *testing.T) {
 func TestTaskTrackerOptionsFromConfig(t *testing.T) {
 	opts := taskTrackerOptionsFromConfig(appconfig.Config{
 		Task: appconfig.TaskConfig{
-			MaxTracked: 7,
-			RetainFor:  "2h",
+			MaxTracked:  7,
+			RetainFor:   "2h",
+			StoragePath: " .vidwise/test-tasks.json ",
 		},
 	})
 
@@ -397,6 +398,9 @@ func TestTaskTrackerOptionsFromConfig(t *testing.T) {
 	}
 	if opts.RetainFor != 2*time.Hour {
 		t.Fatalf("RetainFor = %s, want 2h", opts.RetainFor)
+	}
+	if opts.StoragePath != ".vidwise/test-tasks.json" {
+		t.Fatalf("StoragePath = %q, want .vidwise/test-tasks.json", opts.StoragePath)
 	}
 }
 

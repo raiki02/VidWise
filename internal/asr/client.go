@@ -70,6 +70,10 @@ func NewClient(baseURL, language string, timeout time.Duration, options Transcri
 	}, nil
 }
 
+func (c *Client) Timeout() time.Duration {
+	return c.http.Timeout
+}
+
 func (c *Client) Health(ctx context.Context) error {
 	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "asr service")
 }

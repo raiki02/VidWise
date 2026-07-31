@@ -33,19 +33,23 @@ type Task struct {
 	ErrorMsg   *string         `gorm:"type:text" json:"error_msg,omitempty"`
 	CreatedAt  time.Time       `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt  time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	StartedAt  *time.Time      `json:"started_at,omitempty"`
+	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
 // Step represents a single step in a task's DAG.
 type Step struct {
 	ID         string          `gorm:"type:varchar(36);primaryKey" json:"id"`
-	TaskID     string          `gorm:"type:varchar(36);not null;index:idx_steps_task" json:"task_id"`
-	Name       string          `gorm:"type:varchar(128);not null" json:"name"`
+	TaskID     string          `gorm:"type:varchar(36);not null;index:idx_steps_task;uniqueIndex:idx_steps_task_name" json:"task_id"`
+	Name       string          `gorm:"type:varchar(128);not null;uniqueIndex:idx_steps_task_name" json:"name"`
 	Status     Status          `gorm:"type:varchar(16);not null;default:pending" json:"status"`
 	DependsOn  json.RawMessage `gorm:"type:json" json:"depends_on,omitempty"`
 	Input      json.RawMessage `gorm:"type:json" json:"input,omitempty"`
 	Output     json.RawMessage `gorm:"type:json" json:"output,omitempty"`
 	RetryCount int             `gorm:"not null;default:0" json:"retry_count"`
 	ErrorMsg   *string         `gorm:"type:text" json:"error_msg,omitempty"`
+	CreatedAt  time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt  time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
 	StartedAt  *time.Time      `json:"started_at,omitempty"`
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
@@ -53,7 +57,7 @@ type Step struct {
 // Transcript stores the ASR output for a task.
 type Transcript struct {
 	ID            string    `gorm:"type:varchar(36);primaryKey" json:"id"`
-	TaskID        string    `gorm:"type:varchar(36);not null;index" json:"task_id"`
+	TaskID        string    `gorm:"type:varchar(36);not null;index;uniqueIndex:idx_transcripts_task" json:"task_id"`
 	SessionID     string    `gorm:"type:varchar(36);not null;index:idx_transcripts_session" json:"session_id"`
 	UserID        string    `gorm:"type:varchar(36);not null" json:"user_id"`
 	RawText       *string   `gorm:"type:mediumtext" json:"raw_text,omitempty"`

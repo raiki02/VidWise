@@ -74,6 +74,7 @@ type ASRModelConfig struct {
 	XFYunPollIntervalSeconds  int    `yaml:"xfyun_poll_interval_seconds"`
 	XFYunMaxPollSeconds       int    `yaml:"xfyun_max_poll_seconds"`
 	XFYunMaxFileBytes         int64  `yaml:"xfyun_max_file_bytes"`
+	XFYunChunkSeconds         int    `yaml:"xfyun_chunk_seconds"`
 	XFYunDurationCheckDisable bool   `yaml:"xfyun_duration_check_disable"`
 	BaiduTokenURL             string `yaml:"baidu_token_url"`
 	BaiduAPIBaseURL           string `yaml:"baidu_api_base_url"`
@@ -293,6 +294,7 @@ type TaskConfig struct {
 	MaxTracked         int    `yaml:"max_tracked"`
 	MaxConcurrentVideo int    `yaml:"max_concurrent_video"`
 	RetainFor          string `yaml:"retain_for"`
+	StoragePath        string `yaml:"storage_path"`
 }
 
 func Load(path string) (Config, error) {
@@ -738,6 +740,9 @@ func (c *Config) applyDefaults() {
 	if c.Task.RetainFor == "" {
 		c.Task.RetainFor = "24h"
 	}
+	if c.Task.StoragePath == "" {
+		c.Task.StoragePath = ".vidwise/tasks.json"
+	}
 }
 
 func (c Config) validate() error {
@@ -913,6 +918,9 @@ func (c Config) validate() error {
 	}
 	if _, err := c.Task.RetentionDuration(); err != nil {
 		return fmt.Errorf("invalid task.retain_for: %w", err)
+	}
+	if strings.TrimSpace(c.Task.StoragePath) == "" {
+		return errors.New("task.storage_path must not be empty")
 	}
 	return nil
 }
