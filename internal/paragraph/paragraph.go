@@ -92,6 +92,9 @@ func formatChunksParallel(
 	perChunkTimeout time.Duration,
 	fallback bool,
 ) []string {
+	if len(chunks) == 0 {
+		return nil
+	}
 	if len(chunks) == 1 {
 		text := formatChunk(ctx, cm, cfg, 0, chunks[0], perChunkTimeout)
 		if text == "" && !fallback {
@@ -103,7 +106,17 @@ func formatChunksParallel(
 		return []string{text}
 	}
 
-	sem := make(chan struct{}, maxParallelChunks)
+	workerCount := maxParallelChunks
+	if workerCount > len(chunks) {
+		workerCount = len(chunks)
+	}
+
+	type chunkJob struct {
+		index int
+		text  string
+	}
+
+	jobs := make(chan chunkJob)
 	results := make([]string, len(chunks))
 	if fallback {
 		copy(results, chunks)
@@ -112,25 +125,30 @@ func formatChunksParallel(
 	var mu sync.Mutex
 	var failedCount int
 
-	for i, chunk := range chunks {
-		wg.Add(1)
-		go func(idx int, text string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			result := formatChunk(ctx, cm, cfg, idx, text, perChunkTimeout)
+	worker := func() {
+		defer wg.Done()
+		for job := range jobs {
+			result := formatChunk(ctx, cm, cfg, job.index, job.text, perChunkTimeout)
 
 			mu.Lock()
 			if result == "" {
 				failedCount++
-			}
-			if result != "" {
-				results[idx] = result
+			} else {
+				results[job.index] = result
 			}
 			mu.Unlock()
-		}(i, chunk)
+		}
 	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	for i, chunk := range chunks {
+		jobs <- chunkJob{index: i, text: chunk}
+	}
+	close(jobs)
 	wg.Wait()
 
 	if failedCount > 0 && !fallback {

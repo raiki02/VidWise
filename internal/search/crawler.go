@@ -76,40 +76,52 @@ func (c *BasicCrawler) Fetch(ctx context.Context, urls []string) ([]Document, er
 		c.logger.Debug("search.crawler.robots_policy_reserved", "policy", c.robotsPolicy)
 	}
 
-	sem := make(chan struct{}, c.maxConcurrency)
+	workerCount := c.maxConcurrency
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(urls) {
+		workerCount = len(urls)
+	}
+
+	type crawlJob struct {
+		index  int
+		rawURL string
+	}
+
+	jobs := make(chan crawlJob)
 	results := make([]Document, len(urls))
 	ok := make([]bool, len(urls))
 	errs := make([]error, 0)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i, rawURL := range urls {
-		i, rawURL := i, rawURL
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("fetch %q: %w", rawURL, ctx.Err()))
-				mu.Unlock()
-				return
-			}
-
-			doc, err := c.fetchOne(ctx, rawURL)
+	worker := func() {
+		defer wg.Done()
+		for job := range jobs {
+			doc, err := c.fetchOne(ctx, job.rawURL)
 			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
 				errs = append(errs, err)
-				c.logger.Warn("search.crawler.fetch_failed", "url", rawURL, "err", err)
-				return
+				c.logger.Warn("search.crawler.fetch_failed", "url", job.rawURL, "err", err)
+				mu.Unlock()
+				continue
 			}
-			results[i] = doc
-			ok[i] = true
-		}()
+			results[job.index] = doc
+			ok[job.index] = true
+			mu.Unlock()
+		}
 	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	for i, rawURL := range urls {
+		jobs <- crawlJob{index: i, rawURL: rawURL}
+	}
+	close(jobs)
 	wg.Wait()
 
 	docs := make([]Document, 0, len(urls))

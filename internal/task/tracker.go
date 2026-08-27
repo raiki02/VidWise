@@ -131,9 +131,10 @@ func (t *Tracker) Create(req TrackCreateRequest) TrackedTask {
 	}
 	t.tasks[id] = task
 	removed := t.pruneLocked(now)
-	t.persistTaskLocked(task)
-	t.deleteTasksLocked(removed)
 	t.mu.Unlock()
+
+	t.persistTask(task)
+	t.deleteTasks(removed)
 	return copyTrackedTask(task)
 }
 
@@ -242,10 +243,7 @@ func (t *Tracker) List(req TrackListRequest) []TrackedTask {
 	limit := normalizeTaskListLimit(req.Limit)
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	removed := t.pruneLocked(now)
-	t.deleteTasksLocked(removed)
-
 	matches := make([]TrackedTask, 0, len(t.tasks))
 	for _, task := range t.tasks {
 		if req.UserID != "" && task.UserID != req.UserID {
@@ -259,6 +257,10 @@ func (t *Tracker) List(req TrackListRequest) []TrackedTask {
 		}
 		matches = append(matches, copyTrackedTask(task))
 	}
+	t.mu.Unlock()
+
+	t.deleteTasks(removed)
+
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].UpdatedAt.Equal(matches[j].UpdatedAt) {
 			return matches[i].ID < matches[j].ID
@@ -291,8 +293,9 @@ func (t *Tracker) updateStep(taskID, stepName string, mutate func(TrackedStep, t
 	task.Steps[idx] = mutate(task.Steps[idx], now)
 	task.UpdatedAt = now
 	t.tasks[taskID] = task
-	t.persistTaskLocked(task)
 	t.mu.Unlock()
+
+	t.persistTask(task)
 	return copyTrackedTask(task), true
 }
 
@@ -309,8 +312,9 @@ func (t *Tracker) update(id string, mutate func(TrackedTask, time.Time) TrackedT
 	}
 	task = mutate(task, t.currentTime())
 	t.tasks[id] = task
-	t.persistTaskLocked(task)
 	t.mu.Unlock()
+
+	t.persistTask(task)
 	return copyTrackedTask(task), true
 }
 
@@ -322,8 +326,9 @@ func (t *Tracker) Prune() int {
 	now := t.currentTime()
 	t.mu.Lock()
 	removed := t.pruneLocked(now)
-	t.deleteTasksLocked(removed)
 	t.mu.Unlock()
+
+	t.deleteTasks(removed)
 	return len(removed)
 }
 
@@ -389,13 +394,14 @@ func (t *Tracker) restore() error {
 	}
 	changed := t.failInterruptedTasksLocked(now)
 	removed := t.pruneLocked(now)
-	t.persistTasksLocked(changed)
-	t.deleteTasksLocked(removed)
 	t.mu.Unlock()
+
+	t.persistTasks(changed)
+	t.deleteTasks(removed)
 	return nil
 }
 
-func (t *Tracker) persistTaskLocked(task TrackedTask) {
+func (t *Tracker) persistTask(task TrackedTask) {
 	if t == nil || t.store == nil || task.ID == "" {
 		return
 	}
@@ -404,13 +410,13 @@ func (t *Tracker) persistTaskLocked(task TrackedTask) {
 	}
 }
 
-func (t *Tracker) persistTasksLocked(tasks []TrackedTask) {
+func (t *Tracker) persistTasks(tasks []TrackedTask) {
 	for _, task := range tasks {
-		t.persistTaskLocked(task)
+		t.persistTask(task)
 	}
 }
 
-func (t *Tracker) deleteTasksLocked(ids []string) {
+func (t *Tracker) deleteTasks(ids []string) {
 	if t == nil || t.store == nil || len(ids) == 0 {
 		return
 	}
