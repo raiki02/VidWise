@@ -3,8 +3,11 @@ package paragraph
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,10 +17,12 @@ import (
 )
 
 type fakeChatModel struct {
-	mu      sync.Mutex
-	respond func(string) fakeChatResponse
-	calls   int
-	options []*einomodel.Options
+	mu        sync.Mutex
+	respond   func(string) fakeChatResponse
+	startHook func()
+	doneHook  func()
+	calls     int
+	options   []*einomodel.Options
 }
 
 type fakeChatResponse struct {
@@ -31,6 +36,9 @@ func (m *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, o
 	m.calls++
 	m.options = append(m.options, einomodel.GetCommonOptions(nil, opts...))
 	m.mu.Unlock()
+	if m.startHook != nil {
+		m.startHook()
+	}
 	var resp fakeChatResponse
 	if m.respond != nil {
 		chunk := ""
@@ -48,7 +56,13 @@ func (m *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, o
 		}
 	}
 	if resp.err != nil {
+		if m.doneHook != nil {
+			m.doneHook()
+		}
 		return nil, resp.err
+	}
+	if m.doneHook != nil {
+		m.doneHook()
 	}
 	return schema.AssistantMessage(resp.content, nil), nil
 }
@@ -88,6 +102,48 @@ func TestFormatChunksParallelIgnoresParentCancellation(t *testing.T) {
 	}
 	if strings.Join(got, "\n\n") != "A\n\nB" {
 		t.Fatalf("unexpected formatted output: %q", strings.Join(got, "\n\n"))
+	}
+}
+
+func TestFormatChunksParallelLimitsConcurrency(t *testing.T) {
+	var active int32
+	var maxActive int32
+	model := &fakeChatModel{
+		respond: func(chunk string) fakeChatResponse {
+			return fakeChatResponse{content: strings.ToUpper(chunk), delay: 25 * time.Millisecond}
+		},
+		startHook: func() {
+			now := atomic.AddInt32(&active, 1)
+			for {
+				peak := atomic.LoadInt32(&maxActive)
+				if now <= peak || atomic.CompareAndSwapInt32(&maxActive, peak, now) {
+					break
+				}
+			}
+		},
+		doneHook: func() {
+			atomic.AddInt32(&active, -1)
+		},
+	}
+	cfg := appconfig.LLMConfig{
+		Prompt: appconfig.PromptConfig{
+			System:       "system",
+			UserTemplate: "{{text}}",
+		},
+		Temperature: 0.2,
+		MaxTokens:   16,
+	}
+
+	chunks := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	got := formatChunksParallel(context.Background(), model, chunks, strings.Join(chunks, "\n\n"), cfg, time.Second, false)
+	if got == nil {
+		t.Fatal("expected formatted chunks")
+	}
+	if atomic.LoadInt32(&maxActive) > maxParallelChunks {
+		t.Fatalf("max concurrency = %d, want <= %d", maxActive, maxParallelChunks)
+	}
+	if strings.Join(got, "\n\n") != "A\n\nB\n\nC\n\nD\n\nE\n\nF\n\nG\n\nH" {
+		t.Fatalf("unexpected ordering: %q", strings.Join(got, "\n\n"))
 	}
 }
 
@@ -247,4 +303,128 @@ func TestSplitMarkdownByRunesDoesNotSplitFenceAsBlock(t *testing.T) {
 	if strings.Contains(got[1], "```") {
 		t.Fatalf("did not expect code fence to be split into second chunk, got %q", got[1])
 	}
+}
+
+func BenchmarkFormatChunksParallel(b *testing.B) {
+	runFormatChunksBenchmark(b, false)
+}
+
+func BenchmarkLegacyFormatChunksParallel(b *testing.B) {
+	runFormatChunksBenchmark(b, true)
+}
+
+func runFormatChunksBenchmark(b *testing.B, legacy bool) {
+	quietLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	prevLogger := slog.Default()
+	slog.SetDefault(quietLogger)
+	b.Cleanup(func() {
+		slog.SetDefault(prevLogger)
+	})
+
+	cfg := appconfig.LLMConfig{
+		Prompt: appconfig.PromptConfig{
+			System:       "system",
+			UserTemplate: "{{text}}",
+		},
+		Temperature: 0.2,
+		MaxTokens:   16,
+	}
+	chunks := make([]string, 64)
+	for i := range chunks {
+		chunks[i] = strings.Repeat("chunk", 8)
+	}
+	text := strings.Join(chunks, "\n\n")
+	model := benchChatModel{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if legacy {
+			_ = legacyFormatChunksParallel(context.Background(), model, chunks, text, cfg, time.Second, false)
+			continue
+		}
+		_ = formatChunksParallel(context.Background(), model, chunks, text, cfg, time.Second, false)
+	}
+}
+
+type benchChatModel struct{}
+
+func (benchChatModel) Generate(_ context.Context, input []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
+	chunk := ""
+	if len(input) > 0 {
+		chunk = input[len(input)-1].Content
+	}
+	return schema.AssistantMessage(strings.ToUpper(chunk), nil), nil
+}
+
+func (benchChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
+	return nil, errors.New("stream not implemented")
+}
+
+func legacyFormatChunksParallel(
+	ctx context.Context,
+	cm einomodel.BaseChatModel,
+	chunks []string,
+	rawText string,
+	cfg appconfig.LLMConfig,
+	perChunkTimeout time.Duration,
+	fallback bool,
+) []string {
+	if len(chunks) == 0 {
+		return nil
+	}
+	if len(chunks) == 1 {
+		text := formatChunk(ctx, cm, cfg, 0, chunks[0], perChunkTimeout)
+		if text == "" && !fallback {
+			return nil
+		}
+		if text == "" {
+			return []string{chunks[0]}
+		}
+		return []string{text}
+	}
+
+	sem := make(chan struct{}, maxParallelChunks)
+	results := make([]string, len(chunks))
+	if fallback {
+		copy(results, chunks)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failedCount int
+
+	for i, chunk := range chunks {
+		wg.Add(1)
+		go func(idx int, text string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			result := formatChunk(ctx, cm, cfg, idx, text, perChunkTimeout)
+
+			mu.Lock()
+			if result == "" {
+				failedCount++
+			}
+			if result != "" {
+				results[idx] = result
+			}
+			mu.Unlock()
+		}(i, chunk)
+	}
+	wg.Wait()
+
+	if failedCount > 0 && !fallback {
+		return nil
+	}
+	if failedCount == len(chunks) && fallback {
+		return []string{rawText}
+	}
+	formatted := make([]string, 0, len(results))
+	for _, text := range results {
+		if text != "" {
+			formatted = append(formatted, text)
+		}
+	}
+	return formatted
 }

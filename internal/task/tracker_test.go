@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -459,6 +461,51 @@ func TestTrackerListReturnsCopies(t *testing.T) {
 	}
 }
 
+func TestTrackerDoesNotHoldLockDuringPersistence(t *testing.T) {
+	store := newBlockingTrackerStore()
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		Store: store,
+	})
+
+	done := make(chan struct{})
+	go func() {
+		tracker.Create(TrackCreateRequest{ID: "task-1"})
+		close(done)
+	}()
+
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("expected SaveTask to start")
+	}
+
+	getDone := make(chan struct{})
+	go func() {
+		defer close(getDone)
+		got, ok := tracker.Get("task-1")
+		if !ok {
+			t.Error("expected task to be readable while persistence is blocked")
+			return
+		}
+		if got.ID != "task-1" {
+			t.Errorf("got task = %#v, want task-1", got)
+		}
+	}()
+
+	select {
+	case <-getDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Get blocked behind SaveTask")
+	}
+
+	close(store.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Create did not finish after persistence was released")
+	}
+}
+
 func TestNormalizeTaskListLimit(t *testing.T) {
 	if got := normalizeTaskListLimit(0); got != defaultTaskListLimit {
 		t.Fatalf("default limit = %d, want %d", got, defaultTaskListLimit)
@@ -469,6 +516,35 @@ func TestNormalizeTaskListLimit(t *testing.T) {
 	if got := normalizeTaskListLimit(7); got != 7 {
 		t.Fatalf("limit = %d, want 7", got)
 	}
+}
+
+func BenchmarkTrackerPatchOutput(b *testing.B) {
+	runTrackerPatchBenchmark(b, false)
+}
+
+func BenchmarkLegacyTrackerPatchOutput(b *testing.B) {
+	runTrackerPatchBenchmark(b, true)
+}
+
+func runTrackerPatchBenchmark(b *testing.B, legacy bool) {
+	tracker := NewTrackerWithOptions(TrackerOptions{
+		Store: newSlowTrackerStore(500 * time.Microsecond),
+	})
+	tracker.Create(TrackCreateRequest{ID: "task-1"})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var seq int64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			value := atomic.AddInt64(&seq, 1)
+			if legacy {
+				legacyTrackerPatchOutput(tracker, "task-1", map[string]any{"tick": value})
+				continue
+			}
+			tracker.PatchOutput("task-1", map[string]any{"tick": value})
+		}
+	})
 }
 
 type fakeTrackerStore struct {
@@ -503,4 +579,79 @@ func (s *fakeTrackerStore) DeleteTasks(_ context.Context, ids []string) error {
 		s.deleted[id] = true
 	}
 	return nil
+}
+
+type blockingTrackerStore struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingTrackerStore() *blockingTrackerStore {
+	return &blockingTrackerStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *blockingTrackerStore) Load(context.Context) ([]TrackedTask, error) {
+	return nil, nil
+}
+
+func (s *blockingTrackerStore) SaveTask(context.Context, TrackedTask) error {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	return nil
+}
+
+func (s *blockingTrackerStore) DeleteTasks(context.Context, []string) error {
+	return nil
+}
+
+type slowTrackerStore struct {
+	delay time.Duration
+}
+
+func newSlowTrackerStore(delay time.Duration) *slowTrackerStore {
+	return &slowTrackerStore{delay: delay}
+}
+
+func (s *slowTrackerStore) Load(context.Context) ([]TrackedTask, error) {
+	return nil, nil
+}
+
+func (s *slowTrackerStore) SaveTask(context.Context, TrackedTask) error {
+	time.Sleep(s.delay)
+	return nil
+}
+
+func (s *slowTrackerStore) DeleteTasks(context.Context, []string) error {
+	time.Sleep(s.delay)
+	return nil
+}
+
+func legacyTrackerPatchOutput(tracker *Tracker, id string, patch map[string]any) (TrackedTask, bool) {
+	if tracker == nil {
+		return TrackedTask{}, false
+	}
+
+	tracker.mu.Lock()
+	task, ok := tracker.tasks[id]
+	if !ok {
+		tracker.mu.Unlock()
+		return TrackedTask{}, false
+	}
+	output := copyOutput(task.Output)
+	if output == nil {
+		output = make(map[string]any, len(patch))
+	}
+	for key, value := range patch {
+		output[key] = value
+	}
+	task.Output = output
+	task.UpdatedAt = tracker.currentTime()
+	tracker.tasks[id] = task
+	tracker.persistTask(task)
+	tracker.mu.Unlock()
+	return copyTrackedTask(task), true
 }
