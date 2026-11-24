@@ -84,23 +84,29 @@ huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
 huggingface-cli download BAAI/bge-reranker-v2-m3 --local-dir ./models/bge-reranker-v2-m3
 ```
 
-如果使用阿里云模型 API，可以跳过对应的本地模型下载，在
-`config.yaml` 中把 `asr.model.provider` 或 `embedding.provider` 改为
-`aliyun`，并设置 `DASHSCOPE_API_KEY`。
-如果使用硅基流动 Embedding/Rerank API，可以跳过 embedding/rerank 本地模型下载，把
-`embedding.provider` 或 `rerank.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`；
-默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
-`Qwen/Qwen3-Embedding-0.6B`。`embedding.dimensions` 只会发送给 SiliconFlow
-的 Qwen3 embedding 模型；使用 `BAAI/bge-m3` 等模型时适配器会自动省略该参数。
-专用重排模型可使用 `BAAI/bge-reranker-v2-m3`。
-如果使用阿里云专用重排模型，把 `rerank.provider` 改为 `aliyun`；`qwen3-rerank`
-走 OpenAI-compatible `/reranks` 接口，`gte-rerank-v2` 走 DashScope
-`/services/rerank/text-rerank/text-rerank` 接口。
-如果使用科大讯飞录音文件转写大模型，把 `asr.model.provider` 改为
-`xfyun`，并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
-如果使用百度智能云短语音识别，把 `asr.model.provider` 改为 `baidu`，
-并设置 `BAIDU_ASR_API_KEY` 和 `BAIDU_ASR_SECRET_KEY`；服务会用 ffmpeg
-把本地音频转为 16 kHz 单声道 WAV，并按百度短语音接口的 60 秒限制分片提交。
+按需切换到以下云端模型 API，可跳过对应的本地模型下载：
+
+- **阿里云模型 API**：把 `asr.model.provider` 或 `embedding.provider` 改为
+  `aliyun`，并设置 `DASHSCOPE_API_KEY`。
+
+- **硅基流动 Embedding/Rerank API**：把 `embedding.provider` 或
+  `rerank.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`。
+  默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
+  `Qwen/Qwen3-Embedding-0.6B`。`embedding.dimensions` 只会发送给 SiliconFlow
+  的 Qwen3 embedding 模型；使用 `BAAI/bge-m3` 等模型时适配器会自动省略该参数。
+
+- **专用重排模型**：可使用 `BAAI/bge-reranker-v2-m3`。
+
+- **阿里云专用重排模型**：把 `rerank.provider` 改为 `aliyun`；`qwen3-rerank`
+  走 OpenAI-compatible `/reranks` 接口，`gte-rerank-v2` 走 DashScope
+  `/services/rerank/text-rerank/text-rerank` 接口。
+
+- **科大讯飞录音文件转写大模型**：把 `asr.model.provider` 改为 `xfyun`，
+  并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
+
+- **百度智能云短语音识别**：把 `asr.model.provider` 改为 `baidu`，
+  并设置 `BAIDU_ASR_API_KEY` 和 `BAIDU_ASR_SECRET_KEY`；服务会用 ffmpeg
+  把本地音频转为 16 kHz 单声道 WAV，并按百度短语音接口的 60 秒限制分片提交。
 
 ### 4. 配置
 
