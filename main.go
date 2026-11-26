@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,225 +11,134 @@ import (
 	"syscall"
 	"time"
 
+	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/flow/agent/react"
+	"github.com/cloudwego/eino/schema"
+	"github.com/raiki02/vidwise/internal/agent"
 	"github.com/raiki02/vidwise/internal/appconfig"
 	"github.com/raiki02/vidwise/internal/asr"
-	"github.com/raiki02/vidwise/internal/capability"
 	"github.com/raiki02/vidwise/internal/chat"
-	"github.com/raiki02/vidwise/internal/mcp"
-	"github.com/raiki02/vidwise/internal/memory"
-	"github.com/raiki02/vidwise/internal/model"
-	"github.com/raiki02/vidwise/internal/paragraph"
-	"github.com/raiki02/vidwise/internal/ragregistry"
-	"github.com/raiki02/vidwise/internal/ragruntime"
-	searchinfra "github.com/raiki02/vidwise/internal/search"
+	"github.com/raiki02/vidwise/internal/embedding"
+	"github.com/raiki02/vidwise/internal/llm"
 	"github.com/raiki02/vidwise/internal/server"
 	mysqlclient "github.com/raiki02/vidwise/internal/storage/mysql"
-	qdrantclient "github.com/raiki02/vidwise/internal/storage/qdrant"
-	taskpkg "github.com/raiki02/vidwise/internal/task"
-	"github.com/raiki02/vidwise/internal/tool"
-	webtools "github.com/raiki02/vidwise/internal/tools"
-	video_summary "github.com/raiki02/vidwise/internal/video_summary"
+	apptool "github.com/raiki02/vidwise/internal/tool"
+	"github.com/raiki02/vidwise/internal/vectorstore"
 )
 
 const configPath = "config.yaml"
 
-func main() {
-	mode := flag.String("mode", "gateway", "run mode: gateway|worker")
-	flag.Parse()
+// agentAdapter adapts the eino react agent (Generate has a variadic options
+// parameter) to the chat.Generator interface.
+type agentAdapter struct {
+	agent *react.Agent
+}
 
+func (a agentAdapter) Generate(ctx context.Context, messages []*schema.Message) (*schema.Message, error) {
+	return a.agent.Generate(ctx, messages)
+}
+
+func main() {
 	cfg, err := appconfig.Load(configPath)
 	if err != nil {
 		panic(fmt.Errorf("load config %s failed: %w", configPath, err))
 	}
 
-	switch *mode {
-	case "gateway":
-		runGateway(cfg)
-	case "worker":
-		runWorker(cfg)
-	default:
-		panic(fmt.Errorf("unknown mode: %s (expected gateway or worker)", *mode))
-	}
-}
-
-func runGateway(cfg appconfig.Config) {
-	registry := tool.NewRegistry()
-
-	// Connect to Qdrant
-	var qdConn *qdrantclient.Client
-	var embedClient *model.EmbedClient
-	var rerankClient *model.RerankClient
-	var asrClient *asr.Client
-	asrReady := false
-	videoSummaryReady := false
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	qc, err := qdrantclient.NewClient(ctx, cfg.Qdrant.Addr())
+	// 1. LLM is mandatory: the agent cannot run without it.
+	chatModel, err := llm.NewChatModel(ctx, cfg.LLM)
 	if err != nil {
-		slog.Warn("gateway.qdrant_unavailable", "addr", cfg.Qdrant.Addr(), "err", err)
-	} else {
-		qdConn = qc
-		slog.Info("gateway.qdrant_connected", "addr", cfg.Qdrant.Addr())
+		panic(fmt.Errorf("create llm chat model: %w", err))
 	}
 
-	// Create embedding client
-	ec, err := model.NewEmbedClient(cfg.Embedding)
+	// 2. ASR is mandatory for the closed loop.
+	asrClient, err := asr.NewClient(cfg.ASR.BaseURL, cfg.ASR.Language, cfg.ASR.TimeoutDurationOr(10*time.Minute), asr.TranscribeOptions{
+		BeamSize:      cfg.ASR.Transcribe.BeamSize,
+		InitialPrompt: cfg.ASR.Transcribe.InitialPrompt,
+	})
 	if err != nil {
-		slog.Warn("gateway.embedding_unavailable", "err", err)
-	} else if err := ec.Health(ctx); err != nil {
-		slog.Warn("gateway.embedding_unhealthy", "base_url", cfg.Embedding.BaseURL, "err", err)
-	} else {
-		embedClient = ec
+		panic(fmt.Errorf("create asr client: %w", err))
 	}
+	if err := asrClient.Health(ctx); err != nil {
+		panic(fmt.Errorf("asr service unavailable at %s: %w", cfg.ASR.BaseURL, err))
+	}
+	slog.Info("asr.ready", "base_url", cfg.ASR.BaseURL)
 
-	// Create rerank client
-	rc, err := model.NewRerankClient(cfg.Rerank)
+	// 3. Embedding service is mandatory for the RAG tools.
+	embedClient, err := embedding.NewClient(cfg.Embedding.BaseURL, cfg.Embedding.Model, cfg.Embedding.TimeoutDurationOr(2*time.Minute))
 	if err != nil {
-		slog.Warn("gateway.rerank_unavailable", "err", err)
-	} else if err := rc.Health(ctx); err != nil {
-		slog.Warn("gateway.rerank_unhealthy", "base_url", cfg.Rerank.BaseURL, "err", err)
-	} else {
-		rerankClient = rc
+		panic(fmt.Errorf("create embedding client: %w", err))
 	}
+	if err := embedClient.Health(ctx); err != nil {
+		panic(fmt.Errorf("embedding service unavailable at %s: %w", cfg.Embedding.BaseURL, err))
+	}
+	slog.Info("embedding.ready", "base_url", cfg.Embedding.BaseURL)
 
-	asrTimeout, err := cfg.ASR.TimeoutDuration()
+	// 4. Qdrant is mandatory for the RAG tools.
+	store, err := vectorstore.New(ctx, cfg.Qdrant.Addr(), cfg.Qdrant.Collection, uint64(cfg.Qdrant.VectorDim))
 	if err != nil {
-		slog.Warn("gateway.asr_unavailable", "err", err)
-	} else {
-		client, err := asr.NewClient(cfg.ASR.BaseURL, cfg.ASR.Language, asrTimeout, asr.TranscribeOptions{
-			BeamSize:      cfg.ASR.Transcribe.BeamSize,
-			VADFilter:     cfg.ASR.Transcribe.VADFilter,
-			InitialPrompt: cfg.ASR.Transcribe.InitialPrompt,
-		})
-		if err != nil {
-			slog.Warn("gateway.asr_unavailable", "err", err)
-		} else if err := client.Health(ctx); err != nil {
-			asrClient = client
-			slog.Warn("gateway.asr_unhealthy", "base_url", cfg.ASR.BaseURL, "err", err)
-		} else {
-			asrClient = client
-			asrReady = true
-		}
+		panic(fmt.Errorf("qdrant unavailable at %s: %w", cfg.Qdrant.Addr(), err))
 	}
+	defer store.Close()
 
-	videoSummaryTimeout, err := cfg.VideoSummary.TimeoutDuration()
-	if err != nil {
-		slog.Warn("gateway.video_summary_unavailable", "err", err)
-	} else {
-		client, err := video_summary.NewClient(cfg.VideoSummary.BaseURL, videoSummaryTimeout, video_summary.SummarizeOptions{
-			MaxNewTokens: cfg.VideoSummary.Summarize.MaxNewTokens,
-			Prompt:       cfg.VideoSummary.Summarize.Prompt,
-			DoSample:     cfg.VideoSummary.Summarize.DoSample,
-			Temperature:  cfg.VideoSummary.Summarize.Temperature,
-			TopP:         cfg.VideoSummary.Summarize.TopP,
-		})
-		if err != nil {
-			slog.Warn("gateway.video_summary_unavailable", "err", err)
-		} else if err := client.Health(ctx); err != nil {
-			slog.Warn("gateway.video_summary_unhealthy", "base_url", cfg.VideoSummary.BaseURL, "err", err)
-		} else {
-			videoSummaryReady = true
-		}
-	}
-
-	// Connect to MySQL and run migrations
-	var chatRepo *chat.Repo
-	var memRepo *memory.Repo
-	var sourceRegistry *ragregistry.Repo
-	var taskRepo *taskpkg.Repo
+	// 5. Chat history store: MySQL if configured, in-memory otherwise.
+	var history chat.HistoryStore
+	var mysqlClient *mysqlclient.Client
 	if cfg.MySQL.DSN != "" {
-		mysqlCtx, mysqlCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer mysqlCancel()
-		mc, err := mysqlclient.NewClient(cfg.MySQL.DSN, cfg.MySQL.MaxOpen, cfg.MySQL.MaxIdle)
+		mysqlClient, err = mysqlclient.NewClient(cfg.MySQL.DSN, cfg.MySQL.MaxOpen, cfg.MySQL.MaxIdle)
 		if err != nil {
-			slog.Warn("gateway.mysql_unavailable", "err", err)
-		} else {
-			chatRepo = chat.NewRepo(mc.DB)
-			if err := chatRepo.AutoMigrate(); err != nil {
-				slog.Warn("gateway.chat_migration_failed", "err", err)
-			} else {
-				slog.Info("gateway.mysql_ready")
-			}
-
-			memRepo = memory.NewRepo(mc.DB)
-			if err := memRepo.AutoMigrate(); err != nil {
-				slog.Warn("gateway.memory_migration_failed", "err", err)
-			} else {
-				slog.Info("gateway.memory_ready")
-			}
-
-			sourceRegistry = ragregistry.NewRepo(mc.DB)
-			if err := sourceRegistry.AutoMigrate(); err != nil {
-				slog.Warn("gateway.rag_source_registry_migration_failed", "err", err)
-				sourceRegistry = nil
-			} else {
-				slog.Info("gateway.rag_source_registry_ready")
-			}
-
-			taskRepo = taskpkg.NewRepoFromDB(mc.DB)
-			if err := taskRepo.AutoMigrate(); err != nil {
-				slog.Warn("gateway.task_store_migration_failed", "err", err, "fallback", cfg.Task.StoragePath)
-				taskRepo = nil
-			} else {
-				slog.Info("gateway.task_store_ready")
-			}
-			// Clean up mysql context
-			_ = mysqlCtx
+			panic(fmt.Errorf("mysql unavailable: %w", err))
 		}
+		defer mysqlClient.Close()
+		repo := chat.NewRepo(mysqlClient.DB)
+		if err := repo.AutoMigrate(); err != nil {
+			panic(fmt.Errorf("chat migration failed: %w", err))
+		}
+		history = repo
+		slog.Info("mysql.ready")
 	} else {
-		slog.Warn("gateway.mysql_skipped", "reason", "no DSN configured")
+		history = chat.NewMemoryStore()
+		slog.Warn("mysql.skipped_dsn_empty", "info", "using in-memory chat history")
 	}
 
-	ragBuild := ragruntime.Build(ctx, cfg, ragruntime.Deps{
-		Qdrant:   qdConn,
-		Embed:    embedClient,
-		Rerank:   rerankClient,
-		Registry: sourceRegistry,
-	})
-	if ragBuild.Err != nil {
-		slog.Warn("gateway.qdrant_ensure_collection_failed", "err", ragBuild.Err)
+	// 6. Build tools.
+	workDir := cfg.Download.WorkDir
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		panic(fmt.Errorf("create work dir: %w", err))
+	}
+	downloadTool, err := apptool.NewDownloadAudioTool(workDir, cfg.Download.CookiesPath)
+	if err != nil {
+		panic(fmt.Errorf("build download_audio tool: %w", err))
+	}
+	transcribeTool, err := apptool.NewTranscribeTool(workDir, asrClient)
+	if err != nil {
+		panic(fmt.Errorf("build transcribe_audio tool: %w", err))
+	}
+	indexTool, err := apptool.NewRAGIndexTool(workDir, cfg.RAG.ChunkRunes, cfg.RAG.OverlapRunes, embedClient, store)
+	if err != nil {
+		panic(fmt.Errorf("build index_transcript tool: %w", err))
+	}
+	queryTool, err := apptool.NewRAGQueryTool(embedClient, store, cfg.RAG.TopK)
+	if err != nil {
+		panic(fmt.Errorf("build search_knowledge tool: %w", err))
 	}
 
-	caps := capability.FromRuntime(capability.RuntimeDeps{
-		ChatSessionStore: chatRepo != nil,
-		MemoryStore:      memRepo != nil,
-		VectorStore:      qdConn != nil,
-		VectorCollection: ragBuild.CollectionReady,
-		Embedding:        embedClient != nil,
-		Rerank:           rerankClient != nil,
-		ASR:              asrReady,
-		VideoSummary:     videoSummaryReady,
-		LLMConfig:        cfg.LLM,
-	})
-
-	// Register tools
-	registerTools(registry, cfg, embedClient, rerankClient, asrClient, caps, ragBuild.Runtime)
-
-	// Start MCP server if enabled
-	if cfg.MCP.Enabled {
-		mcpSrv := mcp.New(cfg.MCP.Addr, cfg.MCP.Mode, registry)
-		mcpSrv.StartAsync()
+	// 7. Build the agent and the chat service.
+	chatAgent, err := agent.New(ctx, chatModel, []einotool.BaseTool{downloadTool, transcribeTool, indexTool, queryTool}, cfg.Agent.MaxStep)
+	if err != nil {
+		panic(fmt.Errorf("build agent: %w", err))
 	}
+	service := chat.NewService(history, agentAdapter{agent: chatAgent}, cfg.Agent.HistoryLimit)
 
-	// Build and start Gin engine
-	e := server.RouterWithTaskRepo(cfg, registry, ragBuild.Runtime, chatRepo, memRepo, taskRepo, caps)
+	// 8. HTTP server.
+	e := server.Router(service)
 	httpServer, err := server.NewHTTPServer(cfg.Server, e)
 	if err != nil {
 		panic(fmt.Errorf("build http server: %w", err))
 	}
-	slog.Info("gateway.starting", "addr", cfg.Server.Addr,
-		"qdrant", qdConn != nil,
-		"embedding", embedClient != nil,
-		"rerank", rerankClient != nil,
-		"asr", asrReady,
-		"video_summary", videoSummaryReady,
-		"mysql", chatRepo != nil,
-		"task_store_mysql", taskRepo != nil,
-		"memory", memRepo != nil,
-		"mcp_enabled", cfg.MCP.Enabled,
-	)
+	slog.Info("gateway.starting", "addr", cfg.Server.Addr, "llm_provider", cfg.LLM.Provider, "asr", cfg.ASR.BaseURL, "embedding", cfg.Embedding.BaseURL, "qdrant", cfg.Qdrant.Addr(), "mysql", mysqlClient != nil)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -247,12 +155,8 @@ func runGateway(cfg appconfig.Config) {
 			panic(err)
 		}
 	case sig := <-sigCh:
-		shutdownTimeout, err := cfg.Server.ShutdownTimeoutDuration()
-		if err != nil {
-			shutdownTimeout = 10 * time.Second
-		}
-		slog.Info("gateway.shutting_down", "signal", sig.String(), "timeout", shutdownTimeout)
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		slog.Info("gateway.shutting_down", "signal", sig.String(), "timeout", server.ShutdownTimeout(cfg.Server))
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), server.ShutdownTimeout(cfg.Server))
 		defer shutdownCancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			slog.Error("gateway.shutdown_failed", "err", err)
@@ -262,330 +166,4 @@ func runGateway(cfg appconfig.Config) {
 			panic(err)
 		}
 	}
-
-	if qdConn != nil {
-		_ = qdConn.Close()
-	}
-}
-
-func registerTools(registry *tool.Registry, cfg appconfig.Config, embedClient *model.EmbedClient, rerankClient *model.RerankClient, asrClient *asr.Client, caps capability.Snapshot, ragRuntime ragruntime.Runtime) {
-	// Download & audio extraction tools (no external dependencies)
-	_, dlWrap, err := tool.NewDownloadTool(cfg.Download.CookiesPath)
-	if err != nil {
-		slog.Warn("gateway.tool_register_failed", "tool", "download_video", "err", err)
-	} else {
-		registry.Register("download_video", dlWrap, nil)
-	}
-
-	_, downloadAudioWrap, err := tool.NewAudioDownloadTool(cfg.Download.CookiesPath)
-	if err != nil {
-		slog.Warn("gateway.tool_register_failed", "tool", "download_audio", "err", err)
-	} else {
-		registry.Register("download_audio", downloadAudioWrap, nil)
-	}
-
-	_, audioWrap, err := tool.NewAudioExtractTool(cfg.Download.CookiesPath)
-	if err != nil {
-		slog.Warn("gateway.tool_register_failed", "tool", "extract_audio", "err", err)
-	} else {
-		registry.Register("extract_audio", audioWrap, nil)
-	}
-
-	// Text format tool
-	_, formatWrap, err := tool.NewTextFormatTool(cfg.LLM)
-	if err != nil {
-		slog.Warn("gateway.tool_register_failed", "tool", "format_transcript", "err", err)
-	} else {
-		registry.Register("format_transcript", formatWrap, nil)
-	}
-
-	if cfg.Search.Enabled {
-		searchService, err := newSearchService(cfg.Search, cfg.LLM, rerankClient, ragRuntime)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "web_search", "err", err)
-		} else {
-			searchTool, err := webtools.NewWebSearchTool(searchService)
-			if err != nil {
-				slog.Warn("gateway.tool_register_failed", "tool", "web_search", "err", err)
-			} else {
-				searchTimeout, timeoutErr := cfg.Search.TimeoutDuration()
-				if timeoutErr != nil {
-					searchTimeout = 10 * time.Second
-				}
-				registry.Register("web_search", tool.NewWrapper(searchTool, tool.WrapperConfig{
-					Name:     "web_search",
-					MaxRetry: 1,
-					Timeout:  searchTimeout,
-				}), nil)
-			}
-		}
-	}
-
-	if asrClient != nil {
-		_, asrWrap, err := tool.NewASRTool(asrClient)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "transcribe_audio", "err", err)
-		} else {
-			registry.Register("transcribe_audio", asrWrap, nil)
-		}
-	}
-
-	// RAG tools (require Qdrant + embedding)
-	if caps.Available(capability.Embedding) && embedClient != nil {
-		_, embWrap, err := tool.NewEmbedTool(embedClient)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "embed_texts", "err", err)
-		} else {
-			registry.Register("embed_texts", embWrap, nil)
-		}
-	}
-
-	if caps.Available(capability.Rerank) && rerankClient != nil {
-		_, rerankWrap, err := tool.NewRerankTool(rerankClient)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "rerank_documents", "err", err)
-		} else {
-			registry.Register("rerank_documents", rerankWrap, nil)
-		}
-	}
-
-	if ragRuntime.Usable() {
-		_, ragIdxWrap, err := tool.NewRAGIndexToolWithManager(ragRuntime.Sources)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "rag_index", "err", err)
-		} else {
-			registry.Register("rag_index", ragIdxWrap, nil)
-		}
-
-		_, ragQueryWrap, err := tool.NewRAGQueryTool(ragRuntime.Retriever)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "rag_query", "err", err)
-		} else {
-			registry.Register("rag_query", ragQueryWrap, nil)
-		}
-
-		_, ragListSourcesWrap, err := tool.NewRAGListSourcesToolWithManager(ragRuntime.Sources)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "rag_list_sources", "err", err)
-		} else {
-			registry.Register("rag_list_sources", ragListSourcesWrap, nil)
-		}
-
-		_, ragDeleteWrap, err := tool.NewRAGDeleteToolWithManager(ragRuntime.Sources)
-		if err != nil {
-			slog.Warn("gateway.tool_register_failed", "tool", "rag_delete", "err", err)
-		} else {
-			registry.Register("rag_delete", ragDeleteWrap, nil)
-		}
-	}
-
-	slog.Info("gateway.tools_registered", "count", len(registry.List()))
-}
-
-func newSearchService(cfg appconfig.SearchConfig, llmCfg appconfig.LLMConfig, rerankClient *model.RerankClient, ragRuntime ragruntime.Runtime) (searchinfra.SearchService, error) {
-	timeout, err := cfg.TimeoutDuration()
-	if err != nil {
-		return nil, fmt.Errorf("parse search timeout: %w", err)
-	}
-	cacheTTL, err := cfg.CacheTTLDuration()
-	if err != nil {
-		return nil, fmt.Errorf("parse search cache ttl: %w", err)
-	}
-	registrations, err := newSearchProviders(cfg, timeout, ragRuntime)
-	if err != nil {
-		return nil, err
-	}
-	cache, err := newSearchCache(cfg, cacheTTL)
-	if err != nil {
-		return nil, err
-	}
-	rewriter, err := newSearchQueryRewriter(cfg, llmCfg)
-	if err != nil {
-		return nil, err
-	}
-	reranker, err := newSearchReranker(cfg, rerankClient)
-	if err != nil {
-		return nil, err
-	}
-	router := searchinfra.NewProviderRouter(registrations...)
-	return searchinfra.NewService(searchinfra.ServiceDependencies{
-		Cache:    cache,
-		Rewriter: rewriter,
-		Router:   router,
-		Crawler: searchinfra.NewBasicCrawler(searchinfra.BasicCrawlerConfig{
-			Timeout:          timeout,
-			MaxResponseBytes: cfg.MaxResponseBytes,
-			MaxConcurrency:   cfg.MaxConcurrency,
-			UserAgent:        cfg.UserAgent,
-			AllowLocalhost:   cfg.AllowLocalhost,
-			RobotsPolicy:     cfg.RobotsPolicy,
-		}),
-		Extractor: searchinfra.NewBasicExtractor(),
-		Reranker:  reranker,
-		Compressor: searchinfra.NewBasicCompressor(searchinfra.BasicCompressorConfig{
-			MaxDocuments:    cfg.MaxDocuments,
-			MaxContentRunes: cfg.MaxContentRunes,
-			MaxTotalRunes:   cfg.MaxTotalRunes,
-		}),
-		Config: searchinfra.ServiceConfig{
-			MaxProviderResults: cfg.MaxResults,
-		},
-		Metrics: searchinfra.NewLoggingMetrics(slog.Default()),
-	})
-}
-
-func newSearchProviders(cfg appconfig.SearchConfig, timeout time.Duration, ragRuntime ragruntime.Runtime) ([]searchinfra.ProviderRegistration, error) {
-	providers := cfg.Providers
-	if len(providers) == 0 {
-		providers = []string{cfg.Provider}
-	}
-	registrations := make([]searchinfra.ProviderRegistration, 0, len(providers))
-	for _, provider := range providers {
-		switch provider {
-		case "mock":
-			registrations = append(registrations, searchinfra.ProviderRegistration{
-				Name:     searchinfra.ProviderMock,
-				Provider: searchinfra.NewMockProvider(nil),
-			})
-		case "bing":
-			p, err := searchinfra.NewBingProvider(searchinfra.HTTPProviderConfig{
-				BaseURL:    cfg.Bing.BaseURL,
-				APIKey:     cfg.Bing.APIKey,
-				APIKeyEnv:  cfg.Bing.APIKeyEnv,
-				MaxResults: cfg.Bing.MaxResults,
-				Timeout:    timeout,
-				UserAgent:  cfg.UserAgent,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("create bing provider: %w", err)
-			}
-			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderBing, Provider: p})
-		case "tavily":
-			p, err := searchinfra.NewTavilyProvider(searchinfra.HTTPProviderConfig{
-				BaseURL:     cfg.Tavily.BaseURL,
-				APIKey:      cfg.Tavily.APIKey,
-				APIKeyEnv:   cfg.Tavily.APIKeyEnv,
-				MaxResults:  cfg.Tavily.MaxResults,
-				SearchDepth: cfg.Tavily.SearchDepth,
-				Timeout:     timeout,
-				UserAgent:   cfg.UserAgent,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("create tavily provider: %w", err)
-			}
-			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderTavily, Provider: p})
-		case "duckduckgo":
-			p, err := searchinfra.NewDuckDuckGoProvider(searchinfra.HTTPProviderConfig{
-				BaseURL:    cfg.DuckDuckGo.BaseURL,
-				MaxResults: cfg.DuckDuckGo.MaxResults,
-				Timeout:    timeout,
-				UserAgent:  cfg.UserAgent,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("create duckduckgo provider: %w", err)
-			}
-			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderDuckDuckGo, Provider: p})
-		case "internal":
-			if ragRuntime.Retriever == nil {
-				return nil, fmt.Errorf("internal search provider requires RAG retriever")
-			}
-			p, err := searchinfra.NewInternalSearchProvider(ragRuntime.Retriever, searchinfra.InternalProviderConfig{
-				SearchTopK: cfg.Internal.SearchTopK,
-				TopK:       cfg.Internal.TopK,
-				MinScore:   cfg.Internal.MinScore,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("create internal search provider: %w", err)
-			}
-			registrations = append(registrations, searchinfra.ProviderRegistration{Name: searchinfra.ProviderInternal, Provider: p})
-		default:
-			return nil, fmt.Errorf("unsupported search provider: %s", provider)
-		}
-	}
-	if len(registrations) == 0 {
-		return nil, fmt.Errorf("at least one search provider is required")
-	}
-	return registrations, nil
-}
-
-func newSearchCache(cfg appconfig.SearchConfig, cacheTTL time.Duration) (searchinfra.SearchCache, error) {
-	switch cfg.CacheProvider {
-	case "memory":
-		return searchinfra.NewMemoryCache(searchinfra.MemoryCacheConfig{
-			TTL:     cacheTTL,
-			MaxKeys: cfg.MaxCacheKeys,
-		}), nil
-	case "redis":
-		redisTimeout, err := cfg.Redis.TimeoutDuration()
-		if err != nil {
-			return nil, fmt.Errorf("parse redis timeout: %w", err)
-		}
-		return searchinfra.NewRedisCache(searchinfra.RedisCacheConfig{
-			Addr:      cfg.Redis.Addr,
-			Password:  cfg.Redis.Password,
-			DB:        cfg.Redis.DB,
-			KeyPrefix: cfg.Redis.KeyPrefix,
-			TTL:       cacheTTL,
-			Timeout:   redisTimeout,
-		})
-	default:
-		return nil, fmt.Errorf("unsupported search cache provider: %s", cfg.CacheProvider)
-	}
-}
-
-func newSearchQueryRewriter(cfg appconfig.SearchConfig, llmCfg appconfig.LLMConfig) (searchinfra.QueryRewriter, error) {
-	switch cfg.QueryRewriteProvider {
-	case "mock":
-		return searchinfra.MockQueryRewriter{}, nil
-	case "llm":
-		return searchinfra.NewLLMQueryRewriter(func(ctx context.Context) (searchinfra.QueryRewriteChatModel, error) {
-			return paragraph.NewChatModel(ctx, llmCfg)
-		}, cfg.QueryRewriteMaxQueries)
-	default:
-		return nil, fmt.Errorf("unsupported search query rewrite provider: %s", cfg.QueryRewriteProvider)
-	}
-}
-
-func newSearchReranker(cfg appconfig.SearchConfig, rerankClient *model.RerankClient) (searchinfra.Reranker, error) {
-	switch cfg.RerankProvider {
-	case "keyword":
-		return searchinfra.NewKeywordReranker(), nil
-	case "embedding":
-		if rerankClient == nil {
-			return nil, fmt.Errorf("embedding search rerank requires configured rerank client")
-		}
-		return searchinfra.NewEmbeddingReranker(searchRerankAdapter{client: rerankClient}, searchinfra.NewKeywordReranker())
-	default:
-		return nil, fmt.Errorf("unsupported search rerank provider: %s", cfg.RerankProvider)
-	}
-}
-
-type searchRerankAdapter struct {
-	client *model.RerankClient
-}
-
-func (a searchRerankAdapter) Rerank(ctx context.Context, query string, documents []string) ([]searchinfra.RerankResult, error) {
-	results, err := a.client.Rerank(ctx, query, documents)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]searchinfra.RerankResult, 0, len(results))
-	for _, result := range results {
-		out = append(out, searchinfra.RerankResult{
-			Index: result.Index,
-			Score: result.Score,
-			Text:  result.Text,
-		})
-	}
-	return out, nil
-}
-
-func runWorker(cfg appconfig.Config) {
-	slog.Info("worker.starting")
-	slog.Info("worker.waiting_for_tasks")
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-	slog.Info("worker.shutting_down")
 }

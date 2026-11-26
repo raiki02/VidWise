@@ -1,86 +1,97 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
-	"strings"
+	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/raiki02/vidwise/internal/appconfig"
+	"github.com/cloudwego/eino/schema"
+	"github.com/raiki02/vidwise/internal/chat"
 )
 
-func TestNewHTTPServerUsesConfiguredTimeouts(t *testing.T) {
-	handler := http.NewServeMux()
-	srv, err := NewHTTPServer(appconfig.ServerConfig{
-		Addr:              ":9090",
-		ReadHeaderTimeout: "2s",
-		ReadTimeout:       "30s",
-		WriteTimeout:      "45s",
-		IdleTimeout:       "90s",
-	}, handler)
-	if err != nil {
-		t.Fatalf("NewHTTPServer returned error: %v", err)
-	}
-
-	if srv.Addr != ":9090" {
-		t.Fatalf("Addr = %q, want :9090", srv.Addr)
-	}
-	if srv.Handler != handler {
-		t.Fatal("expected configured handler")
-	}
-	if srv.ReadHeaderTimeout != 2*time.Second {
-		t.Fatalf("ReadHeaderTimeout = %s, want 2s", srv.ReadHeaderTimeout)
-	}
-	if srv.ReadTimeout != 30*time.Second {
-		t.Fatalf("ReadTimeout = %s, want 30s", srv.ReadTimeout)
-	}
-	if srv.WriteTimeout != 45*time.Second {
-		t.Fatalf("WriteTimeout = %s, want 45s", srv.WriteTimeout)
-	}
-	if srv.IdleTimeout != 90*time.Second {
-		t.Fatalf("IdleTimeout = %s, want 90s", srv.IdleTimeout)
+func TestHealth(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
 	}
 }
 
-func TestNewHTTPServerUsesDefaults(t *testing.T) {
-	srv, err := NewHTTPServer(appconfig.ServerConfig{}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	if err != nil {
-		t.Fatalf("NewHTTPServer returned error: %v", err)
-	}
-
-	if srv.Addr != ":8080" {
-		t.Fatalf("Addr = %q, want :8080", srv.Addr)
-	}
-	if srv.ReadHeaderTimeout != 5*time.Second {
-		t.Fatalf("ReadHeaderTimeout = %s, want 5s", srv.ReadHeaderTimeout)
-	}
-	if srv.ReadTimeout != 30*time.Second {
-		t.Fatalf("ReadTimeout = %s, want 30s", srv.ReadTimeout)
-	}
-	if srv.WriteTimeout != 0 {
-		t.Fatalf("WriteTimeout = %s, want 0s", srv.WriteTimeout)
-	}
-	if srv.IdleTimeout != 120*time.Second {
-		t.Fatalf("IdleTimeout = %s, want 120s", srv.IdleTimeout)
+func TestAgentChatRejectsBadBody(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/chat", bytes.NewBufferString("{bad json"))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 
-func TestNewHTTPServerRejectsInvalidConfig(t *testing.T) {
-	_, err := NewHTTPServer(appconfig.ServerConfig{ReadHeaderTimeout: "0s"}, http.NewServeMux())
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "read_header_timeout") {
-		t.Fatalf("expected read_header_timeout error, got %v", err)
+func TestAgentChatRejectsEmptyMessage(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/chat", bytes.NewBufferString(`{"message":"  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 
-func TestNewHTTPServerRejectsNilHandler(t *testing.T) {
-	_, err := NewHTTPServer(appconfig.ServerConfig{}, nil)
-	if err == nil {
-		t.Fatal("expected error")
+func TestAgentChatUnknownSession(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/chat", bytes.NewBufferString(`{"session_id":"nope","message":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
-	if !strings.Contains(err.Error(), "handler") {
-		t.Fatalf("expected handler error, got %v", err)
+}
+
+func TestAgentChatOK(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/chat", bytes.NewBufferString(`{"message":"这个视频讲了什么？"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
 	}
+	var resp agentChatResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.SessionID == "" || resp.Reply == "" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestIndexServed(t *testing.T) {
+	r := Router(newTestService(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("VidWise")) {
+		t.Fatalf("index not served: %d %s", w.Code, w.Body.String()[:80])
+	}
+}
+
+func newTestService(t *testing.T) *chat.Service {
+	t.Helper()
+	return chat.NewService(chat.NewMemoryStore(), &staticGenerator{reply: "模拟回答"}, 20)
+}
+
+type staticGenerator struct {
+	reply string
+}
+
+func (g *staticGenerator) Generate(_ context.Context, _ []*schema.Message) (*schema.Message, error) {
+	return &schema.Message{Role: schema.Assistant, Content: g.reply}, nil
 }

@@ -34,15 +34,6 @@ func NewClient(dsn string, maxOpen, maxIdle int) (*Client, error) {
 	return &Client{DB: db}, nil
 }
 
-// AutoMigrate runs GORM auto-migration for all domain models.
-func (c *Client) AutoMigrate(models ...any) error {
-	if err := c.DB.AutoMigrate(models...); err != nil {
-		return fmt.Errorf("auto-migrate: %w", err)
-	}
-	slog.Info("mysql.migrated")
-	return nil
-}
-
 func (c *Client) Close() error {
 	sqlDB, err := c.DB.DB()
 	if err != nil {

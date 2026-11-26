@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -41,7 +40,6 @@ type TranscribeResponse struct {
 
 type TranscribeOptions struct {
 	BeamSize      int
-	VADFilter     *bool
 	InitialPrompt string
 }
 
@@ -70,27 +68,17 @@ func NewClient(baseURL, language string, timeout time.Duration, options Transcri
 	}, nil
 }
 
-func (c *Client) Timeout() time.Duration {
-	return c.http.Timeout
-}
-
 func (c *Client) Health(ctx context.Context) error {
 	return healthcheck.CheckHTTP(ctx, c.http, c.baseURL, "asr service")
 }
 
 func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (TranscribeResponse, error) {
-	start := time.Now()
 	audioPath = filepath.Clean(audioPath)
 	file, err := os.Open(audioPath)
 	if err != nil {
 		return TranscribeResponse{}, fmt.Errorf("open audio file failed: %w", err)
 	}
 	defer file.Close()
-	if fi, statErr := file.Stat(); statErr == nil {
-		slog.Info("asr.request", "audio_path", audioPath, "size_bytes", fi.Size())
-	} else {
-		slog.Info("asr.request", "audio_path", audioPath)
-	}
 
 	if language == "" {
 		language = c.language
@@ -113,39 +101,24 @@ func (c *Client) Transcribe(ctx context.Context, audioPath, language string) (Tr
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	doStart := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		slog.Info("asr.http_error", "elapsed", time.Since(doStart), "total_elapsed", time.Since(start), "err", err)
 		return TranscribeResponse{}, fmt.Errorf("call asr service failed: %w", err)
 	}
 	defer resp.Body.Close()
-	slog.Info("asr.http_done", "status", resp.StatusCode, "elapsed", time.Since(doStart))
 
-	readStart := time.Now()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		slog.Info("asr.read_error", "elapsed", time.Since(readStart), "total_elapsed", time.Since(start), "err", err)
 		return TranscribeResponse{}, fmt.Errorf("read asr response failed: %w", err)
 	}
-	slog.Info("asr.read_done", "bytes", len(respBody), "elapsed", time.Since(readStart))
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		slog.Info("asr.response_error", "status", resp.Status, "total_elapsed", time.Since(start))
 		return TranscribeResponse{}, fmt.Errorf("asr service returned %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
 	var output TranscribeResponse
-	decodeStart := time.Now()
 	if err := json.Unmarshal(respBody, &output); err != nil {
 		return TranscribeResponse{}, fmt.Errorf("decode asr response failed: %w", err)
 	}
-	slog.Info(
-		"asr.decode_done",
-		"elapsed", time.Since(decodeStart),
-		"total_elapsed", time.Since(start),
-		"duration_sec", output.Duration,
-		"segments", len(output.Segments),
-	)
 	return output, nil
 }
 
@@ -160,11 +133,6 @@ func writeMultipartBody(writer *multipart.Writer, file *os.File, audioPath, lang
 	}
 	if err := writer.WriteField("beam_size", fmt.Sprintf("%d", options.BeamSize)); err != nil {
 		return fmt.Errorf("write beam_size field failed: %w", err)
-	}
-	if options.VADFilter != nil {
-		if err := writer.WriteField("vad_filter", fmt.Sprintf("%t", *options.VADFilter)); err != nil {
-			return fmt.Errorf("write vad_filter field failed: %w", err)
-		}
 	}
 	if options.InitialPrompt != "" {
 		if err := writer.WriteField("initial_prompt", options.InitialPrompt); err != nil {

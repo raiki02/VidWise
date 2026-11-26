@@ -1,17 +1,24 @@
-# VidWise
+# VidWise (MVP)
 
-视频智能平台 — 从视频中提炼可检索、可对话的知识。
+视频智能平台 — 最小可运行 MVP：给一条视频 URL，自动完成「下载 → 转写 → 向量化入库」，
+随后可基于知识库多轮问答。
+
+核心：**CloudWeGo eino ReAct Agent**。ASR 与 Embedding 是独立的 Python 服务，
+通过 HTTP 被封装成 eino 工具，由 Agent 按需调用。
 
 ## 能力
 
-- **视频/音频下载**：通过 yt-dlp 下载视频或提取音频
-- **语音转文字 (ASR)**：Whisper / Faster-Whisper 模型，支持 VAD 降噪和长音频分片
-- **智能文本格式化**：LLM 驱动的错别字修正、繁简转换、段落划分
-- **RAG 知识库**：文本自动分段 → 向量化 → 存入 Qdrant，支持检索和重排序
-- **多轮对话问答**：基于视频知识库和对话历史的智能问答，会话持久化到 MySQL
-- **用户记忆**：从多轮对话中沉淀跨会话用户事实，可在问答时作为长期上下文
-- **运行时能力清单**：网关输出前端 manifest，Web UI 根据 ASR/RAG/LLM/Memory 等能力自动降级或禁用功能
-- **MCP Server**：通过 MCP 协议对外暴露工具，可被 Claude Desktop 等客户端发现和调用
+- **下载**：yt-dlp 下载音频（`download_audio` 工具）
+- **语音转文字**：`transcribe_audio` 工具 → ASR 服务 (:8001)，支持 whisper /
+  faster-whisper / 阿里云 / 讯飞 / 百度五种 provider
+- **知识库入库**：`index_transcript` 工具 → 文本切分 → Embedding 服务 (:8003) 向量化 →
+  Qdrant 存储
+- **知识库检索**：`search_knowledge` 工具 → 向量相似度检索
+- **多轮会话问答**：Agent 自动决定调用哪些工具；会话历史持久化到 MySQL（未配置时
+  退化为内存存储）
+
+已按 MVP 范围**移除**：Web 搜索、MCP、视频摘要、重排序（rerank）、段落格式化、
+异步任务、能力清单接口。
 
 ## 架构
 
@@ -19,253 +26,173 @@
 浏览器 / API 客户端
         │
         ▼
-┌─────────────── Gin API Gateway (:8080) ───────────────┐
-│  /extract  /format  /chat/query  /agent/turn          │
-│  /video/process  /tasks  /api/capabilities            │
-│  /rag/health  /user/facts  /mcp (SSE :8082)           │
-│                                                        │
-│  ┌─ Eino Agent/Tool 编排 ─┐  ┌─ Chat Session 管理 ─┐  │
-│  │ download → asr → format│  │ MySQL (GORM)         │  │
-│  │ → rag_index → rag_query│  │ 会话/消息持久化       │  │
-│  └────────────────────────┘  └──────────────────────┘  │
-└────────────────────────────────────────────────────────┘
-        │                  │                  │
-        ▼                  ▼                  ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ ASR Service  │ │ Embedding    │ │ Video Summary│
-│ (:8001)      │ │ Service      │ │ (:8002)     │
-│ Whisper/     │ │ (:8003)      │ │ Marlin-2B    │
-│ FasterWhisper│ │ Embed API +  │ │              │
-│ + Silero VAD │ │ Rerank API   │ │              │
-└──────────────┘ └──────┬───────┘ └──────────────┘
-                        │
-                 ┌──────▼───────┐
-                 │    Qdrant    │
-                 │ 向量数据库    │
-                 │  (:6334)     │
-                 └──────────────┘
+┌─────────────── Gin Gateway (:8080) ───────────────┐
+│  GET  /health                                      │
+│  POST /agent/chat                                  │
+│  GET  /          (内嵌精简单页 UI)                  │
+│                                                    │
+│  ┌─ eino ReAct Agent ──────────────────────────┐  │
+│  │  download_audio → transcribe_audio          │  │
+│  │  → index_transcript → search_knowledge      │  │
+│  └─────────────────────────────────────────────┘  │
+│  会话历史: MySQL(GORM) / 内存回退                  │
+└────────────────────────────────────────────────────┘
+        │                  │
+        ▼                  ▼
+┌──────────────┐   ┌──────────────┐        ┌──────────┐
+│ ASR Service  │   │ Embedding    │        │  Qdrant  │
+│ (:8001)      │   │ Service      │        │ (:6334)  │
+│ /transcribe  │   │ (:8003)      │        │ gRPC     │
+│ 5 providers  │   │ /embed       │        │ Cosine   │
+└──────────────┘   │ 3 providers  │        └──────────┘
+                   └──────────────┘
 ```
+
+LLM 走 eino-ext 的 OpenAI 兼容接口：`openai` / `ollama` / `deepseek`。
 
 ## 快速开始
 
 ### 前置条件
 
 - Go 1.26+
-- Python 3.10+
-- ffmpeg, yt-dlp
-- Ollama (本地 LLM) 或 OpenAI API Key
-- Docker (可选，用于 MySQL + Qdrant)
+- Python 3.10+（Python 服务）
+- ffmpeg、yt-dlp（`make deps` 会检查/安装）
+- LLM：OpenAI API Key，或本地 Ollama，或 DeepSeek API Key
+- Qdrant（本地二进制或 Docker）
+- MySQL（可选，用于会话持久化）
 
-### 1. 安装系统依赖
+### 1. 系统与 Python 依赖
 
 ```bash
 make deps
-```
-
-### 2. 安装 Python 依赖
-
-```bash
 python3 -m venv .venv && source .venv/bin/activate
-make deps-python
-make deps-embedding
+make deps-python      # ASR 服务依赖
+make deps-embedding   # Embedding 服务依赖
 ```
 
-### 3. 下载模型
+### 2. 模型（本地 provider 时需要）
 
 ```bash
-# ASR 模型
+# ASR
 git clone https://huggingface.co/openai/whisper-small ./models/whisper-small
 
-# Embedding 模型 (二选一)
+# Embedding
 huggingface-cli download Qwen/Qwen3-Embedding-0.6B --local-dir ./models/qwen3-embedding
-huggingface-cli download BAAI/bge-m3 --local-dir ./models/bge-m3
-
-# Rerank 模型 (本地重排时需要)
-huggingface-cli download BAAI/bge-reranker-v2-m3 --local-dir ./models/bge-reranker-v2-m3
 ```
 
-按需切换到以下云端模型 API，可跳过对应的本地模型下载：
+云端 provider 可跳过下载：
 
-- **阿里云模型 API**：把 `asr.model.provider` 或 `embedding.provider` 改为
-  `aliyun`，并设置 `DASHSCOPE_API_KEY`。
+| Provider | 配置 | 环境变量 |
+|----------|------|----------|
+| 阿里云 ASR | `asr.model.provider: aliyun`（可用 `dashscope`） | `DASHSCOPE_API_KEY` |
+| 讯飞 ASR | `asr.model.provider: xfyun`（可用 `iflytek`） | `XFYUN_APP_ID` / `XFYUN_API_KEY` / `XFYUN_API_SECRET` |
+| 百度 ASR | `asr.model.provider: baidu` | `BAIDU_ASR_API_KEY` / `BAIDU_ASR_SECRET_KEY` |
+| 阿里云 Embedding | `embedding.provider: aliyun` | `DASHSCOPE_API_KEY` |
+| 硅基流动 Embedding | `embedding.provider: siliconflow` | `SILICONFLOW_API_KEY` |
 
-- **硅基流动 Embedding/Rerank API**：把 `embedding.provider` 或
-  `rerank.provider` 改为 `siliconflow`，并设置 `SILICONFLOW_API_KEY`。
-  默认接口地址为 `https://api.siliconflow.cn/v1`，默认 `qwen` 快捷模型会映射到
-  `Qwen/Qwen3-Embedding-0.6B`。`embedding.dimensions` 只会发送给 SiliconFlow
-  的 Qwen3 embedding 模型；使用 `BAAI/bge-m3` 等模型时适配器会自动省略该参数。
-
-- **专用重排模型**：可使用 `BAAI/bge-reranker-v2-m3`。
-
-- **阿里云专用重排模型**：把 `rerank.provider` 改为 `aliyun`；`qwen3-rerank`
-  走 OpenAI-compatible `/reranks` 接口，`gte-rerank-v2` 走 DashScope
-  `/services/rerank/text-rerank/text-rerank` 接口。
-
-- **科大讯飞录音文件转写大模型**：把 `asr.model.provider` 改为 `xfyun`，
-  并设置 `XFYUN_APP_ID`、`XFYUN_API_KEY` 和 `XFYUN_API_SECRET`。
-
-- **百度智能云短语音识别**：把 `asr.model.provider` 改为 `baidu`，
-  并设置 `BAIDU_ASR_API_KEY` 和 `BAIDU_ASR_SECRET_KEY`；服务会用 ffmpeg
-  把本地音频转为 16 kHz 单声道 WAV，并按百度短语音接口的 60 秒限制分片提交。
-
-### 4. 配置
+### 3. 配置与基础设施
 
 ```bash
 cp config.example.yaml config.yaml
-# 编辑 config.yaml 填入你的 LLM API Key 或 Ollama 地址
+# 编辑 config.yaml：llm.provider/model/api_key，qdrant.vector_dim 需与 embedding 维度一致
+
+docker compose -f docker-compose.example.yaml up -d   # MySQL + Qdrant（可选 MySQL）
+# 或单独安装: brew install qdrant mysql
 ```
 
-### 5. 启动基础设施
+### 4. 启动
 
 ```bash
-# 启动 MySQL + Qdrant
-docker compose -f docker-compose.example.yaml up -d
+make run-all-bg        # 一键启动 (embedding :8003 → asr :8001 → gateway :8080)
+# 或分别启动
+make run-embedding
+make run-asr
+make run
 
-# 或单独安装
-brew install mysql qdrant
+open http://localhost:8080   # 精简单页 UI
 ```
 
-### 6. 启动服务
-
-一键启动所有服务：
-
-```bash
-make run-all-bg
-```
-
-或分别启动：
-
-```bash
-make run-embedding  # Embedding/Rerank 服务 :8003
-make run-asr        # ASR 语音转文字服务 :8001
-make run            # API 网关 :8080
-
-# 打开浏览器访问
-open http://localhost:8080
-```
-
-Web UI 默认打开可对话的 Agent 问答界面，侧边栏会从 `/api/capabilities`
-同步当前后端能力，并按可用性展示或禁用功能。页面包含同步提取、视频任务、
-知识库 source 管理、上传索引、文本格式化、任务列表和用户记忆查看。
-
-停止所有服务：
-
-```bash
-make stop-all
-```
+停止：`make stop-all`
 
 ## API
 
-### 视频提取 (同步)
+### `POST /agent/chat`
 
 ```bash
-curl -X POST http://localhost:8080/extract \
+# 首次提问（新会话；session_id 由服务端生成并返回）
+curl -X POST http://localhost:8080/agent/chat \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://example.com/video","name":"demo","type":"text"}' \
-  -o demo.txt
-```
+  -d '{"message":"帮我分析 https://example.com/video.mp4"}'
 
-`url` 可以是纯视频链接，也可以是 bilibili、抖音、小红书复制出来的完整分享文案；当分享文案里能解析出标题时，`name` 可省略并自动用标题生成安全文件名。
-
-`type` 支持的值：`video` | `audio` | `text` | `transcript` | `summary` | `video_summary`
-
-文本提取完成后会在 RAG 可用且请求带有 `user_id` 或 `session_id` 时自动索引到知识库。
-同样的能力也暴露在 Web UI 的「同步提取」页；页面会按 `/api/capabilities`
-返回的 `extract_types` 禁用不可用类型。
-
-### 运行时能力清单
-
-```bash
-curl http://localhost:8080/api/capabilities
-```
-
-返回内容包括：
-
-- `capabilities`：ASR、RAG、LLM、Memory、Embedding、Rerank 等运行时能力状态
-- `features`：Web UI 功能、对应 tab、依赖能力和后端路由
-- `extract_types`：同步提取支持的类型及其依赖能力
-- `video_process_steps`：异步视频处理 DAG 步骤名称
-- `tools`：当前注册到工具中心的工具名
-
-### 会话式问答
-
-```bash
-# 创建新会话并提问（自动创建会话）
-curl -X POST http://localhost:8080/chat/query \
+# 追问（携带 session_id）
+curl -X POST http://localhost:8080/agent/chat \
   -H "Content-Type: application/json" \
-  -d '{"query":"这个视频讲了什么？"}'
-
-# 在已有会话中追问
-curl -X POST http://localhost:8080/chat/query \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"<session_id>","query":"具体怎么操作？"}'
-
-# 获取会话列表
-curl http://localhost:8080/chat/sessions
-
-# 获取某个会话的完整对话
-curl http://localhost:8080/chat/session/<session_id>
+  -d '{"session_id":"<session_id>","message":"视频里提到了哪些步骤？"}'
 ```
 
-### 用户记忆
+请求：`{"session_id": "...(可选)", "message": "..."}`
+响应：`{"session_id": "...", "reply": "..."}`
 
-```bash
-curl "http://localhost:8080/user/facts?user_id=<user_id>"
-```
+- `400`：JSON 非法或 `message` 为空
+- `404`：`session_id` 不存在
+- `500`：Agent 执行失败
 
-当 MySQL memory store 可用时，该接口返回用户长期事实列表；Web UI 的「用户记忆」页也使用同一接口。
+### `GET /health`
 
-### 健康检查
+网关健康检查。Python 服务各自也有 `/health`（:8001 / :8003）。
 
-```bash
-curl http://localhost:8080/health             # 网关与 canonical capabilities
-curl http://localhost:8080/ready              # 生产流量就绪状态
-curl http://localhost:8080/api/capabilities   # 前端能力 manifest
-curl http://localhost:8001/health             # ASR
-curl http://localhost:8003/health             # Embedding
-curl http://localhost:8080/rag/health         # RAG 兼容健康状态
-```
+### `GET /`
 
-## 配置说明
+内嵌精简单页 UI：消息列表 + 输入框，`session_id` 存于 localStorage，支持「新对话」。
 
-完整配置见 `config.example.yaml`：
+## 端到端冒烟
+
+1. 启动 Qdrant、ASR、Embedding、gateway（`make run-all-bg`）
+2. 浏览器打开 `http://localhost:8080`，粘贴一个视频/音频 URL，发送
+   「转写并入库」类型的问题
+3. 观察回复：Agent 依次调用 `download_audio` → `transcribe_audio` →
+   `index_transcript`，返回转写摘要与入库结果
+4. 追问视频内容细节；应命中 `search_knowledge` 检索并给出带来源的答案
+5. 重启 gateway 后携带同一 `session_id` 继续对话（配置了 MySQL 时历史仍在）
+
+## 配置
+
+完整见 `config.example.yaml`：
 
 | 配置段 | 说明 |
 |--------|------|
-| `server` | 网关监听地址 |
-| `asr` | ASR 服务地址 + 模型配置 (whisper/faster-whisper/aliyun/xfyun/baidu) |
-| `llm` | LLM 提供商 (openai/ollama/deepseek) + 格式化参数 |
-| `mysql` | MySQL 连接串 (用于会话、记忆、source registry 和异步任务持久化，可选) |
-| `qdrant` | Qdrant 向量数据库地址 |
-| `embedding` | Embedding 服务配置 (本地 qwen/bge 或 aliyun/siliconflow API) |
-| `rerank` | 专用重排序配置 (本地 CrossEncoder 或 aliyun/siliconflow Rerank API) |
-| `mcp` | MCP Server 开关和端口 |
-| `task` | 异步任务保留策略；未配置 MySQL 时使用本地 JSON fallback |
+| `server` | 网关监听地址（write_timeout 保持 0，转写/入库耗时较长） |
+| `download` | yt-dlp cookies、媒体沙箱目录 |
+| `asr` | ASR 服务地址、模型 provider 与转写参数 |
+| `embedding` | Embedding 服务地址、provider、维度、批大小 |
+| `llm` | openai / ollama / deepseek |
+| `qdrant` | 向量库地址、集合名、向量维度 |
+| `rag` | 切分 rune 数、重叠、默认 top_k |
+| `agent` | ReAct 最大步数、历史条数上限 |
+| `mysql` | 会话持久化 DSN（留空则用内存存储） |
 
 ## 项目结构
 
 ```
 vidwise/
-├── main.go                  # 入口: gateway / worker 模式
-├── cmd/                     # CLI 子命令: download, audio, video
+├── main.go                  # 入口：装配 LLM/ASR/Embedding/Qdrant/Agent/Gin，优雅退出
+├── cmd/download/            # yt-dlp / ffmpeg CLI 封装
 ├── internal/
-│   ├── agent/               # 视频处理 pipeline (graph.go)
-│   ├── appconfig/           # 配置加载与默认值
-│   ├── asr/                 # ASR HTTP 客户端
-│   ├── chat/                # 会话/消息模型与持久化 (GORM)
-│   ├── extractor/           # 旧版 /extract 端点逻辑
-│   ├── mcp/                 # MCP Server (mcp-go)
-│   ├── model/               # Embed/Rerank HTTP 客户端
-│   ├── paragraph/           # LLM 文本格式化
-│   ├── rag/                 # RAG: chunker, indexer, retriever
-│   ├── server/              # Gin 路由、中间件、Handler、前端 manifest、Web UI
-│   ├── storage/             # MySQL + Qdrant 客户端
-│   ├── task/                # 异步任务模型
-│   ├── tool/                # Eino 工具注册中心 + 各工具实现
-│   └── user/                # 用户模型 (保留)
-├── asr_service/             # Python ASR 服务 (FastAPI)
-├── embedding_service/       # Python Embedding/Rerank 服务
-├── video_summary_service/   # Python 视频理解服务
+│   ├── agent/               # eino ReAct Agent（系统提示词、max steps）
+│   ├── appconfig/           # 配置加载与默认值/校验
+│   ├── asr/                 # ASR 服务 HTTP 客户端
+│   ├── chat/                # 会话 Service + HistoryStore（MySQL/内存两实现）
+│   ├── embedding/           # Embedding 服务 HTTP 客户端
+│   ├── healthcheck/         # /health 探测
+│   ├── llm/                 # eino-ext 聊天模型工厂（openai/ollama/deepseek）
+│   ├── rag/                 # rune 滑窗切分
+│   ├── server/              # Gin 路由、/agent/chat handler、内嵌 Web UI
+│   ├── storage/mysql/       # GORM 客户端
+│   ├── tool/                # eino 工具：download_audio/transcribe_audio/
+│   │                        #   index_transcript/search_knowledge + 路径/URL 校验
+│   └── vectorstore/         # Qdrant gRPC 客户端（upsert/delete/search）
+├── asr_service/             # Python ASR (FastAPI, :8001)
+├── embedding_service/       # Python Embedding (FastAPI, :8003)
 ├── config.example.yaml
 ├── docker-compose.example.yaml
 └── Makefile

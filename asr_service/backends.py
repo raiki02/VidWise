@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import hmac
-import io
 import json
 import mimetypes
 import os
@@ -21,6 +20,7 @@ from typing import Any, Protocol
 import numpy as np
 
 
+WHISPER_SAMPLE_RATE = 16000
 DEFAULT_WHISPER_MAX_NEW_TOKENS = 448
 DEFAULT_WHISPER_MAX_INITIAL_PROMPT_TOKENS = 224
 MIN_WHISPER_MAX_NEW_TOKENS = 1
@@ -37,8 +37,6 @@ XFYUN_ASR_DEFAULT_ACCESS_KEY_SECRET_ENV = "XFYUN_API_SECRET"
 XFYUN_ASR_DEFAULT_LANGUAGE = "autodialect"
 XFYUN_ASR_DEFAULT_RESULT_TYPE = "transfer"
 XFYUN_ASR_DEFAULT_MAX_FILE_BYTES = 500_000_000
-XFYUN_ASR_DEFAULT_CHUNK_SECONDS = 0.0
-XFYUN_SILENT_FAIL_TYPE = "6"
 XFYUN_FAIL_TYPE_DESCRIPTIONS = {
     "1": "audio upload failed",
     "2": "audio transcode failed",
@@ -84,56 +82,20 @@ class TranscriptionResult:
 class ASRBackend(Protocol):
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
         ...
-
-
-class XFYunTranscriptionError(RuntimeError):
-    def __init__(self, response: dict[str, Any], fallback_order_id: str = "") -> None:
-        self.response = response
-        content = response.get("content") or {}
-        order_info = content.get("orderInfo") or {}
-        self.order_id = str(order_info.get("orderId") or fallback_order_id)
-        self.status = str(order_info.get("status", ""))
-        self.fail_type = str(order_info.get("failType", ""))
-        self.description = XFYUN_FAIL_TYPE_DESCRIPTIONS.get(self.fail_type, "unknown failure")
-
-        parts = ["xfyun transcription failed"]
-        if self.order_id:
-            parts.append(f"orderId={self.order_id}")
-        if self.status:
-            parts.append(f"status={self.status}")
-        if self.fail_type:
-            parts.append(f"failType={self.fail_type} ({self.description})")
-        if self.fail_type == XFYUN_SILENT_FAIL_TYPE:
-            parts.append("the submitted audio chunk contains no speech")
-        super().__init__(" ".join(parts) + f"; response={response}")
-
-
-def _empty_transcription_result(language: str, fallback_language: str, duration: float) -> TranscriptionResult:
-    return TranscriptionResult(
-        text="",
-        language=language or fallback_language or "auto",
-        language_probability=1.0,
-        duration=duration,
-        segments=[],
-    )
 
 
 class WhisperBackend:
     """OpenAI Whisper via transformers (AutoModelForSpeechSeq2Seq)."""
 
     def __init__(self, model_config: dict[str, Any],
-                 transcribe_config: dict[str, Any] | None = None,
-                 vad_model: Any = None,
-                 vad_get_speech_ts: Any = None) -> None:
+                 transcribe_config: dict[str, Any] | None = None) -> None:
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
@@ -165,14 +127,6 @@ class WhisperBackend:
         )
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        self._vad_model = vad_model
-        self._vad_get_speech_ts = vad_get_speech_ts
-
-        vad_cfg = (transcribe_config or {}).get("vad") or {}
-        self._vad_threshold = float(vad_cfg.get("threshold", 0.3))
-        self._vad_min_speech_ms = int(vad_cfg.get("min_speech_duration_ms", 100))
-        self._vad_min_silence_ms = int(vad_cfg.get("min_silence_duration_ms", 500))
-        self._vad_speech_pad_ms = int(vad_cfg.get("speech_pad_ms", 600))
         self._max_new_tokens = _positive_int(
             (transcribe_config or {}).get("max_new_tokens"),
             DEFAULT_WHISPER_MAX_NEW_TOKENS,
@@ -184,26 +138,21 @@ class WhisperBackend:
 
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
         import torch
 
+        sample_rate = WHISPER_SAMPLE_RATE
         audio_array = self._load_audio(audio, sample_rate)
         total_duration = float(audio_array.size) / float(sample_rate)
 
-        if vad_filter and self._vad_model is not None and self._vad_get_speech_ts is not None:
-            audio_array = self._apply_vad(audio_array, sample_rate)
-
-        # Whisper-small positional encoding covers ~30 seconds.
-        # For longer audio, chunk into overlapping windows to avoid silent truncation.
+        # Whisper positional encoding covers ~30 seconds. For longer audio, chunk
+        # into non-overlapping windows to avoid silent truncation.
         max_chunk_samples = 25 * sample_rate  # 25s per chunk
-        overlap_samples = 2 * sample_rate     # 2s overlap
 
         if audio_array.size <= max_chunk_samples:
             return self._transcribe_chunk(
@@ -231,9 +180,7 @@ class WhisperBackend:
                 seg.start += offset / sample_rate
                 seg.end += offset / sample_rate
             all_segments.extend(result.segments)
-            if chunk_end >= audio_array.size:
-                break
-            offset = chunk_end - overlap_samples
+            offset = chunk_end
 
         text = "".join(seg.text for seg in all_segments)
         return TranscriptionResult(
@@ -288,34 +235,11 @@ class WhisperBackend:
             segments=segments,
         )
 
-    def _load_audio(self, audio: str | np.ndarray, sample_rate: int) -> np.ndarray:
-        if isinstance(audio, str):
-            import librosa
+    def _load_audio(self, audio: str, sample_rate: int) -> np.ndarray:
+        import librosa
 
-            audio_array, _sr = librosa.load(audio, sr=sample_rate, mono=True)
-            return audio_array.astype(np.float32)
-        if isinstance(audio, np.ndarray):
-            return audio.astype(np.float32)
-        raise ValueError(f"Unsupported audio type: {type(audio)}")
-
-    def _apply_vad(self, audio_array: np.ndarray, sample_rate: int) -> np.ndarray:
-        import torch
-
-        audio_tensor = torch.from_numpy(audio_array)
-        speech_ts = self._vad_get_speech_ts(
-            audio_tensor,
-            self._vad_model,
-            sampling_rate=sample_rate,
-            threshold=self._vad_threshold,
-            min_speech_duration_ms=self._vad_min_speech_ms,
-            min_silence_duration_ms=self._vad_min_silence_ms,
-            speech_pad_ms=self._vad_speech_pad_ms,
-            return_seconds=False,
-        )
-        if not speech_ts:
-            return np.array([], dtype=np.float32)
-        segments = [audio_array[ts["start"]:ts["end"]] for ts in speech_ts]
-        return np.concatenate(segments) if len(segments) > 1 else segments[0]
+        audio_array, _sr = librosa.load(audio, sr=sample_rate, mono=True)
+        return audio_array.astype(np.float32)
 
     def _decode_segments(self, generated_ids: Any, duration: float) -> list[TranscriptionSegment]:
         try:
@@ -352,8 +276,6 @@ def _build_whisper_generation_kwargs(
     forced_decoder_ids = None
     gen_kwargs: dict[str, Any] = {
         "return_timestamps": True,
-        # Suppress repeated n-grams to break hallucination loops.
-        "no_repeat_ngram_size": 4,
     }
     if beam_size > 1:
         gen_kwargs["num_beams"] = beam_size
@@ -429,6 +351,7 @@ class FasterWhisperBackend:
 
     def __init__(self, model_config: dict[str, Any],
                  transcribe_config: dict[str, Any] | None = None) -> None:
+        del transcribe_config
         from faster_whisper import WhisperModel
 
         kwargs: dict[str, Any] = {
@@ -436,38 +359,23 @@ class FasterWhisperBackend:
             "device": model_config.get("device", "auto"),
             "compute_type": model_config.get("compute_type", "default"),
         }
-        cpu_threads = model_config.get("cpu_threads", 0)
-        if cpu_threads > 0:
-            kwargs["cpu_threads"] = cpu_threads
-        workers = model_config.get("workers", 0)
-        if workers > 0:
-            kwargs["num_workers"] = workers
 
         self.model = WhisperModel(**kwargs)
-        self.vad_parameters = (transcribe_config or {}).get("vad") or None
 
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
-        transcribe_kwargs: dict[str, Any] = {
-            "language": language or None,
-            "beam_size": beam_size,
-            "vad_filter": vad_filter,
-            "initial_prompt": initial_prompt or None,
-            "condition_on_previous_text": False,
-            "temperature": 0.0,
-        }
-        if vad_filter and self.vad_parameters:
-            transcribe_kwargs["vad_parameters"] = self.vad_parameters
-
-        segments_iter, info = self.model.transcribe(audio, **transcribe_kwargs)
+        segments_iter, info = self.model.transcribe(
+            audio,
+            language=language or None,
+            beam_size=beam_size,
+            initial_prompt=initial_prompt or None,
+        )
         segments = [
             TranscriptionSegment(start=s.start, end=s.end, text=s.text.strip())
             for s in segments_iter
@@ -508,17 +416,15 @@ class AliyunASRBackend:
 
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
-        del beam_size, vad_filter
+        del beam_size
 
-        audio_input, duration = self._audio_input(audio, sample_rate)
+        audio_input, duration = self._audio_input(audio)
         messages: list[dict[str, Any]] = []
         if initial_prompt:
             messages.append({"role": "system", "content": initial_prompt})
@@ -582,13 +488,7 @@ class AliyunASRBackend:
         except json.JSONDecodeError as exc:
             raise RuntimeError("decode aliyun asr response failed") from exc
 
-    def _audio_input(self, audio: str | np.ndarray, sample_rate: int) -> tuple[str, float]:
-        if isinstance(audio, np.ndarray):
-            return _ndarray_to_wav_data_url(audio, sample_rate), float(audio.size) / float(sample_rate)
-
-        if audio.startswith(("http://", "https://", "oss://")):
-            return audio, 0.0
-
+    def _audio_input(self, audio: str) -> tuple[str, float]:
         stat = os.stat(audio)
         if stat.st_size > self.max_file_bytes:
             raise ValueError(
@@ -661,7 +561,6 @@ class XFYunASRBackend:
         self.poll_interval_seconds = float(model_config.get("xfyun_poll_interval_seconds") or 3)
         self.max_poll_seconds = float(model_config.get("xfyun_max_poll_seconds") or 600)
         self.max_file_bytes = int(model_config.get("xfyun_max_file_bytes") or XFYUN_ASR_DEFAULT_MAX_FILE_BYTES)
-        self.chunk_seconds = float(model_config.get("xfyun_chunk_seconds") or XFYUN_ASR_DEFAULT_CHUNK_SECONDS)
         self.language = str(model_config.get("xfyun_language") or XFYUN_ASR_DEFAULT_LANGUAGE)
         self.result_type = str(model_config.get("xfyun_result_type") or XFYUN_ASR_DEFAULT_RESULT_TYPE)
         self.duration_check_disable = bool(model_config.get("xfyun_duration_check_disable", True))
@@ -670,28 +569,16 @@ class XFYunASRBackend:
 
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
-        del beam_size, vad_filter, initial_prompt
+        del beam_size, initial_prompt
 
-        if isinstance(audio, str) and not audio.startswith(("http://", "https://")) and self.chunk_seconds > 0:
-            duration = _audio_duration(audio)
-            if duration > self.chunk_seconds:
-                return self._transcribe_file_chunks(audio, language, sample_rate, duration)
-
-        order_id, duration = self._upload(audio, language, sample_rate)
-        try:
-            payload = self._wait_for_result(order_id)
-        except XFYunTranscriptionError as exc:
-            if exc.fail_type == XFYUN_SILENT_FAIL_TYPE:
-                return _empty_transcription_result(language, self.language, duration)
-            raise
+        order_id, duration = self._upload(audio, language)
+        payload = self._wait_for_result(order_id)
         segments = _parse_xfyun_segments(payload)
         text = "\n".join(segment.text for segment in segments if segment.text).strip()
         if segments:
@@ -704,79 +591,19 @@ class XFYunASRBackend:
             segments=segments,
         )
 
-    def _transcribe_file_chunks(
-        self,
-        audio: str,
-        language: str,
-        sample_rate: int,
-        total_duration: float,
-    ) -> TranscriptionResult:
-        all_segments: list[TranscriptionSegment] = []
-        text_parts: list[str] = []
-        offset = 0.0
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for chunk_path, chunk_duration in _split_audio_file(audio, tmpdir, self.chunk_seconds, sample_rate):
-                order_id, _ = self._upload(chunk_path, language, sample_rate)
-                try:
-                    payload = self._wait_for_result(order_id)
-                except XFYunTranscriptionError as exc:
-                    if exc.fail_type == XFYUN_SILENT_FAIL_TYPE:
-                        offset += chunk_duration if chunk_duration > 0 else self.chunk_seconds
-                        continue
-                    raise
-                chunk_segments = _parse_xfyun_segments(payload)
-                for segment in chunk_segments:
-                    shifted = TranscriptionSegment(
-                        start=segment.start + offset,
-                        end=segment.end + offset,
-                        text=segment.text,
-                    )
-                    all_segments.append(shifted)
-                    if segment.text:
-                        text_parts.append(segment.text)
-                offset += max(chunk_duration, max((segment.end for segment in chunk_segments), default=0.0))
-
-        return TranscriptionResult(
-            text="\n".join(part for part in text_parts if part).strip(),
-            language=language or self.language or "auto",
-            language_probability=1.0,
-            duration=max(total_duration, offset),
-            segments=all_segments,
-        )
-
-    def _upload(self, audio: str | np.ndarray, language: str, sample_rate: int) -> tuple[str, float]:
-        if isinstance(audio, np.ndarray):
-            file_name = "audio.wav"
-            file_bytes = _ndarray_to_wav_bytes(audio, sample_rate)
-            duration = float(audio.size) / float(sample_rate)
-            params = self._upload_file_params(file_name, len(file_bytes), language, duration)
-            response = self._post("/upload", params, file_bytes, "application/octet-stream")
-        elif audio.startswith(("http://", "https://")):
-            duration = 0.0
-            params = self._common_params(include_app_id=True)
-            params.update(
-                {
-                    "audioMode": "urlLink",
-                    "audioUrl": audio,
-                    "language": self._request_language(language),
-                    "durationCheckDisable": _bool_query(self.duration_check_disable),
-                }
+    def _upload(self, audio: str, language: str) -> tuple[str, float]:
+        file_name = os.path.basename(audio) or "audio"
+        stat = os.stat(audio)
+        if stat.st_size > self.max_file_bytes:
+            raise ValueError(
+                f"audio file is {stat.st_size} bytes, exceeds xfyun limit "
+                f"configured by asr.model.xfyun_max_file_bytes={self.max_file_bytes}"
             )
-            response = self._post("/upload", params, None, "application/json;charset=UTF-8")
-        else:
-            file_name = os.path.basename(audio) or "audio"
-            stat = os.stat(audio)
-            if stat.st_size > self.max_file_bytes:
-                raise ValueError(
-                    f"audio file is {stat.st_size} bytes, exceeds xfyun limit "
-                    f"configured by asr.model.xfyun_max_file_bytes={self.max_file_bytes}"
-                )
-            with open(audio, "rb") as f:
-                file_bytes = f.read()
-            duration = _audio_duration(audio)
-            params = self._upload_file_params(file_name, stat.st_size, language, duration)
-            response = self._post("/upload", params, file_bytes, "application/octet-stream")
+        with open(audio, "rb") as f:
+            file_bytes = f.read()
+        duration = _audio_duration(audio)
+        params = self._upload_file_params(file_name, stat.st_size, language, duration)
+        response = self._post("/upload", params, file_bytes, "application/octet-stream")
 
         content = response.get("content") or {}
         order_id = content.get("orderId") or response.get("orderId")
@@ -804,7 +631,11 @@ class XFYunASRBackend:
             if order_result:
                 return _decode_xfyun_order_result(order_result)
             if status in {"-1", "5"} or (fail_type not in {"", "0", "None"} and status not in {"3", "4"}):
-                raise XFYunTranscriptionError(response, order_id)
+                description = XFYUN_FAIL_TYPE_DESCRIPTIONS.get(fail_type, "unknown failure")
+                raise RuntimeError(
+                    f"xfyun transcription failed orderId={order_id} status={status} "
+                    f"failType={fail_type} ({description}); response={response}"
+                )
             if time.monotonic() >= deadline:
                 break
             self.sleep(self.poll_interval_seconds)
@@ -950,25 +781,21 @@ class BaiduASRBackend:
         )
         self.urlopen = urlopen
         self.audio_converter = audio_converter or _ffmpeg_wav_chunks
-        self._access_token = ""
-        self._token_expiry_monotonic = 0.0
 
     def transcribe(
         self,
-        audio: str | np.ndarray,
+        audio: str,
         *,
         language: str,
         beam_size: int,
-        vad_filter: bool,
         initial_prompt: str,
-        sample_rate: int = 16000,
     ) -> TranscriptionResult:
-        del beam_size, vad_filter, initial_prompt
+        del beam_size, initial_prompt
 
         segments: list[TranscriptionSegment] = []
         texts: list[str] = []
         offset = 0.0
-        for chunk_bytes, duration, rate in self._audio_chunks(audio, sample_rate):
+        for chunk_bytes, duration, rate in self._audio_chunks(audio):
             if len(chunk_bytes) > self.max_chunk_bytes:
                 raise ValueError(
                     f"baidu asr chunk is {len(chunk_bytes)} bytes, exceeds limit "
@@ -989,15 +816,7 @@ class BaiduASRBackend:
             segments=segments,
         )
 
-    def _audio_chunks(self, audio: str | np.ndarray, sample_rate: int):
-        if isinstance(audio, np.ndarray):
-            yield from _ndarray_wav_chunks(audio, sample_rate, self.chunk_seconds)
-            return
-        if audio.startswith(("http://", "https://")):
-            raise ValueError(
-                "baidu short speech REST API requires local audio bytes; "
-                "configure a file-URL transcription flow for remote URLs"
-            )
+    def _audio_chunks(self, audio: str):
         yield from self.audio_converter(audio, self.rate, self.chunk_seconds)
 
     def _recognize_chunk(self, chunk_bytes: bytes, rate: int) -> str:
@@ -1015,10 +834,6 @@ class BaiduASRBackend:
         return _parse_baidu_asr_response(response)
 
     def _access_token_value(self) -> str:
-        now = time.monotonic()
-        if self._access_token and now < self._token_expiry_monotonic:
-            return self._access_token
-
         params = urllib.parse.urlencode(
             {
                 "grant_type": "client_credentials",
@@ -1036,13 +851,6 @@ class BaiduASRBackend:
         access_token = str(payload.get("access_token") or "").strip()
         if not access_token:
             raise RuntimeError(f"baidu token response did not include access_token: {payload}")
-
-        try:
-            expires_in = int(payload.get("expires_in") or 0)
-        except (TypeError, ValueError):
-            expires_in = 0
-        self._access_token = access_token
-        self._token_expiry_monotonic = now + max(60, expires_in - 60) if expires_in else now + 3600
         return access_token
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1114,36 +922,6 @@ def _aliyun_model_name(raw_name: Any) -> str:
     if not name or name.startswith((".", "/")):
         return ALIYUN_ASR_DEFAULT_MODEL
     return name
-
-
-def _ndarray_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    audio_i16 = (np.clip(audio.astype(np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(audio_i16.tobytes())
-    return buffer.getvalue()
-
-
-def _ndarray_to_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
-    encoded = base64.b64encode(_ndarray_to_wav_bytes(audio, sample_rate)).decode("ascii")
-    return f"data:audio/wav;base64,{encoded}"
-
-
-def _ndarray_wav_chunks(audio: np.ndarray, sample_rate: int, chunk_seconds: float):
-    audio_array = audio.astype(np.float32)
-    samples_per_chunk = max(1, int(float(sample_rate) * chunk_seconds))
-    for offset in range(0, audio_array.size, samples_per_chunk):
-        chunk = audio_array[offset:offset + samples_per_chunk]
-        if chunk.size == 0:
-            continue
-        yield (
-            _ndarray_to_wav_bytes(chunk, sample_rate),
-            float(chunk.size) / float(sample_rate),
-            sample_rate,
-        )
 
 
 def _ffmpeg_wav_chunks(audio_path: str, rate: int, chunk_seconds: float):
@@ -1225,54 +1003,6 @@ def _audio_duration(path: str) -> float:
         return float(result.stdout.strip() or "0")
     except ValueError:
         return 0.0
-
-
-def _split_audio_file(
-    audio: str,
-    tmpdir: str,
-    chunk_seconds: float,
-    sample_rate: int,
-) -> list[tuple[str, float]]:
-    output_pattern = os.path.join(tmpdir, "chunk-%05d.wav")
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        audio,
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-c:a",
-        "pcm_s16le",
-        "-f",
-        "segment",
-        "-segment_time",
-        f"{chunk_seconds:g}",
-        "-reset_timestamps",
-        "1",
-        output_pattern,
-    ]
-    try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError as exc:
-        raise RuntimeError("ffmpeg is required for xfyun ASR audio chunking") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"ffmpeg failed to prepare xfyun ASR audio chunks: {detail}") from exc
-
-    chunk_paths = sorted(
-        os.path.join(tmpdir, name)
-        for name in os.listdir(tmpdir)
-        if name.endswith(".wav")
-    )
-    if not chunk_paths:
-        raise RuntimeError("ffmpeg did not produce any xfyun ASR audio chunks")
-    return [(chunk_path, _audio_duration(chunk_path)) for chunk_path in chunk_paths]
 
 
 def _parse_baidu_asr_response(payload: dict[str, Any]) -> str:
@@ -1391,12 +1121,10 @@ def _xfyun_time_seconds(raw: Any) -> float:
 
 
 def create_asr_backend(model_config: dict[str, Any],
-                       transcribe_config: dict[str, Any] | None = None,
-                       vad_model: Any = None,
-                       vad_get_speech_ts: Any = None) -> ASRBackend:
+                       transcribe_config: dict[str, Any] | None = None) -> ASRBackend:
     provider = str(model_config.get("provider") or "whisper").strip().lower()
     if provider in {"whisper"}:
-        return WhisperBackend(model_config, transcribe_config, vad_model, vad_get_speech_ts)
+        return WhisperBackend(model_config, transcribe_config)
     if provider in {"faster-whisper", "faster_whisper"}:
         return FasterWhisperBackend(model_config, transcribe_config)
     if provider in {"aliyun", "dashscope"}:

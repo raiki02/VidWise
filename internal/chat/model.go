@@ -10,7 +10,6 @@ import (
 // Session represents a chat conversation session.
 type Session struct {
 	ID        string    `gorm:"type:varchar(36);primaryKey" json:"id"`
-	UserID    string    `gorm:"type:varchar(36);index:idx_cs_user" json:"user_id,omitempty"`
 	Title     string    `gorm:"type:varchar(512)" json:"title"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
@@ -25,11 +24,11 @@ func (s *Session) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Message is a single message in a chat session.
+// Message is a single message in a chat session. Role is "user" or "assistant".
 type Message struct {
 	ID        string    `gorm:"type:varchar(36);primaryKey" json:"id"`
 	SessionID string    `gorm:"type:varchar(36);not null;index:idx_msg_session" json:"session_id"`
-	Role      string    `gorm:"type:varchar(16);not null" json:"role"` // "user" or "assistant"
+	Role      string    `gorm:"type:varchar(16);not null" json:"role"`
 	Content   string    `gorm:"type:mediumtext;not null" json:"content"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }

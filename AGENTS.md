@@ -4,62 +4,63 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Architecture
 
-This is a video/audio/text extraction service. The core is a Go/Gin HTTP server (`main.go`, `internal/server/`) that orchestrates three subsystems:
+Minimal runnable MVP of a video intelligence platform. A Go/Gin gateway (`main.go`, `internal/server/`) hosts a **CloudWeGo eino ReAct Agent** that orchestrates the full RAG loop:
 
-- **Download & transcode** — `cmd/download/`, `cmd/audio/`, `cmd/video/` wrap `yt-dlp` and `ffmpeg` as CLI subprocesses.
-- **ASR (speech-to-text)** — Python FastAPI service (`asr_service/`) exposing `/transcribe` and `/stream` (WebSocket). Supports two backends: `WhisperBackend` (transformers) and `FasterWhisperBackend` (CTranslate2). The Go side calls it via an HTTP client (`internal/asr/client.go`) wrapped as an Eino tool (`internal/asr/tool.go`).
-- **Video understanding** — Python FastAPI service (`video_summary_service/`) exposing `/caption` and `/find` endpoints backed by NemoStation/Marlin-2B (HF transformers or MLX). The Go side mirrors this in `internal/video_summary/`.
-- **LLM paragraph formatting** — After ASR, raw transcript text is optionally formatted by an LLM. `internal/paragraph/chatmodel.go` builds a CloudWeGo Eino chat model for OpenAI, Ollama, or DeepSeek. `internal/paragraph/paragraph.go` splits long text into chunks, processes them in parallel (max 3 concurrent), and supports a `two_step` mode (step 1: per-chunk typo fix + trad→simp; step 2: semantic paragraph organization of the joined step-1 output).
+- **Agent & tools** — `internal/agent/` builds `react.NewAgent` with the tools from `internal/tool/`: `download_audio` (yt-dlp via `cmd/download`), `transcribe_audio` (calls the ASR service through `internal/asr`), `index_transcript` (chunk via `internal/rag` → embed via `internal/embedding` → upsert into Qdrant via `internal/vectorstore`), `search_knowledge` (embed query → vector search).
+- **ASR** — Python FastAPI service (`asr_service/`, port 8001) exposing `POST /transcribe` and `GET /health`. Providers: whisper / faster-whisper (local), aliyun / xfyun / baidu (cloud). The Go side calls it via `internal/asr/client.go`.
+- **Embedding** — Python FastAPI service (`embedding_service/`, port 8003) exposing `POST /embed` and `GET /health`. Providers: local (sentence-transformers), aliyun, siliconflow. No rerank in the MVP.
+- **Vector store** — Qdrant gRPC (port 6334) via `internal/vectorstore`; collection `transcript_chunks`, Cosine distance, source_id payload for per-video replace.
+- **Chat sessions** — `internal/chat/` Service: create/find session, load history, call the agent, persist both messages. Persistence via MySQL/GORM (`internal/storage/mysql`); when `mysql.dsn` is empty it falls back to an in-memory store (`internal/chat/memory.go`) that is lost on restart.
+
+Removed subsystems (do not resurrect without being asked): web search, MCP, video summary, rerank, LLM paragraph formatting, async task queue, capability manifest endpoints.
 
 ## Request flow
 
 ```
-HTTP GET/POST /extract
-  → server.extract() binds url/name/type
-  → extractor.Service.Extract() dispatches by type:
-      video:  download.Video → video.Compatible (ffmpeg re-encode)
-      audio:  download.Audio (yt-dlp -x)
-      text:   download.Audio → agent.TranscriptAgent (ASR call → paragraph.FormatText)
-      summary: download.Video → agent.VideoSummaryAgent (Marlin caption)
-  → response is a file attachment
+POST /agent/chat {session_id?, message}
+  → server.ChatHandler.AgentChat validates (400 on bad JSON/empty message)
+  → chat.Service.Chat: resolve session (404 if unknown) → load history → agent.Generate
+  → ReAct loop: LLM decides tool calls (download_audio → transcribe_audio →
+     index_transcript / search_knowledge)
+  → persist user + assistant messages on success only
+  → {session_id, reply}
 ```
 
-`/health`, `/format` (standalone text formatting endpoint), and `web/` (embedded HTML UI) are also served by Gin.
-
-Eino `tool.InvokableTool` wrappers (`internal/asr/tool.go`, `internal/video_summary/tool.go`) exist so the agents could be used within an Eino graph, though currently they're invoked directly.
+`GET /` serves the embedded single-page UI (`internal/server/web/index.html`); `GET /health` is a plain liveness check.
 
 ## Commands
 
 ```bash
-make run                # Start Go backend (port from config, default :8080)
+make run                # Start Go gateway (port from config, default :8080)
 make run-asr            # Start Python ASR service (uvicorn, port 8001)
-make run-video-summary  # Start Python video summary service (uvicorn, port 8002)
+make run-embedding      # Start Python embedding service (uvicorn, port 8003)
+make run-all-bg         # Start all three services in the background
+make stop-all           # Kill processes on 8001/8003/8080
 make test               # Run all Go tests (go test ./...)
-make deps               # Install ffmpeg and yt-dlp
+make deps               # Check/install ffmpeg and yt-dlp
 make deps-python        # pip install asr_service/requirements.txt
-make deps-video-summary # pip install video_summary_service/requirements.txt
+make deps-embedding     # pip install embedding_service/requirements.txt
 ```
 
-All three services must run concurrently for full functionality (Go backend + both Python services). The Python services read `config.yaml` for model/transcribe settings and also accept overrides from environment variables (`ASR_MODEL`, `ASR_DEVICE`, `VIDEO_SUMMARY_MODEL`, etc.).
+The Go gateway requires LLM + ASR + Embedding + Qdrant to be reachable at startup (fatal on failure); MySQL is optional.
 
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml` (gitignored). Key sections:
 
-- `server.addr` — listen address
-- `download.cookies_path` — optional yt-dlp cookies file
-- `asr.model.provider` — `whisper` or `faster-whisper`; `name` is a local path or HF model ID
-- `video_summary.model.provider` — `huggingface` or `mlx` (Apple Silicon)
-- `llm.enabled` — when false, returns raw ASR text without LLM formatting
-- `llm.provider` — `openai`, `ollama`, or `deepseek`
-- `llm.two_step` — enables the two-pass formatting pipeline
-- `llm.fallback_to_raw_on_error` — when true, returns raw ASR text if the LLM is unavailable
-
-Default prompts for step1 and step2 are defined as Go constants in `internal/appconfig/config.go`.
+- `server.addr` — listen address (`write_timeout: 0s` is intentional: long tool turns)
+- `download.cookies_path`, `download.work_dir` — yt-dlp cookies; sandbox dir for media/transcripts
+- `asr.base_url` / `asr.model.*` — ASR adapter address + provider (whisper/faster-whisper/aliyun/xfyun/baidu)
+- `embedding.base_url` / `embedding.*` — embedding adapter address + provider (local/aliyun/siliconflow); `dimensions` must match `qdrant.vector_dim`
+- `llm.provider/model/api_key` — `openai`, `ollama`, or `deepseek` (eino-ext)
+- `qdrant.*` — host/port/collection/vector_dim
+- `rag.chunk_runes` / `overlap_runes` / `top_k`
+- `agent.max_step` / `history_limit`
+- `mysql.dsn` — optional; empty = in-memory chat history
 
 ## Key dependencies
 
-- **Go**: Gin (HTTP), CloudWeGo Eino (tool/model abstraction), gopkg.in/yaml.v3
-- **Python ASR**: transformers, torch, faster-whisper, silero-vad, librosa, fastapi, uvicorn
-- **Python video summary**: transformers, torch, opencv-python, fastapi, uvicorn; optionally mlx-vlm for Apple Silicon
-- **System**: ffmpeg, yt-dlp (installed via `make deps`)
+- **Go**: Gin (HTTP), CloudWeGo Eino (react agent / tool), eino-ext chat models, Qdrant gRPC client, GORM (only when MySQL configured)
+- **Python ASR**: fastapi, uvicorn, transformers, torch, faster-whisper, librosa (whisper backend)
+- **Python embedding**: fastapi, uvicorn, sentence-transformers, torch, pyyaml
+- **System**: ffmpeg, yt-dlp

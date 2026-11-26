@@ -5,8 +5,8 @@
 #   docker compose -f docker-compose.example.yaml up -d
 #
 # This starts only the infrastructure services needed for local development.
-# The Go gateway and Python services (ASR, embedding, video-summary) run
-# directly on the host via `make run-*` targets.
+# The Go gateway and Python services (ASR, embedding) run directly on the host
+# via `make run-asr` / `make run-embedding` / `make run`.
 
 services:
   mysql:

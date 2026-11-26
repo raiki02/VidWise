@@ -4,10 +4,8 @@ import os
 import tempfile
 import unittest
 import urllib.parse
+import wave
 
-import numpy as np
-
-import asr_service.backends as backends_module
 from asr_service.backends import AliyunASRBackend, BaiduASRBackend, XFYunASRBackend, _build_whisper_generation_kwargs
 
 
@@ -92,6 +90,14 @@ class _FakeHTTPResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+def _write_wav(path: str, frames: bytes) -> None:
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(frames)
+
+
 class AliyunASRBackendTest(unittest.TestCase):
     def test_transcribe_posts_audio_to_openai_compatible_endpoint(self) -> None:
         requests = []
@@ -122,14 +128,14 @@ class AliyunASRBackendTest(unittest.TestCase):
             urlopen=fake_urlopen,
         )
 
-        result = backend.transcribe(
-            np.zeros(1600, dtype=np.float32),
-            language="zh",
-            beam_size=5,
-            vad_filter=False,
-            initial_prompt="领域词",
-            sample_rate=16000,
-        )
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            _write_wav(tmp.name, b"\x00" * 3200)
+            result = backend.transcribe(
+                tmp.name,
+                language="zh",
+                beam_size=5,
+                initial_prompt="领域词",
+            )
 
         self.assertEqual(result.text, "测试文本")
         self.assertEqual(result.language, "zh")
@@ -143,8 +149,25 @@ class AliyunASRBackendTest(unittest.TestCase):
         self.assertEqual(body["model"], "qwen3-asr-flash")
         self.assertEqual(body["messages"][0]["role"], "system")
         audio_data = body["messages"][1]["content"][0]["input_audio"]["data"]
-        self.assertTrue(audio_data.startswith("data:audio/wav;base64,"))
+        self.assertTrue(audio_data.startswith("data:"))
+        self.assertIn(";base64,", audio_data)
         self.assertEqual(body["asr_options"]["language"], "zh")
+
+    def test_rejects_oversized_local_file(self) -> None:
+        backend = AliyunASRBackend(
+            {
+                "provider": "aliyun",
+                "api_base_url": "https://dashscope.example.com/compatible-mode/v1",
+                "api_key": "sk-test",
+                "max_file_bytes": 1,
+            },
+            urlopen=lambda request, timeout: _FakeHTTPResponse({"choices": []}),
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            _write_wav(tmp.name, b"\x00" * 3200)
+            with self.assertRaisesRegex(ValueError, "max_file_bytes"):
+                backend.transcribe(tmp.name, language="zh", beam_size=5, initial_prompt="")
 
     def test_api_key_can_come_from_environment(self) -> None:
         old_value = os.environ.get("DASHSCOPE_API_KEY")
@@ -163,274 +186,6 @@ class AliyunASRBackendTest(unittest.TestCase):
 
 
 class XFYunASRBackendTest(unittest.TestCase):
-    def test_transcribe_returns_empty_result_for_silent_file(self) -> None:
-        responses = [
-            {"code": "000000", "content": {"orderId": "order-1"}},
-            {
-                "code": "000000",
-                "content": {
-                    "orderInfo": {
-                        "orderId": "order-1",
-                        "status": -1,
-                        "failType": 6,
-                        "originalDuration": 100,
-                    },
-                    "orderResult": "",
-                    "taskEstimateTime": 0,
-                },
-            },
-        ]
-
-        def fake_urlopen(request, timeout: float):
-            return _FakeHTTPResponse(responses.pop(0))
-
-        backend = XFYunASRBackend(
-            {
-                "provider": "xfyun",
-                "xfyun_api_base_url": "https://office.example.com/v2",
-                "xfyun_app_id": "app-id",
-                "xfyun_access_key_id": "access-key-id",
-                "xfyun_access_key_secret": "access-key-secret",
-                "xfyun_poll_interval_seconds": 0,
-                "xfyun_max_poll_seconds": 1,
-            },
-            urlopen=fake_urlopen,
-            sleep=lambda seconds: None,
-        )
-
-        result = backend.transcribe(
-            np.zeros(1600, dtype=np.float32),
-            language="zh",
-            beam_size=5,
-            vad_filter=False,
-            initial_prompt="",
-            sample_rate=16000,
-        )
-
-        self.assertEqual(result.text, "")
-        self.assertEqual(result.duration, 0.1)
-        self.assertEqual(result.segments, [])
-
-    def test_transcribe_skips_silent_xfyun_chunks(self) -> None:
-        def order_result(text: str, end_ms: str) -> str:
-            return json.dumps(
-                {
-                    "lattice": [
-                        {
-                            "json_1best": json.dumps(
-                                {
-                                    "st": {
-                                        "bg": "0",
-                                        "ed": end_ms,
-                                        "rt": [{"ws": [{"cw": [{"w": text}]}]}],
-                                    }
-                                }
-                            )
-                        }
-                    ]
-                }
-            )
-
-        responses = [
-            {"code": "000000", "content": {"orderId": "order-1"}},
-            {
-                "code": "000000",
-                "content": {
-                    "orderInfo": {
-                        "orderId": "order-1",
-                        "status": -1,
-                        "failType": 6,
-                        "originalDuration": 60000,
-                    },
-                    "orderResult": "",
-                    "taskEstimateTime": 0,
-                },
-            },
-            {"code": "000000", "content": {"orderId": "order-2"}},
-            {
-                "code": "000000",
-                "content": {
-                    "orderInfo": {"orderId": "order-2", "status": 4, "failType": 0},
-                    "orderResult": order_result("有声音", "2000"),
-                },
-            },
-        ]
-
-        def fake_urlopen(request, timeout: float):
-            return _FakeHTTPResponse(responses.pop(0))
-
-        old_split_audio_file = backends_module._split_audio_file
-        old_audio_duration = backends_module._audio_duration
-
-        def fake_split_audio_file(audio: str, tmpdir: str, chunk_seconds: float, sample_rate: int):
-            self.assertEqual(chunk_seconds, 60)
-            chunk_1 = os.path.join(tmpdir, "chunk-00000.wav")
-            chunk_2 = os.path.join(tmpdir, "chunk-00001.wav")
-            with open(chunk_1, "wb") as f:
-                f.write(b"silent chunk")
-            with open(chunk_2, "wb") as f:
-                f.write(b"speech chunk")
-            return [(chunk_1, 60.0), (chunk_2, 2.0)]
-
-        def fake_audio_duration(path: str) -> float:
-            if path.endswith("source.mp3"):
-                return 62.0
-            if path.endswith("chunk-00000.wav"):
-                return 60.0
-            if path.endswith("chunk-00001.wav"):
-                return 2.0
-            return 0.0
-
-        backends_module._split_audio_file = fake_split_audio_file
-        backends_module._audio_duration = fake_audio_duration
-        try:
-            backend = XFYunASRBackend(
-                {
-                    "provider": "xfyun",
-                    "xfyun_api_base_url": "https://office.example.com/v2",
-                    "xfyun_app_id": "app-id",
-                    "xfyun_access_key_id": "access-key-id",
-                    "xfyun_access_key_secret": "access-key-secret",
-                    "xfyun_poll_interval_seconds": 0,
-                    "xfyun_max_poll_seconds": 1,
-                    "xfyun_chunk_seconds": 60,
-                },
-                urlopen=fake_urlopen,
-                sleep=lambda seconds: None,
-            )
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                source_path = os.path.join(tmpdir, "source.mp3")
-                with open(source_path, "wb") as f:
-                    f.write(b"source")
-                result = backend.transcribe(
-                    source_path,
-                    language="zh",
-                    beam_size=5,
-                    vad_filter=False,
-                    initial_prompt="",
-                )
-        finally:
-            backends_module._split_audio_file = old_split_audio_file
-            backends_module._audio_duration = old_audio_duration
-
-        self.assertEqual(result.text, "有声音")
-        self.assertEqual(result.duration, 62.0)
-        self.assertEqual(len(result.segments), 1)
-        self.assertEqual(result.segments[0].start, 60.0)
-        self.assertEqual(result.segments[0].end, 62.0)
-
-    def test_transcribe_can_chunk_long_local_files(self) -> None:
-        requests = []
-
-        def order_result(text: str, end_ms: str) -> str:
-            return json.dumps(
-                {
-                    "lattice": [
-                        {
-                            "json_1best": json.dumps(
-                                {
-                                    "st": {
-                                        "bg": "0",
-                                        "ed": end_ms,
-                                        "rt": [{"ws": [{"cw": [{"w": text}]}]}],
-                                    }
-                                }
-                            )
-                        }
-                    ]
-                }
-            )
-
-        responses = [
-            {"code": "000000", "content": {"orderId": "order-1"}},
-            {
-                "code": "000000",
-                "content": {
-                    "orderInfo": {"orderId": "order-1", "status": 4, "failType": 0},
-                    "orderResult": order_result("第一段", "1000"),
-                },
-            },
-            {"code": "000000", "content": {"orderId": "order-2"}},
-            {
-                "code": "000000",
-                "content": {
-                    "orderInfo": {"orderId": "order-2", "status": 4, "failType": 0},
-                    "orderResult": order_result("第二段", "2000"),
-                },
-            },
-        ]
-
-        def fake_urlopen(request, timeout: float):
-            requests.append((request, timeout))
-            return _FakeHTTPResponse(responses.pop(0))
-
-        old_split_audio_file = backends_module._split_audio_file
-        old_audio_duration = backends_module._audio_duration
-
-        def fake_split_audio_file(audio: str, tmpdir: str, chunk_seconds: float, sample_rate: int):
-            self.assertEqual(chunk_seconds, 240)
-            self.assertEqual(sample_rate, 16000)
-            chunk_1 = os.path.join(tmpdir, "chunk-00000.wav")
-            chunk_2 = os.path.join(tmpdir, "chunk-00001.wav")
-            with open(chunk_1, "wb") as f:
-                f.write(b"chunk one")
-            with open(chunk_2, "wb") as f:
-                f.write(b"chunk two")
-            return [(chunk_1, 240.0), (chunk_2, 20.0)]
-
-        def fake_audio_duration(path: str) -> float:
-            if path.endswith("source.mp3"):
-                return 260.0
-            if path.endswith("chunk-00000.wav"):
-                return 240.0
-            if path.endswith("chunk-00001.wav"):
-                return 20.0
-            return 0.0
-
-        backends_module._split_audio_file = fake_split_audio_file
-        backends_module._audio_duration = fake_audio_duration
-        try:
-            backend = XFYunASRBackend(
-                {
-                    "provider": "xfyun",
-                    "xfyun_api_base_url": "https://office.example.com/v2",
-                    "xfyun_app_id": "app-id",
-                    "xfyun_access_key_id": "access-key-id",
-                    "xfyun_access_key_secret": "access-key-secret",
-                    "xfyun_poll_interval_seconds": 0,
-                    "xfyun_max_poll_seconds": 1,
-                    "xfyun_chunk_seconds": 240,
-                },
-                urlopen=fake_urlopen,
-                sleep=lambda seconds: None,
-            )
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                source_path = os.path.join(tmpdir, "source.mp3")
-                with open(source_path, "wb") as f:
-                    f.write(b"source")
-                result = backend.transcribe(
-                    source_path,
-                    language="zh",
-                    beam_size=5,
-                    vad_filter=False,
-                    initial_prompt="",
-                )
-        finally:
-            backends_module._split_audio_file = old_split_audio_file
-            backends_module._audio_duration = old_audio_duration
-
-        self.assertEqual(result.text, "第一段\n第二段")
-        self.assertEqual(result.duration, 260.0)
-        self.assertEqual(len(result.segments), 2)
-        self.assertEqual(result.segments[0].start, 0.0)
-        self.assertEqual(result.segments[0].end, 1.0)
-        self.assertEqual(result.segments[1].start, 240.0)
-        self.assertEqual(result.segments[1].end, 242.0)
-        upload_requests = [request for request, _ in requests if "/upload?" in request.get_full_url()]
-        self.assertEqual(len(upload_requests), 2)
-
     def test_transcribe_uploads_file_and_polls_result(self) -> None:
         requests = []
         order_result = json.dumps(
@@ -493,7 +248,6 @@ class XFYunASRBackendTest(unittest.TestCase):
                 tmp.name,
                 language="zh",
                 beam_size=5,
-                vad_filter=False,
                 initial_prompt="",
             )
 
@@ -525,6 +279,41 @@ class XFYunASRBackendTest(unittest.TestCase):
         self.assertEqual(result_query["orderId"], ["order-1"])
         self.assertEqual(result_query["resultType"], ["transfer"])
 
+    def test_transcribe_raises_on_failed_order(self) -> None:
+        responses = [
+            {"code": "000000", "content": {"orderId": "order-1"}},
+            {
+                "code": "000000",
+                "content": {
+                    "orderInfo": {"orderId": "order-1", "status": -1, "failType": 3},
+                    "orderResult": "",
+                },
+            },
+        ]
+
+        def fake_urlopen(request, timeout: float):
+            return _FakeHTTPResponse(responses.pop(0))
+
+        backend = XFYunASRBackend(
+            {
+                "provider": "xfyun",
+                "xfyun_api_base_url": "https://office.example.com/v2",
+                "xfyun_app_id": "app-id",
+                "xfyun_access_key_id": "access-key-id",
+                "xfyun_access_key_secret": "access-key-secret",
+                "xfyun_poll_interval_seconds": 0,
+                "xfyun_max_poll_seconds": 1,
+            },
+            urlopen=fake_urlopen,
+            sleep=lambda seconds: None,
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            tmp.write(b"fake audio")
+            tmp.flush()
+            with self.assertRaisesRegex(RuntimeError, "failType"):
+                backend.transcribe(tmp.name, language="zh", beam_size=5, initial_prompt="")
+
     def test_credentials_can_come_from_environment(self) -> None:
         old_values = {key: os.environ.get(key) for key in ("XFYUN_APP_ID", "XFYUN_API_KEY", "XFYUN_API_SECRET")}
         os.environ["XFYUN_APP_ID"] = "env-app-id"
@@ -548,9 +337,10 @@ class XFYunASRBackendTest(unittest.TestCase):
 
 
 class BaiduASRBackendTest(unittest.TestCase):
-    def test_transcribe_fetches_token_and_posts_wav_chunks(self) -> None:
+    def test_transcribe_fetches_token_per_chunk_and_posts_wav(self) -> None:
         requests = []
         responses = [
+            {"access_token": "access-token", "expires_in": 3600},
             {"access_token": "access-token", "expires_in": 3600},
             {"err_no": 0, "err_msg": "success.", "result": ["第一段"]},
             {"err_no": 0, "err_msg": "success.", "result": ["第二段"]},
@@ -589,7 +379,6 @@ class BaiduASRBackendTest(unittest.TestCase):
             "/tmp/input.mp3",
             language="zh",
             beam_size=5,
-            vad_filter=False,
             initial_prompt="",
         )
 
@@ -601,17 +390,17 @@ class BaiduASRBackendTest(unittest.TestCase):
         self.assertEqual(result.segments[1].start, 1.5)
         self.assertEqual(result.segments[1].end, 2.25)
 
-        token_request, token_timeout = requests[0]
-        self.assertEqual(token_timeout, 12)
-        self.assertEqual(token_request.get_method(), "POST")
-        token_url = urllib.parse.urlparse(token_request.get_full_url())
-        self.assertEqual(token_url.scheme + "://" + token_url.netloc + token_url.path, "https://aip.example.com/oauth/2.0/token")
-        token_query = urllib.parse.parse_qs(token_url.query)
-        self.assertEqual(token_query["grant_type"], ["client_credentials"])
-        self.assertEqual(token_query["client_id"], ["api-key"])
-        self.assertEqual(token_query["client_secret"], ["secret-key"])
+        for token_request, token_timeout in requests[:2]:
+            self.assertEqual(token_timeout, 12)
+            self.assertEqual(token_request.get_method(), "POST")
+            token_url = urllib.parse.urlparse(token_request.get_full_url())
+            self.assertEqual(token_url.scheme + "://" + token_url.netloc + token_url.path, "https://aip.example.com/oauth/2.0/token")
+            token_query = urllib.parse.parse_qs(token_url.query)
+            self.assertEqual(token_query["grant_type"], ["client_credentials"])
+            self.assertEqual(token_query["client_id"], ["api-key"])
+            self.assertEqual(token_query["client_secret"], ["secret-key"])
 
-        first_asr_request, first_asr_timeout = requests[1]
+        first_asr_request, first_asr_timeout = requests[2]
         self.assertEqual(first_asr_timeout, 12)
         self.assertEqual(first_asr_request.get_full_url(), "https://vop.example.com/server_api")
         first_body = json.loads(first_asr_request.data.decode("utf-8"))
@@ -624,7 +413,7 @@ class BaiduASRBackendTest(unittest.TestCase):
         self.assertEqual(first_body["len"], len(b"chunk-one"))
         self.assertEqual(base64.b64decode(first_body["speech"]), b"chunk-one")
 
-        second_body = json.loads(requests[2][0].data.decode("utf-8"))
+        second_body = json.loads(requests[3][0].data.decode("utf-8"))
         self.assertEqual(second_body["token"], "access-token")
         self.assertEqual(base64.b64decode(second_body["speech"]), b"chunk-two")
 

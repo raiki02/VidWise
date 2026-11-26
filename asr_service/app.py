@@ -2,8 +2,6 @@ import logging
 import os
 import sys
 import tempfile
-import time
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -12,14 +10,7 @@ _svc_dir = os.path.dirname(os.path.abspath(__file__))
 if _svc_dir not in sys.path:
     sys.path.insert(0, _svc_dir)
 
-import anyio
-import inspect
-import json
-
-import numpy as np
-import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 import yaml
 
 from backends import ASRBackend, TranscriptionResult, create_asr_backend
@@ -50,8 +41,6 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "xfyun_poll_interval_seconds": 3,
         "xfyun_max_poll_seconds": 600,
         "xfyun_max_file_bytes": 500000000,
-        "xfyun_chunk_seconds": 0,
-        "xfyun_duration_check_disable": True,
         "baidu_token_url": "https://aip.baidubce.com/oauth/2.0/token",
         "baidu_api_base_url": "https://vop.baidu.com",
         "baidu_api_key": "",
@@ -68,157 +57,41 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
     },
     "transcribe": {
         "beam_size": 5,
-        "vad_filter": True,
+        "vad_filter": True,  # accepted for compatibility; VAD is not applied
         "initial_prompt": "",
         "max_new_tokens": 448,
         "max_initial_prompt_tokens": 224,
-        "vad": {
-            "threshold": 0.3,
-            "min_speech_duration_ms": 100,
-            "min_silence_duration_ms": 500,
-            "speech_pad_ms": 600,
-        },
-    },
-    "stream": {
-        "enabled": True,
-        "sample_rate": 16000,
-        "chunk_size": 1600,
-        "max_buffer_seconds": 30,
-        "vad": {
-            "threshold": 0.5,
-            "min_speech_duration_ms": 250,
-            "min_silence_duration_ms": 200,
-            "speech_pad_ms": 100,
-            "max_speech_duration_s": 30,
-        },
     },
 }
 
 app = FastAPI(title="vidwise-asr")
 model: ASRBackend | None = None
 asr_config: dict[str, Any] = DEFAULT_ASR_CONFIG
-vad_model: Any | None = None
-vad_iterator_cls: Any | None = None
 
 
-def _configure_logging() -> None:
-    # Uvicorn config may override log formatting; this ensures our app logger exists and emits.
-    root = logging.getLogger()
-    if not root.handlers:
-        logging.basicConfig(
-            level=os.getenv("LOG_LEVEL", "INFO"),
-            format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        )
-
-
-_configure_logging()
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger("vidwise.asr")
-
-
-@app.middleware("http")
-async def log_requests(request, call_next):
-    start = time.perf_counter()
-    status_code: int | None = None
-    try:
-        response = await call_next(request)
-        status_code = response.status_code
-    except Exception:
-        # Ensure unexpected exceptions are visible in logs with a full traceback.
-        logger.exception("unhandled exception method=%s path=%s", request.method, request.url.path)
-        raise
-    finally:
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        # Use INFO to make sure it shows up even when uvicorn access logs are off.
-        if status_code is None:
-            logger.info(
-                "request completed method=%s path=%s status=%s elapsed_ms=%.2f",
-                request.method,
-                request.url.path,
-                "-",
-                elapsed_ms,
-            )
-        else:
-            logger.info(
-                "request completed method=%s path=%s status=%d elapsed_ms=%.2f",
-                request.method,
-                request.url.path,
-                status_code,
-                elapsed_ms,
-            )
-    return response
-
-
-@app.exception_handler(Exception)
-async def log_exception_handler(request, exc: Exception):
-    # This handler will log exceptions that are converted to 500 responses.
-    # Returning HTTPException in endpoints is handled by FastAPI separately.
-    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    logger.error(
-        "500 internal error method=%s path=%s error=%r\n%s",
-        request.method,
-        request.url.path,
-        exc,
-        tb,
-    )
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
-
-
-@app.exception_handler(HTTPException)
-async def log_http_exception_handler(request, exc: HTTPException):
-    # FastAPI/Starlette won't log HTTPException stack traces by default.
-    # For 5xx, log server-side details to aid debugging.
-    if exc.status_code >= 500:
-        logger.error(
-            "HTTPException %d method=%s path=%s detail=%r",
-            exc.status_code,
-            request.method,
-            request.url.path,
-            exc.detail,
-        )
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.on_event("startup")
 def load_model() -> None:
-    global asr_config, model, vad_model, vad_iterator_cls
+    global asr_config, model
 
     try:
         asr_config = load_asr_config()
         model_config = asr_config["model"]
-
-        provider = str(model_config.get("provider") or "whisper").strip().lower()
-        stream_config = asr_config["stream"]
-        vad_get_speech_ts = None
-        if stream_config.get("enabled", True) and provider not in {
-            "aliyun",
-            "dashscope",
-            "xfyun",
-            "iflytek",
-            "baidu",
-            "baiducloud",
-            "baidu-cloud",
-        }:
-            logger.info("loading Silero VAD model")
-            vad_model, vad_utils = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
-                model="silero_vad",
-                trust_repo=True,
-            )
-            vad_iterator_cls = vad_utils[3]
-            vad_get_speech_ts = vad_utils[0]
-            logger.info("Silero VAD model loaded")
-
         logger.info(
             "loading ASR model provider=%s model=%s device=%s",
-            provider,
-            model_config["name"],
+            model_config.get("provider"),
+            model_config.get("name"),
             model_config.get("device", ""),
         )
         model = create_asr_backend(
             model_config,
             transcribe_config=asr_config["transcribe"],
-            vad_model=vad_model,
-            vad_get_speech_ts=vad_get_speech_ts,
         )
         logger.info("ASR model loaded")
     except Exception:
@@ -245,10 +118,10 @@ async def transcribe(
     transcribe_config = asr_config["transcribe"]
     if beam_size <= 0:
         beam_size = transcribe_config["beam_size"]
-    if vad_filter is None:
-        vad_filter = transcribe_config["vad_filter"]
     if not initial_prompt:
         initial_prompt = transcribe_config["initial_prompt"]
+    # vad_filter is accepted for Go client compatibility but ignored: the MVP
+    # backend implementations do not apply VAD.
 
     suffix = Path(file.filename or "audio").suffix or ".mp3"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -261,18 +134,10 @@ async def transcribe(
             tmp_path,
             language=language or None,
             beam_size=beam_size,
-            vad_filter=vad_filter,
             initial_prompt=initial_prompt or None,
         )
     except Exception as exc:
-        logger.exception(
-            "transcribe failed filename=%s suffix=%s language=%s beam_size=%s vad_filter=%s",
-            file.filename,
-            suffix,
-            language,
-            beam_size,
-            vad_filter,
-        )
+        logger.exception("transcribe failed filename=%s language=%s beam_size=%s", file.filename, language, beam_size)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
         try:
@@ -281,272 +146,6 @@ async def transcribe(
             pass
 
     return _result_payload(result)
-
-
-@app.websocket("/stream")
-async def stream_transcribe(websocket: WebSocket) -> None:
-    if model is None:
-        await websocket.close(code=1011)
-        return
-    if vad_model is None or vad_iterator_cls is None:
-        await websocket.close(code=1011)
-        return
-
-    await websocket.accept()
-
-    stream_config = asr_config["stream"]
-    vad_config = stream_config["vad"].copy()
-    sample_rate = int(stream_config["sample_rate"])
-    max_buffer_samples = int(stream_config["max_buffer_seconds"] * sample_rate)
-    beam_size = asr_config["transcribe"]["beam_size"]
-    initial_prompt = asr_config["transcribe"]["initial_prompt"]
-    language = "zh"
-
-    vad_iterator = _create_vad_iterator(sample_rate, vad_config)
-    stream_samples = 0
-    speech_active = False
-    speech_chunks: list[np.ndarray] = []
-    speech_samples = 0
-    segment_id = 0
-
-    await websocket.send_json(
-        {
-            "type": "ready",
-            "format": "pcm_s16le",
-            "sample_rate": sample_rate,
-            "chunk_size": int(stream_config["chunk_size"]),
-        }
-    )
-
-    try:
-        while True:
-            message = await websocket.receive()
-            if message.get("text"):
-                try:
-                    payload = json.loads(message["text"])
-                except json.JSONDecodeError:
-                    await websocket.send_json({"type": "error", "detail": "invalid json message"})
-                    continue
-
-                event = payload.get("event")
-                if event == "config":
-                    language = payload.get("language") or language
-                    beam_size = int(payload.get("beam_size") or beam_size)
-                    initial_prompt = payload.get("initial_prompt") or initial_prompt
-                    vad_override = payload.get("vad") or {}
-                    if isinstance(vad_override, dict):
-                        vad_config.update(vad_override)
-                        vad_iterator = _create_vad_iterator(sample_rate, vad_config)
-                    await websocket.send_json({"type": "config_ack"})
-                    continue
-                if event == "end":
-                    if speech_active and speech_chunks:
-                        await _finalize_stream_utterance(
-                            websocket,
-                            np.concatenate(speech_chunks),
-                            language,
-                            beam_size,
-                            initial_prompt,
-                            segment_id,
-                        )
-                        segment_id += 1
-                    break
-                continue
-
-            if message.get("bytes"):
-                audio = _decode_pcm(message["bytes"])
-                if audio.size == 0:
-                    continue
-
-                chunk_start = stream_samples
-                stream_samples += audio.size
-
-                speech_event = vad_iterator(torch.from_numpy(audio), return_seconds=False)
-                start_offset, end_offset = _event_offsets(speech_event, sample_rate, chunk_start, audio.size)
-
-                if start_offset is not None:
-                    speech_active = True
-                    speech_chunks = []
-                    speech_samples = 0
-                    if start_offset < audio.size:
-                        speech_chunks.append(audio[start_offset:])
-                        speech_samples += audio.size - start_offset
-
-                if speech_active and start_offset is None and end_offset is None:
-                    speech_chunks.append(audio)
-                    speech_samples += audio.size
-
-                if speech_active and end_offset is not None:
-                    if start_offset is not None:
-                        if speech_chunks:
-                            tail = speech_chunks[-1]
-                            trim = max(0, min(tail.size, end_offset - start_offset))
-                            speech_chunks[-1] = tail[:trim]
-                    else:
-                        speech_chunks.append(audio[:end_offset])
-                        speech_samples += end_offset
-
-                    await _finalize_stream_utterance(
-                        websocket,
-                        np.concatenate(speech_chunks) if speech_chunks else np.array([], dtype=np.float32),
-                        language,
-                        beam_size,
-                        initial_prompt,
-                        segment_id,
-                    )
-                    segment_id += 1
-                    speech_active = False
-                    speech_chunks = []
-                    speech_samples = 0
-                    vad_iterator.reset_states()
-
-                if speech_active and speech_samples >= max_buffer_samples:
-                    await _finalize_stream_utterance(
-                        websocket,
-                        np.concatenate(speech_chunks),
-                        language,
-                        beam_size,
-                        initial_prompt,
-                        segment_id,
-                    )
-                    segment_id += 1
-                    speech_active = False
-                    speech_chunks = []
-                    speech_samples = 0
-                    vad_iterator.reset_states()
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        logger.exception("stream transcribe failed")
-        await websocket.send_json({"type": "error", "detail": str(exc)})
-    finally:
-        if speech_active and speech_chunks:
-            await _finalize_stream_utterance(
-                websocket,
-                np.concatenate(speech_chunks),
-                language,
-                beam_size,
-                initial_prompt,
-                segment_id,
-            )
-
-
-def _decode_pcm(data: bytes) -> np.ndarray:
-    if not data:
-        return np.array([], dtype=np.float32)
-    audio_i16 = np.frombuffer(data, dtype=np.int16)
-    return (audio_i16.astype(np.float32) / 32768.0).copy()
-
-
-def _event_offsets(event: Any, sample_rate: int, chunk_start: int, chunk_size: int) -> tuple[int | None, int | None]:
-    if not event:
-        return None, None
-
-    start_offset = None
-    end_offset = None
-
-    if "start" in event:
-        start_sample = _event_to_samples(event["start"], sample_rate)
-        start_offset = max(0, start_sample - chunk_start)
-        if start_offset > chunk_size:
-            start_offset = None
-
-    if "end" in event:
-        end_sample = _event_to_samples(event["end"], sample_rate)
-        end_offset = max(0, min(chunk_size, end_sample - chunk_start))
-
-    return start_offset, end_offset
-
-
-def _event_to_samples(value: Any, sample_rate: int) -> int:
-    if isinstance(value, float):
-        return int(value * sample_rate)
-    return int(value)
-
-
-def _bool_env_or_cfg(env_name: str, cfg: dict[str, Any], cfg_key: str, default: bool) -> bool:
-    raw_env = os.getenv(env_name, "")
-    if raw_env != "":
-        return raw_env.strip().lower() in {"1", "true", "yes", "on"}
-    raw_cfg = cfg.get(cfg_key, default)
-    if isinstance(raw_cfg, str):
-        return raw_cfg.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(raw_cfg)
-
-
-def _create_vad_iterator(sample_rate: int, vad_config: dict[str, Any]) -> Any:
-    if vad_iterator_cls is None or vad_model is None:
-        raise RuntimeError("VAD model is not loaded")
-
-    candidate_kwargs = {
-        "sampling_rate": sample_rate,
-        "threshold": float(vad_config.get("threshold", 0.5)),
-        "min_speech_duration_ms": int(vad_config.get("min_speech_duration_ms", 250)),
-        "min_silence_duration_ms": int(vad_config.get("min_silence_duration_ms", 200)),
-        "speech_pad_ms": int(vad_config.get("speech_pad_ms", 100)),
-        "max_speech_duration_s": float(vad_config.get("max_speech_duration_s", 30)),
-    }
-    signature = inspect.signature(vad_iterator_cls.__init__)
-    valid_kwargs = {
-        key: value
-        for key, value in candidate_kwargs.items()
-        if key in signature.parameters
-    }
-    return vad_iterator_cls(vad_model, **valid_kwargs)
-
-
-async def _finalize_stream_utterance(
-    websocket: WebSocket,
-    audio: np.ndarray,
-    language: str,
-    beam_size: int,
-    initial_prompt: str,
-    segment_id: int,
-) -> None:
-    if audio.size == 0:
-        return
-
-    try:
-        segments, info, text = await _transcribe_audio(audio, language, beam_size, initial_prompt)
-    except Exception as exc:
-        logger.exception("stream transcribe chunk failed")
-        await websocket.send_json({"type": "error", "detail": str(exc)})
-        return
-
-    await websocket.send_json(
-        {
-            "type": "final",
-            "id": segment_id,
-            "text": text,
-            "language": info.language,
-            "language_probability": info.language_probability,
-            "duration": info.duration,
-            "segments": segments,
-        }
-    )
-
-
-def _run_transcribe(audio: np.ndarray, language: str, beam_size: int, initial_prompt: str) -> tuple[list[dict[str, Any]], Any, str]:
-    if model is None:
-        raise RuntimeError("ASR model is not loaded")
-
-    sample_rate = int(asr_config["stream"]["sample_rate"])
-    result = model.transcribe(
-        audio,
-        language=language or None,
-        beam_size=beam_size,
-        vad_filter=False,
-        initial_prompt=initial_prompt or None,
-        sample_rate=sample_rate,
-    )
-    return _segments_payload(result), result, result.text
-
-
-async def _transcribe_audio(
-    audio: np.ndarray, language: str, beam_size: int, initial_prompt: str
-) -> tuple[list[dict[str, Any]], Any, str]:
-    return await anyio.to_thread.run_sync(_run_transcribe, audio, language, beam_size, initial_prompt)
 
 
 def load_asr_config() -> dict[str, Any]:
@@ -558,8 +157,6 @@ def load_asr_config() -> dict[str, Any]:
 
     model_config = config["model"]
     transcribe_config = config["transcribe"]
-    stream_config = config["stream"]
-    vad_config = stream_config["vad"]
 
     model_config["provider"] = os.getenv("ASR_PROVIDER", model_config.get("provider", "whisper"))
     model_config["name"] = os.getenv("ASR_MODEL", model_config["name"])
@@ -619,15 +216,6 @@ def load_asr_config() -> dict[str, Any]:
     model_config["xfyun_max_file_bytes"] = int(
         os.getenv("ASR_XFYUN_MAX_FILE_BYTES", model_config.get("xfyun_max_file_bytes", 500000000))
     )
-    model_config["xfyun_chunk_seconds"] = float(
-        os.getenv("ASR_XFYUN_CHUNK_SECONDS", model_config.get("xfyun_chunk_seconds", 0))
-    )
-    model_config["xfyun_duration_check_disable"] = _bool_env_or_cfg(
-        "ASR_XFYUN_DURATION_CHECK_DISABLE",
-        model_config,
-        "xfyun_duration_check_disable",
-        True,
-    )
     model_config["baidu_token_url"] = os.getenv(
         "ASR_BAIDU_TOKEN_URL",
         model_config.get("baidu_token_url", "https://aip.baidubce.com/oauth/2.0/token"),
@@ -674,16 +262,6 @@ def load_asr_config() -> dict[str, Any]:
     transcribe_config["initial_prompt"] = transcribe_config["initial_prompt"] or ""
     transcribe_config["max_new_tokens"] = int(transcribe_config.get("max_new_tokens", 448))
     transcribe_config["max_initial_prompt_tokens"] = int(transcribe_config.get("max_initial_prompt_tokens", 224))
-
-    stream_config["enabled"] = bool(stream_config.get("enabled", True))
-    stream_config["sample_rate"] = int(stream_config["sample_rate"])
-    stream_config["chunk_size"] = int(stream_config["chunk_size"])
-    stream_config["max_buffer_seconds"] = float(stream_config["max_buffer_seconds"])
-    vad_config["threshold"] = float(vad_config["threshold"])
-    vad_config["min_speech_duration_ms"] = int(vad_config["min_speech_duration_ms"])
-    vad_config["min_silence_duration_ms"] = int(vad_config["min_silence_duration_ms"])
-    vad_config["speech_pad_ms"] = int(vad_config["speech_pad_ms"])
-    vad_config["max_speech_duration_s"] = float(vad_config["max_speech_duration_s"])
 
     return config
 

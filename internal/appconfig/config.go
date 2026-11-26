@@ -11,84 +11,51 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig       `yaml:"server"`
-	Download     DownloadConfig     `yaml:"download"`
-	ASR          ASRConfig          `yaml:"asr"`
-	VideoSummary VideoSummaryConfig `yaml:"video_summary"`
-	LLM          LLMConfig          `yaml:"llm"`
-	MySQL        MySQLConfig        `yaml:"mysql"`
-	Qdrant       QdrantConfig       `yaml:"qdrant"`
-	RAG          RAGConfig          `yaml:"rag"`
-	Search       SearchConfig       `yaml:"search"`
-	Embedding    EmbeddingConfig    `yaml:"embedding"`
-	Rerank       RerankConfig       `yaml:"rerank"`
-	MCP          MCPConfig          `yaml:"mcp"`
-	Upload       UploadConfig       `yaml:"upload"`
-	Task         TaskConfig         `yaml:"task"`
+	Server    ServerConfig    `yaml:"server"`
+	Download  DownloadConfig  `yaml:"download"`
+	ASR       ASRConfig       `yaml:"asr"`
+	Embedding EmbeddingConfig `yaml:"embedding"`
+	LLM       LLMConfig       `yaml:"llm"`
+	Qdrant    QdrantConfig    `yaml:"qdrant"`
+	RAG       RAGConfig       `yaml:"rag"`
+	MySQL     MySQLConfig     `yaml:"mysql"`
+	Agent     AgentConfig     `yaml:"agent"`
 }
 
 type ServerConfig struct {
 	Addr              string `yaml:"addr"`
 	ReadHeaderTimeout string `yaml:"read_header_timeout"`
 	ReadTimeout       string `yaml:"read_timeout"`
-	WriteTimeout      string `yaml:"write_timeout"`
-	IdleTimeout       string `yaml:"idle_timeout"`
-	ShutdownTimeout   string `yaml:"shutdown_timeout"`
+	// WriteTimeout stays 0 so long-running download/transcription requests
+	// are not interrupted by the HTTP server.
+	WriteTimeout    string `yaml:"write_timeout"`
+	IdleTimeout     string `yaml:"idle_timeout"`
+	ShutdownTimeout string `yaml:"shutdown_timeout"`
 }
 
 type DownloadConfig struct {
 	CookiesPath string `yaml:"cookies_path"`
+	// WorkDir is the sandbox directory where downloaded audio and transcript
+	// files are written. Tools only accept paths inside this directory.
+	WorkDir string `yaml:"work_dir"`
 }
 
 type ASRConfig struct {
-	BaseURL    string              `yaml:"base_url"`
-	Timeout    string              `yaml:"timeout"`
-	Language   string              `yaml:"language"`
+	BaseURL  string `yaml:"base_url"`
+	Timeout  string `yaml:"timeout"`
+	Language string `yaml:"language"`
+	// Model keeps the provider block for the Python ASR service. The Go side
+	// only needs the transcribe tuning options below.
 	Model      ASRModelConfig      `yaml:"model"`
 	Transcribe ASRTranscribeConfig `yaml:"transcribe"`
 }
 
+// ASRModelConfig mirrors the config the Python ASR service reads. Go itself
+// does not use these fields beyond validation.
 type ASRModelConfig struct {
-	Provider                  string `yaml:"provider"`
-	Name                      string `yaml:"name"`
-	Device                    string `yaml:"device"`
-	TorchDType                string `yaml:"torch_dtype"`
-	ComputeType               string `yaml:"compute_type"`
-	CPUThreads                int    `yaml:"cpu_threads"`
-	Workers                   int    `yaml:"workers"`
-	APIBaseURL                string `yaml:"api_base_url"`
-	APIKey                    string `yaml:"api_key"`
-	APIKeyEnv                 string `yaml:"api_key_env"`
-	APITimeoutSeconds         int    `yaml:"api_timeout_seconds"`
-	MaxFileBytes              int64  `yaml:"max_file_bytes"`
-	XFYunAPIBaseURL           string `yaml:"xfyun_api_base_url"`
-	XFYunAppID                string `yaml:"xfyun_app_id"`
-	XFYunAppIDEnv             string `yaml:"xfyun_app_id_env"`
-	XFYunAccessKeyID          string `yaml:"xfyun_access_key_id"`
-	XFYunAccessKeyIDEnv       string `yaml:"xfyun_access_key_id_env"`
-	XFYunAccessKeySecret      string `yaml:"xfyun_access_key_secret"`
-	XFYunAccessKeySecretEnv   string `yaml:"xfyun_access_key_secret_env"`
-	XFYunLanguage             string `yaml:"xfyun_language"`
-	XFYunResultType           string `yaml:"xfyun_result_type"`
-	XFYunAPITimeoutSeconds    int    `yaml:"xfyun_api_timeout_seconds"`
-	XFYunPollIntervalSeconds  int    `yaml:"xfyun_poll_interval_seconds"`
-	XFYunMaxPollSeconds       int    `yaml:"xfyun_max_poll_seconds"`
-	XFYunMaxFileBytes         int64  `yaml:"xfyun_max_file_bytes"`
-	XFYunChunkSeconds         int    `yaml:"xfyun_chunk_seconds"`
-	XFYunDurationCheckDisable bool   `yaml:"xfyun_duration_check_disable"`
-	BaiduTokenURL             string `yaml:"baidu_token_url"`
-	BaiduAPIBaseURL           string `yaml:"baidu_api_base_url"`
-	BaiduAPIKey               string `yaml:"baidu_api_key"`
-	BaiduAPIKeyEnv            string `yaml:"baidu_api_key_env"`
-	BaiduSecretKey            string `yaml:"baidu_secret_key"`
-	BaiduSecretKeyEnv         string `yaml:"baidu_secret_key_env"`
-	BaiduCUID                 string `yaml:"baidu_cuid"`
-	BaiduDevPID               int    `yaml:"baidu_dev_pid"`
-	BaiduRate                 int    `yaml:"baidu_rate"`
-	BaiduChannel              int    `yaml:"baidu_channel"`
-	BaiduAPITimeoutSeconds    int    `yaml:"baidu_api_timeout_seconds"`
-	BaiduChunkSeconds         int    `yaml:"baidu_chunk_seconds"`
-	BaiduMaxChunkBytes        int64  `yaml:"baidu_max_chunk_bytes"`
+	Provider string `yaml:"provider"`
+	Name     string `yaml:"name"`
+	Device   string `yaml:"device"`
 }
 
 type ASRTranscribeConfig struct {
@@ -97,79 +64,27 @@ type ASRTranscribeConfig struct {
 	InitialPrompt string `yaml:"initial_prompt"`
 }
 
-type VideoSummaryConfig struct {
-	BaseURL   string                      `yaml:"base_url"`
-	Timeout   string                      `yaml:"timeout"`
-	Model     VideoSummaryModelConfig     `yaml:"model"`
-	Summarize VideoSummarySummarizeConfig `yaml:"summarize"`
-}
-
-type VideoSummaryModelConfig struct {
-	Name     string `yaml:"name"`
+type EmbeddingConfig struct {
+	BaseURL string `yaml:"base_url"`
+	// Provider/Model/Device are read by the Python embedding service. Model is
+	// also sent to the service on every /embed request.
 	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
 	Device   string `yaml:"device"`
-	DType    string `yaml:"dtype"`
-	Compile  bool   `yaml:"compile"`
-}
-
-type VideoSummarySummarizeConfig struct {
-	MaxNewTokens int     `yaml:"max_new_tokens"`
-	Prompt       string  `yaml:"prompt"`
-	DoSample     *bool   `yaml:"do_sample"`
-	Temperature  float32 `yaml:"temperature"`
-	TopP         float32 `yaml:"top_p"`
+	Timeout  string `yaml:"timeout"`
 }
 
 type LLMConfig struct {
-	Enabled *bool `yaml:"enabled"`
-	// FallbackToRawOnError controls whether the service should return the raw ASR
-	// transcript when the LLM paragraph formatter is unavailable (misconfigured,
-	// network errors, provider downtime, etc.).
-	FallbackToRawOnError  *bool        `yaml:"fallback_to_raw_on_error"`
-	Provider              string       `yaml:"provider"`
-	BaseURL               string       `yaml:"base_url"`
-	APIKey                string       `yaml:"api_key"`
-	APIKeyEnv             string       `yaml:"api_key_env"`
-	Path                  string       `yaml:"path"`
-	Model                 string       `yaml:"model"`
-	Timeout               string       `yaml:"timeout"`
-	Temperature           float32      `yaml:"temperature"`
-	DisableSamplingParams *bool        `yaml:"disable_sampling_params"`
-	MaxTokens             int          `yaml:"max_tokens"`
-	KeepAlive             string       `yaml:"keep_alive"`
-	Prompt                PromptConfig `yaml:"prompt"`
-	ChunkRunes            int          `yaml:"chunk_runes"`
-	// TwoStep enables a two-pass pipeline:
-	//   Step 1: per-chunk typo fix + traditional→simplified conversion (strict, no merging)
-	//   Step 2: semantic paragraph organization of the full step-1 output
-	TwoStep         bool         `yaml:"two_step"`
-	Step1Prompt     PromptConfig `yaml:"step1_prompt"`
-	Step1ChunkRunes int          `yaml:"step1_chunk_runes"`
-}
-
-type PromptConfig struct {
-	System       string `yaml:"system"`
-	UserTemplate string `yaml:"user_template"`
-}
-
-func (c LLMConfig) SamplingParamsDisabled() bool {
-	if c.DisableSamplingParams != nil {
-		return *c.DisableSamplingParams
-	}
-	if strings.ToLower(strings.TrimSpace(c.Provider)) != "openai" {
-		return false
-	}
-	model := strings.ToLower(strings.TrimSpace(c.Model))
-	return strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4") ||
-		strings.HasPrefix(model, "gpt-5")
-}
-
-type MySQLConfig struct {
-	DSN     string `yaml:"dsn"`
-	MaxOpen int    `yaml:"max_open"`
-	MaxIdle int    `yaml:"max_idle"`
+	Provider    string  `yaml:"provider"`
+	BaseURL     string  `yaml:"base_url"`
+	APIKey      string  `yaml:"api_key"`
+	APIKeyEnv   string  `yaml:"api_key_env"`
+	Path        string  `yaml:"path"`
+	Model       string  `yaml:"model"`
+	Timeout     string  `yaml:"timeout"`
+	Temperature float32 `yaml:"temperature"`
+	MaxTokens   int     `yaml:"max_tokens"`
+	KeepAlive   string  `yaml:"keep_alive"`
 }
 
 type QdrantConfig struct {
@@ -182,132 +97,32 @@ type QdrantConfig struct {
 }
 
 type RAGConfig struct {
-	Retrieval RAGRetrievalConfig `yaml:"retrieval"`
-	Context   RAGContextConfig   `yaml:"context"`
+	ChunkRunes   int `yaml:"chunk_runes"`
+	OverlapRunes int `yaml:"overlap_runes"`
+	TopK         int `yaml:"top_k"`
 }
 
-type RAGRetrievalConfig struct {
-	SearchTopK int     `yaml:"search_top_k"`
-	TopK       int     `yaml:"top_k"`
-	MinScore   float64 `yaml:"min_score"`
+type MySQLConfig struct {
+	DSN     string `yaml:"dsn"`
+	MaxOpen int    `yaml:"max_open"`
+	MaxIdle int    `yaml:"max_idle"`
 }
 
-type RAGContextConfig struct {
-	MaxRunes int `yaml:"max_runes"`
+type AgentConfig struct {
+	MaxStep      int `yaml:"max_step"`
+	HistoryLimit int `yaml:"history_limit"`
 }
 
-type SearchConfig struct {
-	Enabled                bool                         `yaml:"enabled"`
-	Provider               string                       `yaml:"provider"`
-	Providers              []string                     `yaml:"providers"`
-	Timeout                string                       `yaml:"timeout"`
-	QueryRewriteProvider   string                       `yaml:"query_rewrite_provider"`
-	QueryRewriteMaxQueries int                          `yaml:"query_rewrite_max_queries"`
-	RerankProvider         string                       `yaml:"rerank_provider"`
-	CacheProvider          string                       `yaml:"cache_provider"`
-	CacheTTL               string                       `yaml:"cache_ttl"`
-	MaxCacheKeys           int                          `yaml:"max_cache_keys"`
-	MaxResults             int                          `yaml:"max_results"`
-	MaxDocuments           int                          `yaml:"max_documents"`
-	MaxContentRunes        int                          `yaml:"max_content_runes"`
-	MaxTotalRunes          int                          `yaml:"max_total_runes"`
-	MaxResponseBytes       int64                        `yaml:"max_response_bytes"`
-	MaxConcurrency         int                          `yaml:"max_concurrency"`
-	UserAgent              string                       `yaml:"user_agent"`
-	AllowLocalhost         bool                         `yaml:"allow_localhost"`
-	RobotsPolicy           string                       `yaml:"robots_policy"`
-	Bing                   SearchProviderConfig         `yaml:"bing"`
-	Tavily                 SearchProviderConfig         `yaml:"tavily"`
-	DuckDuckGo             SearchProviderConfig         `yaml:"duckduckgo"`
-	Internal               SearchInternalProviderConfig `yaml:"internal"`
-	Redis                  SearchRedisConfig            `yaml:"redis"`
-}
-
-type SearchProviderConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	BaseURL     string `yaml:"base_url"`
-	APIKey      string `yaml:"api_key"`
-	APIKeyEnv   string `yaml:"api_key_env"`
-	MaxResults  int    `yaml:"max_results"`
-	SearchDepth string `yaml:"search_depth"`
-}
-
-type SearchInternalProviderConfig struct {
-	Enabled    bool    `yaml:"enabled"`
-	SearchTopK int     `yaml:"search_top_k"`
-	TopK       int     `yaml:"top_k"`
-	MinScore   float64 `yaml:"min_score"`
-}
-
-type SearchRedisConfig struct {
-	Addr      string `yaml:"addr"`
-	Password  string `yaml:"password"`
-	DB        int    `yaml:"db"`
-	KeyPrefix string `yaml:"key_prefix"`
-	Timeout   string `yaml:"timeout"`
-}
-
-type EmbeddingConfig struct {
-	BaseURL           string `yaml:"base_url"`
-	Provider          string `yaml:"provider"`
-	Model             string `yaml:"model"`
-	Device            string `yaml:"device"`
-	Timeout           string `yaml:"timeout"`
-	APIBaseURL        string `yaml:"api_base_url"`
-	APIKey            string `yaml:"api_key"`
-	APIKeyEnv         string `yaml:"api_key_env"`
-	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
-	Dimensions        int    `yaml:"dimensions"`
-	BatchSize         int    `yaml:"batch_size"`
-}
-
-type RerankConfig struct {
-	BaseURL           string `yaml:"base_url"`
-	Provider          string `yaml:"provider"`
-	Model             string `yaml:"model"`
-	Device            string `yaml:"device"`
-	TopK              int    `yaml:"top_k"`
-	Timeout           string `yaml:"timeout"`
-	APIBaseURL        string `yaml:"api_base_url"`
-	APIKey            string `yaml:"api_key"`
-	APIKeyEnv         string `yaml:"api_key_env"`
-	APITimeoutSeconds int    `yaml:"api_timeout_seconds"`
-	Instruction       string `yaml:"instruction"`
-	ReturnDocuments   bool   `yaml:"return_documents"`
-	MaxChunksPerDoc   int    `yaml:"max_chunks_per_doc"`
-	OverlapTokens     int    `yaml:"overlap_tokens"`
-}
-
-type MCPConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Addr    string `yaml:"addr"`
-	Mode    string `yaml:"mode"`
-}
-
-type UploadConfig struct {
-	ChunkRunes   int   `yaml:"chunk_runes"`
-	OverlapRunes int   `yaml:"overlap_runes"`
-	MaxFileBytes int64 `yaml:"max_file_bytes"` // 0 = no limit
-}
-
-type TaskConfig struct {
-	MaxTracked         int    `yaml:"max_tracked"`
-	MaxConcurrentVideo int    `yaml:"max_concurrent_video"`
-	RetainFor          string `yaml:"retain_for"`
-	StoragePath        string `yaml:"storage_path"`
-}
-
+// Load reads the YAML config at path, applies defaults, and validates it.
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
-
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
-
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -334,6 +149,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.ShutdownTimeout == "" {
 		c.Server.ShutdownTimeout = "10s"
 	}
+	if c.Download.WorkDir == "" {
+		c.Download.WorkDir = ".vidwise/media"
+	}
 	if c.ASR.BaseURL == "" {
 		c.ASR.BaseURL = "http://localhost:8001"
 	}
@@ -343,143 +161,20 @@ func (c *Config) applyDefaults() {
 	if c.ASR.Language == "" {
 		c.ASR.Language = "zh"
 	}
-	if c.ASR.Model.Provider == "" {
-		c.ASR.Model.Provider = "whisper"
-	}
-	if c.ASR.Model.Name == "" {
-		c.ASR.Model.Name = "./models/whisper-small"
-	}
-	if c.ASR.Model.Device == "" {
-		c.ASR.Model.Device = "auto"
-	}
-	if c.ASR.Model.TorchDType == "" {
-		c.ASR.Model.TorchDType = "auto"
-	}
-	if c.ASR.Model.ComputeType == "" {
-		c.ASR.Model.ComputeType = "default"
-	}
-	if c.ASR.Model.Workers == 0 {
-		c.ASR.Model.Workers = 1
-	}
-	if c.ASR.Model.APIBaseURL == "" {
-		c.ASR.Model.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	}
-	if c.ASR.Model.APIKeyEnv == "" {
-		c.ASR.Model.APIKeyEnv = "DASHSCOPE_API_KEY"
-	}
-	if c.ASR.Model.APITimeoutSeconds == 0 {
-		c.ASR.Model.APITimeoutSeconds = 300
-	}
-	if c.ASR.Model.MaxFileBytes == 0 {
-		c.ASR.Model.MaxFileBytes = 7_500_000
-	}
-	if c.ASR.Model.XFYunAPIBaseURL == "" {
-		c.ASR.Model.XFYunAPIBaseURL = "https://office-api-ist-dx.iflyaisol.com/v2"
-	}
-	if c.ASR.Model.XFYunAppIDEnv == "" {
-		c.ASR.Model.XFYunAppIDEnv = "XFYUN_APP_ID"
-	}
-	if c.ASR.Model.XFYunAccessKeyIDEnv == "" {
-		c.ASR.Model.XFYunAccessKeyIDEnv = "XFYUN_API_KEY"
-	}
-	if c.ASR.Model.XFYunAccessKeySecretEnv == "" {
-		c.ASR.Model.XFYunAccessKeySecretEnv = "XFYUN_API_SECRET"
-	}
-	if c.ASR.Model.XFYunLanguage == "" {
-		c.ASR.Model.XFYunLanguage = "autodialect"
-	}
-	if c.ASR.Model.XFYunResultType == "" {
-		c.ASR.Model.XFYunResultType = "transfer"
-	}
-	if c.ASR.Model.XFYunAPITimeoutSeconds == 0 {
-		c.ASR.Model.XFYunAPITimeoutSeconds = 300
-	}
-	if c.ASR.Model.XFYunPollIntervalSeconds == 0 {
-		c.ASR.Model.XFYunPollIntervalSeconds = 3
-	}
-	if c.ASR.Model.XFYunMaxPollSeconds == 0 {
-		c.ASR.Model.XFYunMaxPollSeconds = 600
-	}
-	if c.ASR.Model.XFYunMaxFileBytes == 0 {
-		c.ASR.Model.XFYunMaxFileBytes = 500_000_000
-	}
-	if c.ASR.Model.BaiduTokenURL == "" {
-		c.ASR.Model.BaiduTokenURL = "https://aip.baidubce.com/oauth/2.0/token"
-	}
-	if c.ASR.Model.BaiduAPIBaseURL == "" {
-		c.ASR.Model.BaiduAPIBaseURL = "https://vop.baidu.com"
-	}
-	if c.ASR.Model.BaiduAPIKeyEnv == "" {
-		c.ASR.Model.BaiduAPIKeyEnv = "BAIDU_ASR_API_KEY"
-	}
-	if c.ASR.Model.BaiduSecretKeyEnv == "" {
-		c.ASR.Model.BaiduSecretKeyEnv = "BAIDU_ASR_SECRET_KEY"
-	}
-	if c.ASR.Model.BaiduCUID == "" {
-		c.ASR.Model.BaiduCUID = "vidwise"
-	}
-	if c.ASR.Model.BaiduDevPID == 0 {
-		c.ASR.Model.BaiduDevPID = 1537
-	}
-	if c.ASR.Model.BaiduRate == 0 {
-		c.ASR.Model.BaiduRate = 16000
-	}
-	if c.ASR.Model.BaiduChannel == 0 {
-		c.ASR.Model.BaiduChannel = 1
-	}
-	if c.ASR.Model.BaiduAPITimeoutSeconds == 0 {
-		c.ASR.Model.BaiduAPITimeoutSeconds = 60
-	}
-	if c.ASR.Model.BaiduChunkSeconds == 0 {
-		c.ASR.Model.BaiduChunkSeconds = 55
-	}
-	if c.ASR.Model.BaiduMaxChunkBytes == 0 {
-		c.ASR.Model.BaiduMaxChunkBytes = 10_000_000
-	}
 	if c.ASR.Transcribe.BeamSize == 0 {
 		c.ASR.Transcribe.BeamSize = 5
 	}
-	if c.VideoSummary.BaseURL == "" {
-		c.VideoSummary.BaseURL = "http://localhost:8002"
+	if c.Embedding.BaseURL == "" {
+		c.Embedding.BaseURL = "http://localhost:8003"
 	}
-	if c.VideoSummary.Timeout == "" {
-		c.VideoSummary.Timeout = "20m"
+	if c.Embedding.Model == "" {
+		c.Embedding.Model = "qwen"
 	}
-	if c.VideoSummary.Model.Name == "" {
-		c.VideoSummary.Model.Name = "./models/marlin"
-	}
-	if c.VideoSummary.Model.Provider == "" {
-		c.VideoSummary.Model.Provider = "huggingface"
-	}
-	if c.VideoSummary.Model.Device == "" {
-		c.VideoSummary.Model.Device = "auto"
-	}
-	if c.VideoSummary.Model.DType == "" {
-		c.VideoSummary.Model.DType = "bfloat16"
-	}
-	if c.VideoSummary.Summarize.MaxNewTokens == 0 {
-		c.VideoSummary.Summarize.MaxNewTokens = 2048
-	}
-	if c.VideoSummary.Summarize.Temperature == 0 {
-		c.VideoSummary.Summarize.Temperature = 1.0
-	}
-	if c.VideoSummary.Summarize.TopP == 0 {
-		c.VideoSummary.Summarize.TopP = 1.0
-	}
-	c.LLM.Provider = strings.ToLower(strings.TrimSpace(c.LLM.Provider))
-	if c.LLM.Enabled == nil {
-		enabled := true
-		c.LLM.Enabled = &enabled
-	}
-	if c.LLM.FallbackToRawOnError == nil {
-		v := true
-		c.LLM.FallbackToRawOnError = &v
+	if c.Embedding.Timeout == "" {
+		c.Embedding.Timeout = "2m"
 	}
 	if c.LLM.Provider == "" {
 		c.LLM.Provider = "openai"
-	}
-	if c.LLM.Provider == "ollama" && c.LLM.BaseURL == "" {
-		c.LLM.BaseURL = "http://localhost:11434"
 	}
 	if c.LLM.Timeout == "" {
 		c.LLM.Timeout = "2m"
@@ -488,34 +183,8 @@ func (c *Config) applyDefaults() {
 		c.LLM.Temperature = 0.2
 	}
 	if c.LLM.MaxTokens == 0 {
-		c.LLM.MaxTokens = 4096
+		c.LLM.MaxTokens = 2048
 	}
-	if c.LLM.ChunkRunes == 0 {
-		c.LLM.ChunkRunes = 2000
-	}
-	if c.LLM.Step1ChunkRunes == 0 {
-		c.LLM.Step1ChunkRunes = 800
-	}
-	if c.LLM.Prompt.System == "" {
-		c.LLM.Prompt.System = defaultParagraphSystemPrompt
-	}
-	if c.LLM.Prompt.UserTemplate == "" {
-		c.LLM.Prompt.UserTemplate = defaultParagraphUserTemplate
-	}
-	if c.LLM.Step1Prompt.System == "" {
-		c.LLM.Step1Prompt.System = defaultStep1SystemPrompt
-	}
-	if c.LLM.Step1Prompt.UserTemplate == "" {
-		c.LLM.Step1Prompt.UserTemplate = defaultStep1UserTemplate
-	}
-	// MySQL defaults
-	if c.MySQL.MaxOpen == 0 {
-		c.MySQL.MaxOpen = 10
-	}
-	if c.MySQL.MaxIdle == 0 {
-		c.MySQL.MaxIdle = 5
-	}
-	// Qdrant defaults
 	if c.Qdrant.Host == "" {
 		c.Qdrant.Host = "localhost"
 	}
@@ -525,223 +194,26 @@ func (c *Config) applyDefaults() {
 	if c.Qdrant.Collection == "" {
 		c.Qdrant.Collection = "transcript_chunks"
 	}
-	if c.Qdrant.VectorDim == 0 {
-		c.Qdrant.VectorDim = 1024
+	if c.RAG.ChunkRunes == 0 {
+		c.RAG.ChunkRunes = 800
 	}
-	// RAG retrieval defaults
-	if c.RAG.Retrieval.SearchTopK == 0 {
-		c.RAG.Retrieval.SearchTopK = 20
+	if c.RAG.OverlapRunes == 0 {
+		c.RAG.OverlapRunes = 100
 	}
-	if c.RAG.Retrieval.TopK == 0 {
-		c.RAG.Retrieval.TopK = 8
+	if c.RAG.TopK == 0 {
+		c.RAG.TopK = 5
 	}
-	if c.RAG.Context.MaxRunes == 0 {
-		c.RAG.Context.MaxRunes = 12000
+	if c.MySQL.MaxOpen == 0 {
+		c.MySQL.MaxOpen = 10
 	}
-	// Web search defaults
-	c.Search.Provider = strings.ToLower(strings.TrimSpace(c.Search.Provider))
-	normalizeStringSliceLower(&c.Search.Providers)
-	if len(c.Search.Providers) == 0 {
-		c.Search.Providers = enabledSearchProviders(c.Search)
+	if c.MySQL.MaxIdle == 0 {
+		c.MySQL.MaxIdle = 5
 	}
-	if len(c.Search.Providers) == 0 && c.Search.Provider != "" {
-		c.Search.Providers = []string{c.Search.Provider}
+	if c.Agent.MaxStep == 0 {
+		c.Agent.MaxStep = 20
 	}
-	if len(c.Search.Providers) == 0 {
-		c.Search.Provider = "mock"
-		c.Search.Providers = []string{"mock"}
-	}
-	if c.Search.Provider == "" && len(c.Search.Providers) > 0 {
-		c.Search.Provider = c.Search.Providers[0]
-	}
-	c.Search.QueryRewriteProvider = strings.ToLower(strings.TrimSpace(c.Search.QueryRewriteProvider))
-	if c.Search.QueryRewriteProvider == "" {
-		c.Search.QueryRewriteProvider = "mock"
-	}
-	if c.Search.QueryRewriteMaxQueries == 0 {
-		c.Search.QueryRewriteMaxQueries = 3
-	}
-	c.Search.RerankProvider = strings.ToLower(strings.TrimSpace(c.Search.RerankProvider))
-	if c.Search.RerankProvider == "" {
-		c.Search.RerankProvider = "keyword"
-	}
-	c.Search.CacheProvider = strings.ToLower(strings.TrimSpace(c.Search.CacheProvider))
-	if c.Search.CacheProvider == "" {
-		c.Search.CacheProvider = "memory"
-	}
-	if c.Search.Timeout == "" {
-		c.Search.Timeout = "10s"
-	}
-	if c.Search.CacheTTL == "" {
-		c.Search.CacheTTL = "5m"
-	}
-	if c.Search.MaxCacheKeys == 0 {
-		c.Search.MaxCacheKeys = 1024
-	}
-	if c.Search.MaxResults == 0 {
-		c.Search.MaxResults = 10
-	}
-	if c.Search.MaxDocuments == 0 {
-		c.Search.MaxDocuments = 5
-	}
-	if c.Search.MaxContentRunes == 0 {
-		c.Search.MaxContentRunes = 1200
-	}
-	if c.Search.MaxTotalRunes == 0 {
-		c.Search.MaxTotalRunes = c.Search.MaxDocuments * c.Search.MaxContentRunes
-	}
-	if c.Search.MaxResponseBytes == 0 {
-		c.Search.MaxResponseBytes = 2 * 1024 * 1024
-	}
-	if c.Search.MaxConcurrency == 0 {
-		c.Search.MaxConcurrency = 4
-	}
-	if c.Search.UserAgent == "" {
-		c.Search.UserAgent = "VidwiseSearchBot/0.1"
-	}
-	if c.Search.Bing.BaseURL == "" {
-		c.Search.Bing.BaseURL = "https://api.bing.microsoft.com/v7.0/search"
-	}
-	if c.Search.Bing.APIKeyEnv == "" {
-		c.Search.Bing.APIKeyEnv = "BING_SEARCH_API_KEY"
-	}
-	if c.Search.Bing.MaxResults == 0 {
-		c.Search.Bing.MaxResults = c.Search.MaxResults
-	}
-	if c.Search.Tavily.BaseURL == "" {
-		c.Search.Tavily.BaseURL = "https://api.tavily.com/search"
-	}
-	if c.Search.Tavily.APIKeyEnv == "" {
-		c.Search.Tavily.APIKeyEnv = "TAVILY_API_KEY"
-	}
-	if c.Search.Tavily.MaxResults == 0 {
-		c.Search.Tavily.MaxResults = c.Search.MaxResults
-	}
-	if c.Search.Tavily.SearchDepth == "" {
-		c.Search.Tavily.SearchDepth = "basic"
-	}
-	if c.Search.DuckDuckGo.BaseURL == "" {
-		c.Search.DuckDuckGo.BaseURL = "https://duckduckgo.com/html/"
-	}
-	if c.Search.DuckDuckGo.MaxResults == 0 {
-		c.Search.DuckDuckGo.MaxResults = c.Search.MaxResults
-	}
-	if c.Search.Internal.SearchTopK == 0 {
-		c.Search.Internal.SearchTopK = c.RAG.Retrieval.SearchTopK
-	}
-	if c.Search.Internal.TopK == 0 {
-		c.Search.Internal.TopK = c.RAG.Retrieval.TopK
-	}
-	if c.Search.Redis.Addr == "" {
-		c.Search.Redis.Addr = "localhost:6379"
-	}
-	if c.Search.Redis.KeyPrefix == "" {
-		c.Search.Redis.KeyPrefix = "vidwise:search:"
-	}
-	if c.Search.Redis.Timeout == "" {
-		c.Search.Redis.Timeout = "1s"
-	}
-	// Embedding defaults
-	if c.Embedding.BaseURL == "" {
-		c.Embedding.BaseURL = "http://localhost:8003"
-	}
-	c.Embedding.Provider = strings.ToLower(strings.TrimSpace(c.Embedding.Provider))
-	if c.Embedding.Provider == "" {
-		c.Embedding.Provider = "local"
-	}
-	if c.Embedding.Model == "" {
-		c.Embedding.Model = "qwen"
-	}
-	if c.Embedding.Device == "" {
-		c.Embedding.Device = "auto"
-	}
-	if c.Embedding.Timeout == "" {
-		c.Embedding.Timeout = "2m"
-	}
-	embeddingProvider := c.Embedding.Provider
-	if c.Embedding.APIBaseURL == "" {
-		if isSiliconFlowProvider(embeddingProvider) {
-			c.Embedding.APIBaseURL = "https://api.siliconflow.cn/v1"
-		} else {
-			c.Embedding.APIBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-		}
-	}
-	if c.Embedding.APIKeyEnv == "" {
-		if isSiliconFlowProvider(embeddingProvider) {
-			c.Embedding.APIKeyEnv = "SILICONFLOW_API_KEY"
-		} else {
-			c.Embedding.APIKeyEnv = "DASHSCOPE_API_KEY"
-		}
-	}
-	if c.Embedding.APITimeoutSeconds == 0 {
-		c.Embedding.APITimeoutSeconds = 120
-	}
-	if c.Embedding.BatchSize == 0 {
-		c.Embedding.BatchSize = 10
-	}
-	// Rerank defaults
-	if c.Rerank.BaseURL == "" {
-		c.Rerank.BaseURL = "http://localhost:8003"
-	}
-	c.Rerank.Provider = strings.ToLower(strings.TrimSpace(c.Rerank.Provider))
-	if c.Rerank.Provider == "" {
-		c.Rerank.Provider = "local"
-	}
-	if c.Rerank.Model == "" {
-		c.Rerank.Model = defaultRerankModel(c.Rerank.Provider)
-	}
-	if c.Rerank.Device == "" {
-		c.Rerank.Device = "auto"
-	}
-	if c.Rerank.TopK == 0 {
-		c.Rerank.TopK = 3
-	}
-	if c.Rerank.Timeout == "" {
-		c.Rerank.Timeout = "1m"
-	}
-	if c.Rerank.APIBaseURL == "" {
-		if isSiliconFlowProvider(c.Rerank.Provider) {
-			c.Rerank.APIBaseURL = "https://api.siliconflow.cn/v1"
-		} else if isAliyunProvider(c.Rerank.Provider) {
-			c.Rerank.APIBaseURL = defaultAliyunRerankAPIBaseURL(c.Rerank.Model)
-		}
-	}
-	if c.Rerank.APIKeyEnv == "" {
-		if isSiliconFlowProvider(c.Rerank.Provider) {
-			c.Rerank.APIKeyEnv = "SILICONFLOW_API_KEY"
-		} else if isAliyunProvider(c.Rerank.Provider) {
-			c.Rerank.APIKeyEnv = "DASHSCOPE_API_KEY"
-		}
-	}
-	if c.Rerank.APITimeoutSeconds == 0 {
-		c.Rerank.APITimeoutSeconds = 120
-	}
-	// MCP defaults
-	if c.MCP.Addr == "" {
-		c.MCP.Addr = ":8082"
-	}
-	if c.MCP.Mode == "" {
-		c.MCP.Mode = "sse"
-	}
-	// Upload defaults
-	if c.Upload.ChunkRunes == 0 {
-		c.Upload.ChunkRunes = 1024
-	}
-	if c.Upload.OverlapRunes == 0 {
-		c.Upload.OverlapRunes = 128
-	}
-	if c.Upload.MaxFileBytes == 0 {
-		c.Upload.MaxFileBytes = 10 * 1024 * 1024 // 10 MB
-	}
-	// Task tracker defaults
-	if c.Task.MaxTracked == 0 {
-		c.Task.MaxTracked = 1000
-	}
-	if c.Task.RetainFor == "" {
-		c.Task.RetainFor = "24h"
-	}
-	if c.Task.StoragePath == "" {
-		c.Task.StoragePath = ".vidwise/tasks.json"
+	if c.Agent.HistoryLimit == 0 {
+		c.Agent.HistoryLimit = 20
 	}
 }
 
@@ -761,22 +233,19 @@ func (c Config) validate() error {
 	if _, err := c.Server.ShutdownTimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid server.shutdown_timeout: %w", err)
 	}
-
-	llmEnabled := c.LLM.Enabled == nil || *c.LLM.Enabled
-	llmFallback := c.LLM.FallbackToRawOnError == nil || *c.LLM.FallbackToRawOnError
-	if llmEnabled {
-		// If fallback is enabled, we allow the service to start even when the LLM
-		// config is incomplete, and fall back to raw ASR output at runtime.
-		if !llmFallback {
-			if c.LLM.Model == "" {
-				return errors.New("llm.model is required")
-			}
-			switch c.LLM.Provider {
-			case "openai", "ollama", "deepseek":
-			default:
-				return fmt.Errorf("llm.provider must be one of: openai, ollama, deepseek")
-			}
-		}
+	if c.LLM.Model == "" {
+		return errors.New("llm.model is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LLM.Provider)) {
+	case "openai", "ollama", "deepseek":
+	default:
+		return errors.New("llm.provider must be one of: openai, ollama, deepseek")
+	}
+	if c.LLM.Provider == "openai" && c.LLM.ResolvedAPIKey() == "" {
+		return errors.New("llm.api_key or llm.api_key_env is required for provider openai")
+	}
+	if c.LLM.Provider == "deepseek" && c.LLM.ResolvedAPIKey() == "" {
+		return errors.New("llm.api_key or llm.api_key_env is required for provider deepseek")
 	}
 	if _, err := c.LLM.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid llm.timeout: %w", err)
@@ -787,140 +256,23 @@ func (c Config) validate() error {
 	if _, err := c.ASR.TimeoutDuration(); err != nil {
 		return fmt.Errorf("invalid asr.timeout: %w", err)
 	}
-	switch strings.ToLower(strings.TrimSpace(c.ASR.Model.Provider)) {
-	case "whisper", "faster-whisper", "faster_whisper", "aliyun", "dashscope", "xfyun", "iflytek", "baidu", "baiducloud", "baidu-cloud":
-	default:
-		return fmt.Errorf("asr.model.provider must be one of: whisper, faster-whisper, aliyun, dashscope, xfyun, iflytek, baidu")
+	if _, err := c.Embedding.TimeoutDuration(); err != nil {
+		return fmt.Errorf("invalid embedding.timeout: %w", err)
 	}
-	if _, err := c.VideoSummary.TimeoutDuration(); err != nil {
-		return fmt.Errorf("invalid video_summary.timeout: %w", err)
+	if c.Qdrant.VectorDim <= 0 {
+		return errors.New("qdrant.vector_dim must be greater than 0")
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Embedding.Provider)) {
-	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "aliyun", "dashscope", "siliconflow", "silicon-flow", "silicon_flow", "sf":
-	default:
-		return fmt.Errorf("embedding.provider must be one of: local, sentence-transformers, huggingface, aliyun, dashscope, siliconflow")
+	if c.RAG.ChunkRunes <= 0 {
+		return errors.New("rag.chunk_runes must be greater than 0")
 	}
-	if c.Embedding.BatchSize <= 0 {
-		return errors.New("embedding.batch_size must be greater than 0")
+	if c.RAG.OverlapRunes < 0 || c.RAG.OverlapRunes >= c.RAG.ChunkRunes {
+		return errors.New("rag.overlap_runes must be >= 0 and < rag.chunk_runes")
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Rerank.Provider)) {
-	case "local", "sentence-transformers", "sentence_transformers", "huggingface", "hf", "cross-encoder", "cross_encoder", "reranker", "aliyun", "dashscope", "siliconflow", "silicon-flow", "silicon_flow", "sf", "embedding", "cosine", "legacy":
-	default:
-		return fmt.Errorf("rerank.provider must be one of: local, cross-encoder, aliyun, dashscope, siliconflow, embedding")
+	if c.RAG.TopK <= 0 {
+		return errors.New("rag.top_k must be greater than 0")
 	}
-	if c.Rerank.TopK <= 0 {
-		return errors.New("rerank.top_k must be greater than 0")
-	}
-	if c.Rerank.APITimeoutSeconds < 0 {
-		return errors.New("rerank.api_timeout_seconds must be greater than or equal to 0")
-	}
-	if c.Rerank.MaxChunksPerDoc < 0 {
-		return errors.New("rerank.max_chunks_per_doc must be greater than or equal to 0")
-	}
-	if c.Rerank.OverlapTokens < 0 {
-		return errors.New("rerank.overlap_tokens must be greater than or equal to 0")
-	}
-	if c.RAG.Retrieval.SearchTopK <= 0 {
-		return errors.New("rag.retrieval.search_top_k must be greater than 0")
-	}
-	if c.RAG.Retrieval.TopK <= 0 {
-		return errors.New("rag.retrieval.top_k must be greater than 0")
-	}
-	if c.RAG.Retrieval.TopK > c.RAG.Retrieval.SearchTopK {
-		return errors.New("rag.retrieval.top_k must be less than or equal to rag.retrieval.search_top_k")
-	}
-	if c.RAG.Retrieval.MinScore < 0 {
-		return errors.New("rag.retrieval.min_score must be greater than or equal to 0")
-	}
-	if c.RAG.Context.MaxRunes <= 0 {
-		return errors.New("rag.context.max_runes must be greater than 0")
-	}
-	for _, provider := range c.Search.Providers {
-		switch strings.ToLower(strings.TrimSpace(provider)) {
-		case "mock", "bing", "tavily", "duckduckgo", "internal":
-		default:
-			return fmt.Errorf("search.providers must contain only: mock, bing, tavily, duckduckgo, internal")
-		}
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Search.Provider)) {
-	case "mock", "bing", "tavily", "duckduckgo", "internal":
-	default:
-		return fmt.Errorf("search.provider must be one of: mock, bing, tavily, duckduckgo, internal")
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Search.QueryRewriteProvider)) {
-	case "mock", "llm":
-	default:
-		return fmt.Errorf("search.query_rewrite_provider must be one of: mock, llm")
-	}
-	if c.Search.QueryRewriteMaxQueries <= 0 {
-		return errors.New("search.query_rewrite_max_queries must be greater than 0")
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Search.RerankProvider)) {
-	case "keyword", "embedding":
-	default:
-		return fmt.Errorf("search.rerank_provider must be one of: keyword, embedding")
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Search.CacheProvider)) {
-	case "memory", "redis":
-	default:
-		return fmt.Errorf("search.cache_provider must be one of: memory, redis")
-	}
-	if _, err := c.Search.TimeoutDuration(); err != nil {
-		return fmt.Errorf("invalid search.timeout: %w", err)
-	}
-	if _, err := c.Search.CacheTTLDuration(); err != nil {
-		return fmt.Errorf("invalid search.cache_ttl: %w", err)
-	}
-	if c.Search.MaxCacheKeys <= 0 {
-		return errors.New("search.max_cache_keys must be greater than 0")
-	}
-	if c.Search.MaxResults <= 0 {
-		return errors.New("search.max_results must be greater than 0")
-	}
-	if c.Search.MaxDocuments <= 0 {
-		return errors.New("search.max_documents must be greater than 0")
-	}
-	if c.Search.MaxContentRunes <= 0 {
-		return errors.New("search.max_content_runes must be greater than 0")
-	}
-	if c.Search.MaxTotalRunes <= 0 {
-		return errors.New("search.max_total_runes must be greater than 0")
-	}
-	if c.Search.MaxResponseBytes <= 0 {
-		return errors.New("search.max_response_bytes must be greater than 0")
-	}
-	if c.Search.MaxConcurrency <= 0 {
-		return errors.New("search.max_concurrency must be greater than 0")
-	}
-	if c.Search.Bing.MaxResults <= 0 {
-		return errors.New("search.bing.max_results must be greater than 0")
-	}
-	if c.Search.Tavily.MaxResults <= 0 {
-		return errors.New("search.tavily.max_results must be greater than 0")
-	}
-	if c.Search.DuckDuckGo.MaxResults <= 0 {
-		return errors.New("search.duckduckgo.max_results must be greater than 0")
-	}
-	if c.Search.Internal.SearchTopK <= 0 {
-		return errors.New("search.internal.search_top_k must be greater than 0")
-	}
-	if c.Search.Internal.TopK <= 0 {
-		return errors.New("search.internal.top_k must be greater than 0")
-	}
-	if _, err := c.Search.Redis.TimeoutDuration(); err != nil {
-		return fmt.Errorf("invalid search.redis.timeout: %w", err)
-	}
-	if c.Task.MaxTracked <= 0 {
-		return errors.New("task.max_tracked must be greater than 0")
-	}
-	if c.Task.MaxConcurrentVideo < 0 {
-		return errors.New("task.max_concurrent_video must be greater than or equal to 0")
-	}
-	if _, err := c.Task.RetentionDuration(); err != nil {
-		return fmt.Errorf("invalid task.retain_for: %w", err)
-	}
-	if strings.TrimSpace(c.Task.StoragePath) == "" {
-		return errors.New("task.storage_path must not be empty")
+	if c.Agent.MaxStep <= 0 {
+		return errors.New("agent.max_step must be greater than 0")
 	}
 	return nil
 }
@@ -949,20 +301,28 @@ func (c ASRConfig) TimeoutDuration() (time.Duration, error) {
 	return time.ParseDuration(c.Timeout)
 }
 
-func (c VideoSummaryConfig) TimeoutDuration() (time.Duration, error) {
+// TimeoutDurationOr parses the configured timeout, falling back to def on
+// parse errors (e.g. empty value after zero-value construction).
+func (c ASRConfig) TimeoutDurationOr(def time.Duration) time.Duration {
+	d, err := c.TimeoutDuration()
+	if err != nil {
+		return def
+	}
+	return d
+}
+
+func (c EmbeddingConfig) TimeoutDuration() (time.Duration, error) {
 	return time.ParseDuration(c.Timeout)
 }
 
-func (c SearchConfig) TimeoutDuration() (time.Duration, error) {
-	return time.ParseDuration(c.Timeout)
-}
-
-func (c SearchConfig) CacheTTLDuration() (time.Duration, error) {
-	return time.ParseDuration(c.CacheTTL)
-}
-
-func (c SearchRedisConfig) TimeoutDuration() (time.Duration, error) {
-	return time.ParseDuration(c.Timeout)
+// TimeoutDurationOr parses the configured timeout, falling back to def on
+// parse errors.
+func (c EmbeddingConfig) TimeoutDurationOr(def time.Duration) time.Duration {
+	d, err := c.TimeoutDuration()
+	if err != nil {
+		return def
+	}
+	return d
 }
 
 func (c LLMConfig) TimeoutDuration() (time.Duration, error) {
@@ -990,98 +350,6 @@ func (c LLMConfig) ResolvedAPIKey() string {
 	return strings.TrimSpace(os.Getenv(c.APIKeyEnv))
 }
 
-func (c EmbeddingConfig) TimeoutDuration() (time.Duration, error) {
-	return time.ParseDuration(c.Timeout)
-}
-
-func (c RerankConfig) TimeoutDuration() (time.Duration, error) {
-	return time.ParseDuration(c.Timeout)
-}
-
-func (c TaskConfig) RetentionDuration() (time.Duration, error) {
-	retainFor := strings.TrimSpace(c.RetainFor)
-	if retainFor == "" {
-		retainFor = "24h"
-	}
-	d, err := time.ParseDuration(retainFor)
-	if err != nil {
-		return 0, err
-	}
-	if d <= 0 {
-		return 0, errors.New("must be greater than 0")
-	}
-	return d, nil
-}
-
-func normalizeStringSliceLower(values *[]string) {
-	if values == nil || len(*values) == 0 {
-		return
-	}
-	out := make([]string, 0, len(*values))
-	seen := map[string]struct{}{}
-	for _, value := range *values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	*values = out
-}
-
-func enabledSearchProviders(cfg SearchConfig) []string {
-	var providers []string
-	if cfg.Bing.Enabled {
-		providers = append(providers, "bing")
-	}
-	if cfg.Tavily.Enabled {
-		providers = append(providers, "tavily")
-	}
-	if cfg.DuckDuckGo.Enabled {
-		providers = append(providers, "duckduckgo")
-	}
-	if cfg.Internal.Enabled {
-		providers = append(providers, "internal")
-	}
-	return providers
-}
-
-func isSiliconFlowProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "siliconflow", "silicon-flow", "silicon_flow", "sf":
-		return true
-	default:
-		return false
-	}
-}
-
-func isAliyunProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "aliyun", "dashscope":
-		return true
-	default:
-		return false
-	}
-}
-
-func defaultRerankModel(provider string) string {
-	if isAliyunProvider(provider) {
-		return "qwen3-rerank"
-	}
-	return "BAAI/bge-reranker-v2-m3"
-}
-
-func defaultAliyunRerankAPIBaseURL(model string) string {
-	if strings.EqualFold(strings.TrimSpace(model), "qwen3-rerank") {
-		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	}
-	return "https://dashscope.aliyuncs.com/api/v1"
-}
-
 func (c QdrantConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
@@ -1103,30 +371,3 @@ func serverDuration(raw, fallback string, allowZero bool) (time.Duration, error)
 	}
 	return d, nil
 }
-
-const defaultParagraphSystemPrompt = `你是专业的中文转写稿编辑。你的任务是只对转写文本进行自然段划分和轻微格式整理。
-
-要求：
-1. 保留原文语义，不总结、不扩写、不改写事实。
-2. 修正明显的断句和空白、错别字问题。
-3. 按话题、语义停顿和上下文划分段落。
-4. 段落之间使用一个空行分隔。
-5. 不要添加标题、列表、Markdown 标记或解释。`
-
-const defaultParagraphUserTemplate = "请为下面的转写文本划分自然段，只返回处理后的正文：\n\n{{text}}"
-
-const defaultStep1SystemPrompt = `你是中文文本纠错助手。
-
-任务：
-  - 修正错别字
-  - 繁体中文转简体中文
-
-禁止：
-  - 改写句子
-  - 调整段落
-  - 增加或删除内容
-
-输出：
-  - 仅返回纠正后的文本`
-
-const defaultStep1UserTemplate = "{{text}}"

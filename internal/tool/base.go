@@ -1,119 +1,39 @@
 package tool
 
 import (
-	"context"
-	"encoding/json"
-	"log/slog"
-	"time"
-
-	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
-	"github.com/sony/gobreaker"
+	"fmt"
+	"net/url"
+	"path/filepath"
+	"strings"
 )
 
-// Wrapper wraps an Eino InvokableTool with retry, circuit breaker,
-// timeout, trace_id propagation, and execution logging.
-type Wrapper struct {
-	inner    tool.InvokableTool
-	name     string
-	cb       *gobreaker.CircuitBreaker
-	timeout  time.Duration
-	maxRetry int
-}
-
-type WrapperConfig struct {
-	Name          string
-	MaxRetry      int
-	Timeout       time.Duration
-	CBMaxRequests uint32
-	CBInterval    time.Duration
-	CBTimeout     time.Duration
-}
-
-func NewWrapper(inner tool.InvokableTool, cfg WrapperConfig) *Wrapper {
-	if cfg.MaxRetry <= 0 {
-		cfg.MaxRetry = 3
-	}
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = 5 * time.Minute
-	}
-	if cfg.CBMaxRequests == 0 {
-		cfg.CBMaxRequests = 5
-	}
-	if cfg.CBInterval == 0 {
-		cfg.CBInterval = 60 * time.Second
-	}
-	if cfg.CBTimeout == 0 {
-		cfg.CBTimeout = 30 * time.Second
-	}
-
-	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:        cfg.Name,
-		MaxRequests: cfg.CBMaxRequests,
-		Interval:    cfg.CBInterval,
-		Timeout:     cfg.CBTimeout,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			return counts.ConsecutiveFailures > 3
-		},
-	})
-
-	return &Wrapper{
-		inner:    inner,
-		name:     cfg.Name,
-		cb:       cb,
-		timeout:  cfg.Timeout,
-		maxRetry: cfg.MaxRetry,
-	}
-}
-
-// Run executes the tool with retry, timeout, and circuit breaker.
-func (w *Wrapper) Run(ctx context.Context, args string) (string, error) {
-	start := time.Now()
-
-	result, err := w.cb.Execute(func() (interface{}, error) {
-		var lastErr error
-		for attempt := 0; attempt <= w.maxRetry; attempt++ {
-			toolCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.timeout)
-			output, err := w.inner.InvokableRun(toolCtx, args)
-			cancel()
-			if err == nil {
-				return output, nil
-			}
-			lastErr = err
-			slog.Warn("tool.retry", "tool", w.name, "attempt", attempt+1, "err", err)
-			if attempt < w.maxRetry {
-				time.Sleep(time.Duration(1<<attempt) * time.Second)
-			}
-		}
-		return nil, lastErr
-	})
-
-	elapsed := time.Since(start)
+// PathInWorkDir reports whether path resolves inside workDir (both absolute).
+// It is the security boundary for tool-provided file paths.
+func PathInWorkDir(workDir, path string) error {
+	workAbs, err := filepath.Abs(workDir)
 	if err != nil {
-		slog.Error("tool.failed", "tool", w.name, "elapsed", elapsed, "err", err)
-		return "", err
+		return fmt.Errorf("resolve work dir: %w", err)
 	}
-	output, _ := result.(string)
-	slog.Info("tool.done", "tool", w.name, "elapsed", elapsed)
-	return output, nil
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(workAbs, pathAbs)
+	if err != nil {
+		return fmt.Errorf("path outside work dir: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes work dir %q", path, workAbs)
+	}
+	return nil
 }
 
-// InvokableRun satisfies the tool.InvokableTool interface
-// so the wrapper itself can be used as an invokable tool.
-func (w *Wrapper) InvokableRun(ctx context.Context, args string, opts ...tool.Option) (string, error) {
-	return w.Run(ctx, args)
-}
-
-// Info delegates tool metadata to the wrapped tool.
-func (w *Wrapper) Info(ctx context.Context) (*schema.ToolInfo, error) {
-	return w.inner.Info(ctx)
-}
-
-// Name returns the tool name.
-func (w *Wrapper) Name() string { return w.name }
-
-// ToJSON is a helper to encode arguments and return the JSON string.
-func ToJSON(v any) (string, error) {
-	b, err := json.Marshal(v)
-	return string(b), err
+// IsHTTPURL reports whether s is an absolute http:// or https:// URL.
+func IsHTTPURL(s string) bool {
+	s = strings.TrimSpace(s)
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
